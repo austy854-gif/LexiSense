@@ -1,0 +1,138 @@
+from fastapi import FastAPI, APIRouter
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+import logging
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+# MongoDB connection
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
+
+# Create the main app
+app = FastAPI(
+    title="LexiSense API",
+    description="Enterprise AI-powered Contract Lifecycle Management",
+    version="2.0.0"
+)
+
+# Create a router with the /api prefix
+api_router = APIRouter(prefix="/api")
+
+# Import and initialize routes
+from routes.auth import router as auth_router, init_db as init_auth_db
+from routes.contracts import router as contracts_router, init_db as init_contracts_db
+from routes.team import router as team_router, init_db as init_team_db
+from routes.dashboard import router as dashboard_router, init_db as init_dashboard_db
+from routes.alerts import router as alerts_router, init_db as init_alerts_db
+from routes.templates import router as templates_router, init_db as init_templates_db
+from routes.export import router as export_router, init_db as init_export_db
+from routes.analytics import router as analytics_router, init_db as init_analytics_db
+from routes.audit import router as audit_router, init_db as init_audit_db
+from routes.notifications import router as notifications_router, init_db as init_notifications_db
+from routes.workflow import router as workflow_router, init_db as init_workflow_db
+from services.audit_service import init_db as init_audit_service_db
+
+# Initialize database for all route modules
+init_auth_db(db)
+init_contracts_db(db)
+init_team_db(db)
+init_dashboard_db(db)
+init_alerts_db(db)
+init_templates_db(db)
+init_export_db(db)
+init_analytics_db(db)
+init_audit_db(db)
+init_notifications_db(db)
+init_workflow_db(db)
+init_audit_service_db(db)
+
+# Include all routers
+api_router.include_router(auth_router)
+api_router.include_router(contracts_router)
+api_router.include_router(team_router)
+api_router.include_router(dashboard_router)
+api_router.include_router(alerts_router)
+api_router.include_router(templates_router)
+api_router.include_router(export_router)
+api_router.include_router(analytics_router)
+api_router.include_router(audit_router)
+api_router.include_router(notifications_router)
+api_router.include_router(workflow_router)
+
+# Health check endpoint
+@api_router.get("/health")
+async def health_check():
+    try:
+        await db.command("ping")
+        db_status = "healthy"
+    except Exception:
+        db_status = "unhealthy"
+    
+    return {
+        "status": "healthy" if db_status == "healthy" else "degraded",
+        "database": db_status,
+        "version": "2.0.0",
+        "scheduler": "running"
+    }
+
+@api_router.get("/")
+async def root():
+    return {"message": "LexiSense API", "version": "2.0.0"}
+
+# Include the router in the main app
+app.include_router(api_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("LexiSense API starting up...")
+    
+    # Create indexes for better query performance
+    await db.users.create_index("email", unique=True)
+    await db.users.create_index("organizationId")
+    await db.contracts.create_index("organizationId")
+    await db.contracts.create_index([("organizationId", 1), ("createdAt", -1)])
+    await db.contracts.create_index([("organizationId", 1), ("expiryDate", 1)])
+    await db.contracts.create_index([("organizationId", 1), ("riskLevel", 1)])
+    await db.contracts.create_index([("organizationId", 1), ("contractType", 1)])
+    await db.invitations.create_index("token", unique=True)
+    await db.invitations.create_index([("organizationId", 1), ("email", 1)])
+    await db.contract_versions.create_index([("contractId", 1), ("version", -1)])
+    await db.expiration_alerts.create_index([("contractId", 1), ("daysBeforeExpiry", 1)])
+    await db.templates.create_index([("organizationId", 1), ("name", 1)])
+    await db.audit_logs.create_index([("organizationId", 1), ("createdAt", -1)])
+    await db.audit_logs.create_index([("organizationId", 1), ("resourceType", 1)])
+    await db.notifications.create_index([("userId", 1), ("createdAt", -1)])
+    await db.notifications.create_index([("userId", 1), ("isRead", 1)])
+    logger.info("Database indexes created")
+    
+    # Initialize scheduler for daily alert emails
+    from services.scheduler_service import init_scheduler
+    init_scheduler(db)
+    logger.info("Scheduler initialized")
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    from services.scheduler_service import shutdown_scheduler
+    shutdown_scheduler()
+    client.close()
