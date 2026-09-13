@@ -7,11 +7,11 @@ import requests
 import os
 import io
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://docflow-analyzer.preview.emergentagent.com')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'http://localhost:8000')
 
-# Test credentials
-TEST_EMAIL = "testuser@lexisense.com"
-TEST_PASSWORD = "Test1234!"
+# Test credentials (set via environment variables for CI)
+TEST_EMAIL = os.environ.get('TEST_EMAIL', 'testuser@lexisense.com')
+TEST_PASSWORD = os.environ.get('TEST_PASSWORD', 'Test1234!')
 
 
 class TestHealthCheck:

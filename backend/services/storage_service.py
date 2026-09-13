@@ -10,15 +10,15 @@ logger = logging.getLogger(__name__)
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
+S3_BUCKET_NAME = os.environ.get("AWS_S3_BUCKET") or os.environ.get("S3_BUCKET_NAME")
 
 
 def get_s3_client():
     """Get an S3 client instance."""
-    if not AWS_ACCESS_KEY_ID or AWS_ACCESS_KEY_ID.startswith("YOUR_"):
-        logger.warning("AWS credentials not configured - using mock storage")
+    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY or not S3_BUCKET_NAME:
+        logger.warning("AWS credentials not fully configured - using mock storage (NOT FOR PRODUCTION)")
         return None
-    
+
     return boto3.client(
         's3',
         aws_access_key_id=AWS_ACCESS_KEY_ID,
@@ -36,12 +36,12 @@ async def upload_file_to_s3(
     """Upload a file to S3 and return the storage key."""
     file_ext = filename.split('.')[-1] if '.' in filename else 'bin'
     storage_key = f"{organization_id}/{uuid.uuid4()}.{file_ext}"
-    
+
     s3_client = get_s3_client()
     if not s3_client:
         logger.info(f"Mock upload: {storage_key}")
         return storage_key
-    
+
     try:
         s3_client.put_object(
             Bucket=S3_BUCKET_NAME,
@@ -60,8 +60,9 @@ async def generate_presigned_url(storage_key: str, expiration: int = 3600) -> Op
     """Generate a presigned URL for downloading a file."""
     s3_client = get_s3_client()
     if not s3_client:
+        logger.warning("Presigned URL not available in mock mode")
         return None
-    
+
     try:
         url = s3_client.generate_presigned_url(
             'get_object',
@@ -80,7 +81,7 @@ async def delete_file_from_s3(storage_key: str) -> bool:
     if not s3_client:
         logger.info(f"Mock delete: {storage_key}")
         return True
-    
+
     try:
         s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=storage_key)
         logger.info(f"Deleted file from S3: {storage_key}")
@@ -88,3 +89,33 @@ async def delete_file_from_s3(storage_key: str) -> bool:
     except ClientError as e:
         logger.error(f"Failed to delete from S3: {e}")
         return False
+
+
+async def ensure_bucket_exists():
+    """Ensure the S3 bucket exists, create if needed."""
+    s3_client = get_s3_client()
+    if not s3_client:
+        return False
+
+    try:
+        s3_client.head_bucket(Bucket=S3_BUCKET_NAME)
+        return True
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code')
+        if error_code == '404':
+            try:
+                if AWS_REGION == 'us-east-1':
+                    s3_client.create_bucket(Bucket=S3_BUCKET_NAME)
+                else:
+                    s3_client.create_bucket(
+                        Bucket=S3_BUCKET_NAME,
+                        CreateBucketConfiguration={'LocationConstraint': AWS_REGION}
+                    )
+                logger.info(f"Created S3 bucket: {S3_BUCKET_NAME}")
+                return True
+            except ClientError as create_err:
+                logger.error(f"Failed to create bucket: {create_err}")
+                return False
+        else:
+            logger.error(f"Failed to check bucket: {e}")
+            return False

@@ -1,9 +1,13 @@
+# Production Docker Compose for LexiSense
+# Usage: docker-compose -f docker-compose.prod.yml up -d
+
 version: '3.8'
 
 services:
   mongodb:
     image: mongo:7
-    container_name: lexisense-mongodb
+    container_name: lexisense-mongodb-prod
+    restart: unless-stopped
     ports:
       - "27017:27017"
     volumes:
@@ -21,7 +25,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: lexisense-backend
+    container_name: lexisense-backend-prod
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
@@ -30,10 +35,11 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=1440
-      - CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+      - CORS_ORIGINS=${CORS_ORIGINS}
       - EMERGENT_LLM_KEY=${EMERGENT_LLM_KEY}
       - RESEND_API_KEY=${RESEND_API_KEY}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL}
+      - APP_URL=${APP_URL}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET}
@@ -43,26 +49,32 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
-      - /app/venv
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: lexisense-frontend
+    container_name: lexisense-frontend-prod
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       - REACT_APP_BACKEND_URL=http://backend:8000
-    env_file:
-      - frontend/.env
     depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 volumes:
   mongodb_data:

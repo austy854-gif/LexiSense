@@ -1,127 +1,96 @@
-import asyncio
+"""
+Distributed task scheduler using Celery Beat + Redis.
+Replaces in-memory APScheduler for production deployments.
+"""
+import os
 import logging
-from datetime import datetime, timezone, timedelta
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-from services.email_service import send_expiration_alert
+from celery import Celery
+from celery.schedules import crontab
+from kombu import Queue
 
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
-db = None
+# Celery configuration
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 
+# Create Celery app
+celery_app = Celery(
+    "lexisense",
+    broker=CELERY_BROKER_URL,
+    backend=CELERY_RESULT_BACKEND,
+    include=[
+        "services.scheduler_tasks",
+    ]
+)
+
+# Celery configuration
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+    task_track_started=True,
+    task_time_limit=30 * 60,  # 30 minutes
+    task_soft_time_limit=25 * 60,  # 25 minutes
+    worker_prefetch_multiplier=1,
+    worker_max_tasks_per_child=1000,
+    result_expires=3600,
+    beat_schedule={
+        # Daily alert check at 9:00 AM UTC
+        "daily-alert-check": {
+            "task": "services.scheduler_tasks.check_and_send_daily_alerts",
+            "schedule": crontab(hour=9, minute=0),
+        },
+        # Weekly cleanup of old audit logs (keep 90 days)
+        "weekly-audit-cleanup": {
+            "task": "services.scheduler_tasks.cleanup_old_audit_logs",
+            "schedule": crontab(hour=2, minute=0, day_of_week=0),  # Sunday 2 AM
+        },
+        # Daily database index optimization
+        "daily-index-optimization": {
+            "task": "services.scheduler_tasks.optimize_database_indexes",
+            "schedule": crontab(hour=3, minute=0),
+        },
+    },
+    task_routes={
+        "services.scheduler_tasks.*": {"queue": "scheduled"},
+    },
+    task_default_queue="default",
+    task_queues=(
+        Queue("default"),
+        Queue("scheduled"),
+        Queue("high_priority"),
+    ),
+)
+
+# Auto-discover tasks
+celery_app.autodiscover_tasks(["services"])
+
+
+def init_celery():
+    """Initialize Celery app. Call this on startup."""
+    logger.info(f"Celery initialized with broker: {CELERY_BROKER_URL}")
+    return celery_app
+
+
+def shutdown_celery():
+    """Shutdown Celery app. Call this on shutdown."""
+    logger.info("Celery shutdown")
+    celery_app.close()
+
+
+# For backwards compatibility - can be called from FastAPI startup/shutdown
 def init_scheduler(database):
-    """Initialize the scheduler with database connection."""
-    global db
-    db = database
-    
-    # Schedule daily alert check at 9:00 AM
-    scheduler.add_job(
-        check_and_send_daily_alerts,
-        CronTrigger(hour=9, minute=0),
-        id='daily_alert_check',
-        replace_existing=True
-    )
-    
-    scheduler.start()
-    logger.info("Scheduler started - daily alert check scheduled for 9:00 AM")
-
-
-async def check_and_send_daily_alerts():
-    """Check for expiring contracts and send alerts."""
-    if not db:
-        logger.error("Database not initialized for scheduler")
-        return
-    
-    logger.info("Running scheduled alert check...")
-    
-    try:
-        # Get all organizations
-        organizations = await db.organizations.find({}, {"_id": 0, "id": 1}).to_list(1000)
-        
-        total_alerts_sent = 0
-        
-        for org in organizations:
-            org_id = org["id"]
-            
-            # Get alert settings for this organization
-            settings = await db.alert_settings.find_one(
-                {"organizationId": org_id},
-                {"_id": 0}
-            )
-            
-            if not settings:
-                settings = {"alertDays": [30, 14, 7, 1], "emailEnabled": True}
-            
-            if not settings.get("emailEnabled", True):
-                continue
-            
-            today = datetime.now(timezone.utc)
-            
-            # Get all admin users in the organization
-            admins = await db.users.find(
-                {"organizationId": org_id, "role": "admin"},
-                {"_id": 0, "id": 1, "email": 1}
-            ).to_list(100)
-            
-            if not admins:
-                continue
-            
-            for alert_day in settings.get("alertDays", [30, 14, 7, 1]):
-                target_date = (today + timedelta(days=alert_day)).strftime("%Y-%m-%d")
-                
-                # Find contracts expiring on this specific day
-                expiring_contracts = await db.contracts.find(
-                    {
-                        "organizationId": org_id,
-                        "expiryDate": target_date,
-                        "status": {"$ne": "expired"}
-                    },
-                    {"_id": 0}
-                ).to_list(100)
-                
-                for contract in expiring_contracts:
-                    # Check if alert was already sent
-                    existing_alert = await db.expiration_alerts.find_one({
-                        "contractId": contract["id"],
-                        "daysBeforeExpiry": alert_day,
-                        "emailSent": True
-                    })
-                    
-                    if existing_alert:
-                        continue
-                    
-                    # Send alert to all admins
-                    for admin in admins:
-                        await send_expiration_alert(
-                            to_email=admin["email"],
-                            contract_id=contract["id"],
-                            contract_title=contract.get("title", "Untitled"),
-                            counterparty=contract.get("counterparty", "Not specified"),
-                            expiry_date=contract.get("expiryDate", "Unknown"),
-                            days_remaining=alert_day
-                        )
-                        total_alerts_sent += 1
-                    
-                    # Record alert as sent
-                    from models.alerts import ExpirationAlert
-                    alert = ExpirationAlert(
-                        contractId=contract["id"],
-                        userId="system",
-                        daysBeforeExpiry=alert_day,
-                        emailSent=True,
-                        emailSentAt=datetime.now(timezone.utc).isoformat()
-                    )
-                    await db.expiration_alerts.insert_one(alert.model_dump())
-        
-        logger.info(f"Scheduled alert check completed. {total_alerts_sent} alerts sent.")
-        
-    except Exception as e:
-        logger.error(f"Scheduled alert check failed: {e}")
+    """Initialize the distributed scheduler (Celery Beat runs separately)."""
+    logger.info("Distributed scheduler (Celery Beat) should be running separately")
+    logger.info(f"Broker: {CELERY_BROKER_URL}")
+    # Store db reference for tasks if needed
+    from services.scheduler_tasks import set_database
+    set_database(database)
 
 
 def shutdown_scheduler():
     """Shutdown the scheduler."""
-    if scheduler.running:
-        scheduler.shutdown()
-        logger.info("Scheduler shutdown")
+    logger.info("Scheduler shutdown (Celery Beat runs separately)")
