@@ -156,23 +156,6 @@ yarn test
 2. Set `REACT_APP_BACKEND_URL` to your deployed backend URL
 3. Deploy
 
-## Git Setup (New Repository)
-
-Since the original GitHub access was lost:
-
-```bash
-cd LexiSense-main
-
-# Initialize new git repo
-git init
-git add .
-git commit -m "Initial commit: LexiSense CLM platform"
-
-# Create new repo on GitHub and push
-git remote add origin https://github.com/YOUR_USERNAME/lexisense.git
-git branch -M main
-git push -u origin main
-```
 
 ## License
 
