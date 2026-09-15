@@ -81,6 +81,7 @@ from routes.analytics import router as analytics_router, init_db as init_analyti
 from routes.audit import router as audit_router, init_db as init_audit_db
 from routes.notifications import router as notifications_router, init_db as init_notifications_db
 from routes.workflow import router as workflow_router, init_db as init_workflow_db
+from routes.agentic import router as agentic_router, init_db as init_agentic_db
 from services.audit_service import init_db as init_audit_service_db
 
 # Initialize database for all route modules
@@ -95,6 +96,7 @@ init_analytics_db(db)
 init_audit_db(db)
 init_notifications_db(db)
 init_workflow_db(db)
+init_agentic_db(db)
 init_audit_service_db(db)
 
 # Include all routers
@@ -109,6 +111,7 @@ api_router.include_router(analytics_router)
 api_router.include_router(audit_router)
 api_router.include_router(notifications_router)
 api_router.include_router(workflow_router)
+api_router.include_router(agentic_router)
 
 @api_router.get("/")
 async def root():
@@ -202,6 +205,28 @@ async def startup_event():
     await db.notifications.create_index([("userId", 1), ("isRead", 1)])
     logger.info("Database indexes created")
 
+    # Agentic indexes
+    await db.contract_agents.create_index([("organizationId", 1), ("status", 1)])
+    await db.contract_agents.create_index([("organizationId", 1), ("agentType", 1)])
+    await db.contract_agents.create_index([("nextRunAt", 1)])
+    await db.risk_assessments.create_index([("contractId", 1), ("assessed_at", -1)])
+    await db.risk_assessments.create_index([("organizationId", 1), ("overall_score", -1)])
+    await db.risk_assessments.create_index([("organizationId", 1), ("risk_level", 1)])
+    await db.legal_playbooks.create_index([("organizationId", 1), ("is_active", 1)])
+    await db.legal_playbooks.create_index([("organizationId", 1), ("is_default", 1)])
+    await db.redline_sessions.create_index([("contractId", 1), ("status", 1)])
+    await db.contract_intakes.create_index([("organizationId", 1), ("status", 1)])
+    await db.contract_intakes.create_index([("organizationId", 1), ("received_at", -1)])
+    await db.contract_intakes.create_index([("source_email", 1)])
+    await db.extracted_obligations.create_index([("contractId", 1)])
+    await db.extracted_obligations.create_index([("organizationId", 1), ("status", 1)])
+    await db.extracted_obligations.create_index([("organizationId", 1), ("due_date", 1)])
+    await db.extracted_obligations.create_index([("assigned_to", 1), ("status", 1)])
+    await db.obligation_alerts.create_index([("obligationId", 1)])
+    await db.obligation_alerts.create_index([("organizationId", 1), ("alert_type", 1)])
+    await db.obligation_extraction_jobs.create_index([("contractId", 1)])
+    logger.info("Agentic indexes created")
+
     # Ensure S3 bucket exists
     from services.storage_service import ensure_bucket_exists
     bucket_ok = await ensure_bucket_exists()
@@ -210,13 +235,28 @@ async def startup_event():
     else:
         logger.warning("S3 bucket not available (check AWS credentials)")
 
-    # Initialize scheduler for daily alert emails
-    from services.scheduler_service import init_scheduler
-    init_scheduler(db)
-    logger.info("Scheduler initialized")
+    # Initialize Celery for distributed task processing
+    try:
+        from services.celery_app import init_celery
+        init_celery()
+        
+        # Set database references for all task modules
+        from services.agent_tasks import set_database as set_agent_db
+        from services.risk_tasks import set_database as set_risk_db
+        from services.playbook_tasks import set_database as set_playbook_db
+        from services.obligation_tasks import set_database as set_obligation_db
+        from services.intake_tasks import set_database as set_intake_db
+        
+        set_agent_db(db)
+        set_risk_db(db)
+        set_playbook_db(db)
+        set_obligation_db(db)
+        set_intake_db(db)
+        
+        logger.info("Celery task modules initialized with database")
+    except Exception as e:
+        logger.warning(f"Celery initialization failed (may not be configured): {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    from services.scheduler_service import shutdown_scheduler
-    shutdown_scheduler()
     client.close()

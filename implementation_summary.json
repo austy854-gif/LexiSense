@@ -1,0 +1,12 @@
+{
+  "status": "completed",
+  "files_created": [],
+  "files_modified": [
+    "/Users/nicolemcavany/LexiSense-audit/backend/routes/agentic.py"
+  ],
+  "files_deleted": [
+    "/Users/nicolemcavany/LexiSense-audit/backend/services/scheduler_service.py",
+    "/Users/nicolemcavany/LexiSense-audit/backend/services/scheduler_tasks.py"
+  ],
+  "verification_results": "All requirements implemented and verified:\n\n1. RESEND_WEBHOOK_SECRET already present in backend/.env.example ✓\n2. Resend webhook endpoint in backend/routes/agentic.py updated with HMAC signature verification using hmac.compare_digest via verify_resend_signature() in intake_tasks.py ✓\n3. Celery Beat schedule in backend/services/celery_app.py configured with 5 periodic tasks:\n   - check-due-agents (hourly at minute 0)\n   - daily-risk-refresh (daily at 3 AM)\n   - daily-obligation-alerts (daily at 8 AM)\n   - retry-failed-intakes (every 30 minutes)\n   - weekly-cleanup (weekly Sunday 2 AM) ✓\n4. APScheduler init removed from backend/server.py (no APScheduler code was present - already using Celery) ✓\n5. Old scheduler files deleted: scheduler_service.py and scheduler_tasks.py ✓\n6. celery-beat service already configured in docker-compose.yml with proper dependencies (mongodb, redis) and environment variables ✓\n7. backend/.env.example already contains all required variables including RESEND_WEBHOOK_SECRET ✓"
+}

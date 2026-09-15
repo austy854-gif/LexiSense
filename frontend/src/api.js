@@ -131,4 +131,50 @@ export const auditAPI = {
   list: (params) => api.get('/audit', { params }),
 };
 
+// Agentic AI API
+export const agenticApi = {
+  // Agents
+  createAgent: (data) => api.post('/agentic/agents', data),
+  listAgents: (params) => api.get('/agentic/agents', { params }),
+  getAgent: (id) => api.get(`/agentic/agents/${id}`),
+  updateAgent: (id, data) => api.patch(`/agentic/agents/${id}`, data),
+  deleteAgent: (id) => api.delete(`/agentic/agents/${id}`),
+  runAgent: (id) => api.post(`/agentic/agents/${id}/run`),
+  getAgentExecutions: (id) => api.get(`/agentic/agents/${id}/executions`),
+
+  // Risk Scoring
+  assessRisk: (contractId, force = false) => api.post('/agentic/risk/assess', { contractId, force_refresh: force }),
+  getRiskAssessment: (contractId) => api.get(`/agentic/risk/assessments/${contractId}`),
+  listRiskAssessments: (params) => api.get('/agentic/risk/assessments', { params }),
+  refreshStaleRisks: () => api.post('/agentic/risk/refresh-stale'),
+  bulkAssessRisks: () => api.post('/agentic/risk/bulk-assess'),
+
+  // Playbooks
+  createPlaybook: (data) => api.post('/agentic/playbooks', data),
+  listPlaybooks: () => api.get('/agentic/playbooks'),
+  getPlaybook: (id) => api.get(`/agentic/playbooks/${id}`),
+  updatePlaybook: (id, data) => api.patch(`/agentic/playbooks/${id}`, data),
+  deletePlaybook: (id) => api.delete(`/agentic/playbooks/${id}`),
+  analyzeWithPlaybook: (contractId, playbookId, autoApply = false) =>
+    api.post('/agentic/playbooks/analyze', { contractId, playbookId, auto_apply: autoApply }),
+  getRedlineSession: (sessionId) => api.get(`/agentic/playbooks/sessions/${sessionId}`),
+  applyRedlines: (sessionId, suggestionIds) =>
+    api.post(`/agentic/playbooks/sessions/${sessionId}/apply`, { suggestionIds }),
+
+  // Intake
+  listIntakes: (params) => api.get('/agentic/intake', { params }),
+  getIntake: (id) => api.get(`/agentic/intake/${id}`),
+  processIntake: (id, data) => api.post(`/agentic/intake/${id}/process`, data),
+  retryFailedIntakes: () => api.post('/agentic/intake/retry-failed'),
+
+  // Obligations
+  extractObligations: (contractId, force = false) => api.post('/agentic/obligations/extract', { contractId, force_refresh: force }),
+  listObligations: (params) => api.get('/agentic/obligations', { params }),
+  getObligation: (id) => api.get(`/agentic/obligations/${id}`),
+  updateObligationStatus: (id, data) => api.patch(`/agentic/obligations/${id}/status`, data),
+  listObligationAlerts: (params) => api.get('/agentic/obligations/alerts', { params }),
+  acknowledgeAlert: (id) => api.post(`/agentic/obligations/alerts/${id}/acknowledge`),
+  bulkExtractObligations: () => api.post('/agentic/obligations/bulk-extract'),
+};
+
 export default api;
