@@ -15,6 +15,7 @@ import AnalyticsPage from './pages/AnalyticsPage';
 import TemplatesPage from './pages/TemplatesPage';
 import AuditLogPage from './pages/AuditLogPage';
 import AgenticDashboardPage from './pages/AgenticDashboardPage';
+import BillingPage from './pages/BillingPage';
 
 import './App.css';
 
@@ -99,6 +100,14 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={['admin', 'manager']}>
                   <AgenticDashboardPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/billing"
+              element={
+                <ProtectedRoute allowedRoles={['admin']}>
+                  <BillingPage />
                 </ProtectedRoute>
               }
             />

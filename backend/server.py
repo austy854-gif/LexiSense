@@ -82,6 +82,7 @@ from routes.audit import router as audit_router, init_db as init_audit_db
 from routes.notifications import router as notifications_router, init_db as init_notifications_db
 from routes.workflow import router as workflow_router, init_db as init_workflow_db
 from routes.agentic import router as agentic_router, init_db as init_agentic_db
+from routes.billing import router as billing_router, init_db as init_billing_db
 from services.audit_service import init_db as init_audit_service_db
 
 # Initialize database for all route modules
@@ -97,6 +98,7 @@ init_audit_db(db)
 init_notifications_db(db)
 init_workflow_db(db)
 init_agentic_db(db)
+init_billing_db(db)
 init_audit_service_db(db)
 
 # Include all routers
@@ -112,6 +114,7 @@ api_router.include_router(audit_router)
 api_router.include_router(notifications_router)
 api_router.include_router(workflow_router)
 api_router.include_router(agentic_router)
+api_router.include_router(billing_router)
 
 @api_router.get("/")
 async def root():

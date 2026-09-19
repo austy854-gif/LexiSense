@@ -1,0 +1,130 @@
+{
+  "services": [
+    {
+      "name": "MongoDB Atlas",
+      "required": true,
+      "signup_url": "https://cloud.mongodb.com",
+      "purpose": "Primary database for contracts, users, organizations, audit logs",
+      "free_tier": true,
+      "key_variables": ["MONGO_URL", "DB_NAME"],
+      "setup_steps": [
+        "Create account at cloud.mongodb.com",
+        "Create M0 Free Tier cluster (AWS, us-east-1 recommended)",
+        "Configure Network Access (0.0.0.0/0 for dev, specific IPs for prod)",
+        "Create Database User with read/write permissions",
+        "Get connection string from Connect > Drivers > Python",
+        "Replace <password> and <dbname> in connection string"
+      ]
+    },
+    {
+      "name": "Emergent.sh",
+      "required": true,
+      "signup_url": "https://emergent.sh",
+      "purpose": "LLM API key for AI contract analysis, chat, and summarization",
+      "free_tier": false,
+      "key_variables": ["EMERGENT_LLM_KEY"],
+      "setup_steps": [
+        "Sign up at emergent.sh with GitHub or email",
+        "Navigate to API Keys section",
+        "Create new API key named 'LexiSense'",
+        "Copy key (starts with 'emergent_')"
+      ]
+    },
+    {
+      "name": "Resend",
+      "required": true,
+      "signup_url": "https://resend.com",
+      "purpose": "Transactional emails (invitations, alerts, notifications)",
+      "free_tier": true,
+      "key_variables": ["RESEND_API_KEY", "RESEND_FROM_EMAIL", "RESEND_WEBHOOK_SECRET", "APP_URL"],
+      "setup_steps": [
+        "Sign up at resend.com",
+        "Create API key with Full Access permission",
+        "Copy key (starts with 're_')",
+        "For production: add and verify custom domain in Domains section",
+        "For development: use onboarding@resend.dev as from address",
+        "Optional: Configure webhook at yourdomain.com/api/webhooks/resend"
+      ]
+    },
+    {
+      "name": "JWT Secret (Local Generation)",
+      "required": true,
+      "signup_url": "N/A - generated locally",
+      "purpose": "Signing JWT access tokens for authentication",
+      "free_tier": true,
+      "key_variables": ["JWT_SECRET", "JWT_ALGORITHM", "ACCESS_TOKEN_EXPIRE_MINUTES"],
+      "setup_steps": [
+        "Run: openssl rand -base64 48",
+        "Or: python -c \"import secrets; print(secrets.token_urlsafe(48))\"",
+        "Use unique secret per environment (dev/staging/prod)",
+        "Never commit to git"
+      ]
+    },
+    {
+      "name": "CORS Configuration (Local)",
+      "required": true,
+      "signup_url": "N/A - configured locally",
+      "purpose": "Allowed frontend origins for cross-origin requests",
+      "free_tier": true,
+      "key_variables": ["CORS_ORIGINS"],
+      "setup_steps": [
+        "Development: http://localhost:3000,http://localhost:3001",
+        "Production: https://app.yourdomain.com,https://staging.yourdomain.com",
+        "No wildcards in production"
+      ]
+    },
+    {
+      "name": "AWS S3",
+      "required": false,
+      "signup_url": "https://aws.amazon.com/s3/",
+      "purpose": "Contract file uploads and document storage",
+      "free_tier": true,
+      "key_variables": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_BUCKET", "AWS_REGION"],
+      "setup_steps": [
+        "Create S3 bucket with versioning enabled",
+        "Create IAM user with least-privilege policy for bucket",
+        "Generate access key for programmatic access",
+        "Set bucket name and region in env"
+      ]
+    },
+    {
+      "name": "Sentry",
+      "required": false,
+      "signup_url": "https://sentry.io",
+      "purpose": "Error tracking and performance monitoring",
+      "free_tier": true,
+      "key_variables": ["SENTRY_DSN", "REACT_APP_SENTRY_DSN", "LOG_LEVEL", "LOG_JSON", "ENVIRONMENT", "RELEASE_VERSION"],
+      "setup_steps": [
+        "Create Python (FastAPI) project for backend",
+        "Create React project for frontend",
+        "Copy DSN for each project"
+      ]
+    },
+    {
+      "name": "OpenRouter",
+      "required": false,
+      "signup_url": "https://openrouter.ai",
+      "purpose": "Alternative LLM access for OpenCode agents",
+      "free_tier": true,
+      "key_variables": ["OPENROUTER_API_KEY"],
+      "setup_steps": [
+        "Sign up at openrouter.ai",
+        "Create API key in dashboard",
+        "Copy key (starts with 'sk-or-')"
+      ]
+    }
+  ],
+  "commands": [
+    "cd /path/to/LexiSense-audit",
+    "openssl rand -base64 48  # Generate JWT_SECRET - copy output",
+    "cp .env.example .env  # Create root .env",
+    "cp backend/.env.example backend/.env  # Create backend .env",
+    "cp frontend/.env.example frontend/.env  # Create frontend .env",
+    "# Edit all three .env files with your values",
+    "docker-compose up -d  # Start all services (recommended)",
+    "# OR manual start:",
+    "cd backend && python -m venv venv && source venv/bin/activate && pip install -r requirements.txt && uvicorn server:app --reload --host 0.0.0.0 --port 8000",
+    "cd frontend && yarn install && yarn start"
+  ],
+  "env_template": "# ===========================================\n# DATABASE (MongoDB Atlas)\n# ===========================================\nMONGO_URL=mongodb+srv://lexisense_user:YOUR_PASSWORD@lexisense-cluster.xxxxx.mongodb.net/lexisense?retryWrites=true&w=majority\nDB_NAME=lexisense\n\n# ===========================================\n# AUTHENTICATION\n# ===========================================\nJWT_SECRET=YOUR_GENERATED_48_CHAR_BASE64_SECRET\nJWT_ALGORITHM=HS256\nACCESS_TOKEN_EXPIRE_MINUTES=1440\n\n# ===========================================\n# CORS\n# ===========================================\nCORS_ORIGINS=http://localhost:3000,http://localhost:3001\n\n# ===========================================\n# AI / LLM (Emergent.sh)\n# ===========================================\nEMERGENT_LLM_KEY=emergent_your-actual-key\n\n# ===========================================\n# EMAIL (Resend.com)\n# ===========================================\nRESEND_API_KEY=re_your-resend-api-key\nRESEND_FROM_EMAIL=LexiSense <onboarding@resend.dev>\nRESEND_WEBHOOK_SECRET=whsec_your-webhook-secret\nAPP_URL=http://localhost:3000\n\n# ===========================================\n# AWS S3 STORAGE (Optional)\n# ===========================================\nAWS_ACCESS_KEY_ID=AKIAXXXXXXXXXXXXXXXX\nAWS_SECRET_ACCESS_KEY=your-secret-access-key\nAWS_S3_BUCKET=lexisense-files-prod\nAWS_REGION=us-east-1\n\n# ===========================================\n# OBSERVABILITY (Optional)\n# ===========================================\nSENTRY_DSN=https://xxx@sentry.io/project\nLOG_LEVEL=INFO\nLOG_JSON=true\nENVIRONMENT=development\nRELEASE_VERSION=2.0.0\n\n# ===========================================\n# OPENROUTER (Optional - for OpenCode agents)\n# ===========================================\nOPENROUTER_API_KEY=sk-or-your-openrouter-key"
+}

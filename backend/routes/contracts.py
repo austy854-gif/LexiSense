@@ -11,6 +11,7 @@ from services.ai_service import analyze_contract, get_chat_response
 from services.storage_service import upload_file_to_s3, delete_file_from_s3
 from services.pdf_service import extract_text_from_file
 from services.audit_service import log_action
+from routes.billing import check_trial_access, increment_trial_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contracts", tags=["Contracts"])
@@ -191,6 +192,14 @@ async def upload_contract(
             detail="Could not extract text from file. The file may be empty or corrupted."
         )
     
+    # Check trial limits before allowing upload
+    can_upload, trial_message = await check_trial_access(current_user["organizationId"])
+    if not can_upload:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=trial_message
+        )
+    
     storage_key = await upload_file_to_s3(
         file_content,
         file.filename,
@@ -246,6 +255,9 @@ async def upload_contract(
         resource_id=contract.id,
         resource_title=title,
     )
+    
+    # Increment trial usage counter
+    await increment_trial_usage(current_user["organizationId"])
     
     uploader = await db.users.find_one({"id": current_user["sub"]}, {"_id": 0, "email": 1})
     
@@ -316,6 +328,15 @@ async def bulk_upload_contracts(
                 })
                 continue
             
+            # Check trial limits before allowing upload
+            can_upload, trial_message = await check_trial_access(current_user["organizationId"])
+            if not can_upload:
+                results["failed"].append({
+                    "filename": file.filename,
+                    "error": trial_message
+                })
+                continue
+            
             storage_key = await upload_file_to_s3(
                 file_content,
                 file.filename,
@@ -370,6 +391,9 @@ async def bulk_upload_contracts(
                 "title": title,
                 "riskLevel": risk_level
             })
+            
+            # Increment trial usage counter
+            await increment_trial_usage(current_user["organizationId"])
             
         except Exception as e:
             logger.error(f"Bulk upload failed for {file.filename}: {e}")

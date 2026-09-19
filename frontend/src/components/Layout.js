@@ -20,6 +20,7 @@ import {
   ScrollText,
   CheckCheck,
   Bot,
+  CreditCard,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -41,6 +42,7 @@ const navItems = [
   { path: '/alerts', label: 'Alerts', icon: Bell },
   { path: '/team', label: 'Team', icon: Users },
   { path: '/audit', label: 'Audit Log', icon: ScrollText },
+  { path: '/billing', label: 'Billing', icon: CreditCard, roles: ['admin'] },
   { path: '/agentic', label: 'Agentic', icon: Bot, roles: ['admin', 'manager'] },
 ];
 

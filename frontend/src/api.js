@@ -131,6 +131,14 @@ export const auditAPI = {
   list: (params) => api.get('/audit', { params }),
 };
 
+// Billing API
+export const billingAPI = {
+  getSubscription: () => api.get('/billing/subscription'),
+  createCheckout: (priceId, successUrl, cancelUrl) => api.post('/billing/checkout', { priceId, successUrl, cancelUrl }),
+  createPortal: (returnUrl) => api.post('/billing/portal', { returnUrl }),
+  getPlans: () => api.get('/billing/plans'),
+};
+
 // Agentic AI API
 export const agenticApi = {
   // Agents
