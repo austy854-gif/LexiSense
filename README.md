@@ -2,6 +2,10 @@
 
 Enterprise AI-powered Contract Lifecycle Management SaaS built with React 19, FastAPI, and MongoDB.
 
+## Product focus
+
+LexiSense is focused on trustworthy, document-based contract intelligence. V1 supports digital-native PDF and plain-text uploads, clause extraction, risk analysis, contract Q&A, approval workflows, audit logs, and file-backed version history. See [PRODUCT_SCOPE.md](PRODUCT_SCOPE.md) for the complete roadmap decisions.
+
 ## Features Implemented
 
 ### Phase 1 - MVP
@@ -13,12 +17,14 @@ Enterprise AI-powered Contract Lifecycle Management SaaS built with React 19, Fa
 - ✅ AI chat interface for contract Q&A
 - ✅ Team management page
 - ✅ Team member invitation system
+- ✅ Digital-native PDF and TXT parsing (OCR is intentionally not included)
 
 ### Phase 2 - Enhanced Features
 - ✅ Email service integration (Resend API)
 - ✅ Contract version history tracking
 - ✅ Expiration alerts system
 - ✅ Configurable alert settings
+- ✅ Word/file-upload workflow for version control (no browser rich-text editor)
 
 ### Phase 3 - Advanced Features
 - ✅ Bulk contract upload
@@ -30,7 +36,7 @@ Enterprise AI-powered Contract Lifecycle Management SaaS built with React 19, Fa
 - ✅ Dark/Light theme toggle
 - ✅ Scheduled daily alert emails
 
-### Phase 4 - Enterprise Features
+### Phase 4 - Advanced workflow features
 - ✅ Contract Workflow/Approval System (Draft → Review → Approved → Active)
 - ✅ Role-Based Access Control (admin/manager/user/viewer)
 - ✅ Audit Logging for all operations
@@ -38,6 +44,8 @@ Enterprise AI-powered Contract Lifecycle Management SaaS built with React 19, Fa
 - ✅ Audit Log page with filtering
 - ✅ Manager role for approvals
 - ✅ Mobile responsive improvements
+
+The following are deliberately **not** V1 requirements: OCR for scanned PDFs, an in-app visual redlining editor, custom cryptographic e-signatures, autonomous regulatory-monitoring agents, SOC 2 compliance, and custom SSO. Established e-signature providers may be integrated later if customer demand warrants it.
 
 ## Quick Start
 
@@ -54,7 +62,7 @@ cd backend
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # On Windows: venv\\Scripts\\activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -75,10 +83,7 @@ cd frontend
 cp ../frontend/.env.example .env
 # Edit .env with your backend URL
 
-# Install dependencies
 yarn install
-
-# Run development server
 yarn start
 ```
 
@@ -135,11 +140,9 @@ LexiSense/
 ## Testing
 
 ```bash
-# Backend tests
 cd backend
 pytest tests/ -v
 
-# Frontend tests
 cd frontend
 yarn test
 ```
@@ -155,7 +158,6 @@ yarn test
 1. Connect GitHub repo
 2. Set `REACT_APP_BACKEND_URL` to your deployed backend URL
 3. Deploy
-
 
 ## License
 
