@@ -13,7 +13,6 @@ if (sentryDsn && !sentryDsn.startsWith("your-")) {
     dsn: sentryDsn,
     integrations: [
       Sentry.browserTracingIntegration(),
-      Sentry.reactComponentAnnotationIntegration(),
     ],
     tracesSampleRate: 0.1,
     profilesSampleRate: 0.1,

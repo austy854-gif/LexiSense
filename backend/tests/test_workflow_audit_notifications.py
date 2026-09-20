@@ -9,7 +9,7 @@ import io
 import uuid
 import time
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://docflow-analyzer.preview.emergentagent.com')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://word-smart.preview.emergentagent.com')
 
 # Test credentials
 TEST_EMAIL = "testuser@lexisense.com"
