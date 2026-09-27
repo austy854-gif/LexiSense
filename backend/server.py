@@ -81,7 +81,10 @@ from routes.analytics import router as analytics_router, init_db as init_analyti
 from routes.audit import router as audit_router, init_db as init_audit_db
 from routes.notifications import router as notifications_router, init_db as init_notifications_db
 from routes.workflow import router as workflow_router, init_db as init_workflow_db
-from routes.agentic import router as agentic_router, init_db as init_agentic_db
+# NOTE: Agentic subsystem is stripped from launch (see PRODUCT_SCOPE.md).
+# Backend code kept for future re-enable, but router is NOT mounted and DB is NOT initialized here.
+# Also requires Redis + Celery worker + beat which are not provisioned for launch.
+# from routes.agentic import router as agentic_router, init_db as init_agentic_db
 from routes.billing import router as billing_router, init_db as init_billing_db
 from services.audit_service import init_db as init_audit_service_db
 
@@ -97,7 +100,7 @@ init_analytics_db(db)
 init_audit_db(db)
 init_notifications_db(db)
 init_workflow_db(db)
-init_agentic_db(db)
+# init_agentic_db(db)  # Stripped for launch
 init_billing_db(db)
 init_audit_service_db(db)
 
@@ -113,31 +116,24 @@ api_router.include_router(analytics_router)
 api_router.include_router(audit_router)
 api_router.include_router(notifications_router)
 api_router.include_router(workflow_router)
-api_router.include_router(agentic_router)
+# api_router.include_router(agentic_router)  # Stripped for launch
 api_router.include_router(billing_router)
 
 @api_router.get("/")
 async def root():
     return {"message": "LexiSense API", "version": "2.0.0", "docs": "/api/docs"}
 
-# Include the router in the main app
-app.include_router(api_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Health check endpoint with detailed checks
+# Health check endpoint with detailed checks. MUST be registered on
+# `api_router` BEFORE `app.include_router(api_router)` -- otherwise the
+# route is silently dropped (this is exactly the Gate 2 release-stopper
+# from the pre-launch checklist).
 @api_router.get("/health")
 async def health_check():
     """Health check endpoint with detailed service status."""
     checks = {}
     overall_healthy = True
-    
+
     # Database check
     try:
         await db.command("ping")
@@ -145,7 +141,7 @@ async def health_check():
     except Exception as e:
         checks["database"] = {"status": "unhealthy", "details": str(e)}
         overall_healthy = False
-    
+
     # S3 check
     try:
         from services.storage_service import get_s3_client
@@ -157,7 +153,7 @@ async def health_check():
             checks["storage"] = {"status": "degraded", "details": "Using mock storage"}
     except Exception as e:
         checks["storage"] = {"status": "unhealthy", "details": str(e)}
-    
+
     # AI service check
     try:
         emergent_key = os.environ.get("EMERGENT_LLM_KEY")
@@ -167,7 +163,7 @@ async def health_check():
             checks["ai"] = {"status": "degraded", "details": "Not configured"}
     except Exception as e:
         checks["ai"] = {"status": "unhealthy", "details": str(e)}
-    
+
     # Email service check
     try:
         resend_key = os.environ.get("RESEND_API_KEY")
@@ -177,13 +173,25 @@ async def health_check():
             checks["email"] = {"status": "degraded", "details": "Not configured"}
     except Exception as e:
         checks["email"] = {"status": "unhealthy", "details": str(e)}
-    
+
     return {
         "status": "healthy" if overall_healthy else "degraded",
         "version": "2.0.0",
         "checks": checks,
-        "timestamp": time.time()
+        "timestamp": time.time(),
     }
+
+
+# Include the router in the main app
+app.include_router(api_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup_event():
@@ -208,27 +216,8 @@ async def startup_event():
     await db.notifications.create_index([("userId", 1), ("isRead", 1)])
     logger.info("Database indexes created")
 
-    # Agentic indexes
-    await db.contract_agents.create_index([("organizationId", 1), ("status", 1)])
-    await db.contract_agents.create_index([("organizationId", 1), ("agentType", 1)])
-    await db.contract_agents.create_index([("nextRunAt", 1)])
-    await db.risk_assessments.create_index([("contractId", 1), ("assessed_at", -1)])
-    await db.risk_assessments.create_index([("organizationId", 1), ("overall_score", -1)])
-    await db.risk_assessments.create_index([("organizationId", 1), ("risk_level", 1)])
-    await db.legal_playbooks.create_index([("organizationId", 1), ("is_active", 1)])
-    await db.legal_playbooks.create_index([("organizationId", 1), ("is_default", 1)])
-    await db.redline_sessions.create_index([("contractId", 1), ("status", 1)])
-    await db.contract_intakes.create_index([("organizationId", 1), ("status", 1)])
-    await db.contract_intakes.create_index([("organizationId", 1), ("received_at", -1)])
-    await db.contract_intakes.create_index([("source_email", 1)])
-    await db.extracted_obligations.create_index([("contractId", 1)])
-    await db.extracted_obligations.create_index([("organizationId", 1), ("status", 1)])
-    await db.extracted_obligations.create_index([("organizationId", 1), ("due_date", 1)])
-    await db.extracted_obligations.create_index([("assigned_to", 1), ("status", 1)])
-    await db.obligation_alerts.create_index([("obligationId", 1)])
-    await db.obligation_alerts.create_index([("organizationId", 1), ("alert_type", 1)])
-    await db.obligation_extraction_jobs.create_index([("contractId", 1)])
-    logger.info("Agentic indexes created")
+    # Agentic indexes are intentionally NOT created — agentic subsystem is stripped for launch.
+    # (see PRODUCT_SCOPE.md and comments in this file above.)
 
     # Ensure S3 bucket exists
     from services.storage_service import ensure_bucket_exists
@@ -238,27 +227,15 @@ async def startup_event():
     else:
         logger.warning("S3 bucket not available (check AWS credentials)")
 
-    # Initialize Celery for distributed task processing
+    # Celery is not initialized — agentic subsystem is stripped for launch.
+    # Re-enable when Redis + Celery worker + beat are provisioned.
+
+    # Run pending database migrations (idempotent)
     try:
-        from services.celery_app import init_celery
-        init_celery()
-        
-        # Set database references for all task modules
-        from services.agent_tasks import set_database as set_agent_db
-        from services.risk_tasks import set_database as set_risk_db
-        from services.playbook_tasks import set_database as set_playbook_db
-        from services.obligation_tasks import set_database as set_obligation_db
-        from services.intake_tasks import set_database as set_intake_db
-        
-        set_agent_db(db)
-        set_risk_db(db)
-        set_playbook_db(db)
-        set_obligation_db(db)
-        set_intake_db(db)
-        
-        logger.info("Celery task modules initialized with database")
+        from utils.migrations import run_migrations
+        await run_migrations(db)
     except Exception as e:
-        logger.warning(f"Celery initialization failed (may not be configured): {e}")
+        logger.error(f"Migration run failed: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

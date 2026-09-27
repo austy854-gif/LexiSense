@@ -11,7 +11,12 @@ from services.ai_service import analyze_contract, get_chat_response
 from services.storage_service import upload_file_to_s3, delete_file_from_s3
 from services.pdf_service import extract_text_from_file
 from services.audit_service import log_action
-from routes.billing import check_trial_access, increment_trial_usage
+from routes.billing import (
+    check_trial_access,
+    reserve_trial_upload_atomic,
+    release_trial_upload,
+    increment_trial_usage,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contracts", tags=["Contracts"])
@@ -109,6 +114,8 @@ async def list_contracts(
             expiryDate=c.get("expiryDate"),
             riskLevel=c.get("riskLevel"),
             aiAnalysis=c.get("aiAnalysis"),
+            aiAnalysisStatus=c.get("aiAnalysisStatus"),
+            aiAnalysisError=c.get("aiAnalysisError"),
             fileName=c.get("fileName"),
             fileSize=c.get("fileSize"),
             tags=c.get("tags", []),
@@ -152,6 +159,8 @@ async def get_contract(
         expiryDate=contract.get("expiryDate"),
         riskLevel=contract.get("riskLevel"),
         aiAnalysis=contract.get("aiAnalysis"),
+        aiAnalysisStatus=contract.get("aiAnalysisStatus"),
+        aiAnalysisError=contract.get("aiAnalysisError"),
         fileName=contract.get("fileName"),
         fileSize=contract.get("fileSize"),
         tags=contract.get("tags", []),
@@ -192,73 +201,103 @@ async def upload_contract(
             detail="Could not extract text from file. The file may be empty or corrupted."
         )
     
-    # Check trial limits before allowing upload
-    can_upload, trial_message = await check_trial_access(current_user["organizationId"])
-    if not can_upload:
+    # Atomically reserve one trial upload slot BEFORE any storage/DB writes.
+    # Concurrent requests can never exceed the cap, and we can refund on failure.
+    reserved, trial_message = await reserve_trial_upload_atomic(current_user["organizationId"])
+    if not reserved:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=trial_message
         )
-    
-    storage_key = await upload_file_to_s3(
-        file_content,
-        file.filename,
-        current_user["organizationId"],
-        file.content_type
-    )
-    
-    ai_analysis = None
-    risk_level = None
-    effective_date = None
-    expiry_date = None
-    contract_value = None
-    
+
+    quota_released = False
     try:
-        ai_analysis = await analyze_contract(extracted_text)
-        if ai_analysis:
-            risk_level = ai_analysis.get("riskLevel")
-            dates = ai_analysis.get("dates", {})
-            effective_date = dates.get("effectiveDate")
-            expiry_date = dates.get("expiryDate")
-            contract_value = ai_analysis.get("value")
+        storage_key = await upload_file_to_s3(
+            file_content,
+            file.filename,
+            current_user["organizationId"],
+            file.content_type
+        )
+
+        ai_analysis = None
+        ai_error = None
+        risk_level = None
+        effective_date = None
+        expiry_date = None
+        contract_value = None
+
+        try:
+            ai_analysis = await analyze_contract(extracted_text)
+            if ai_analysis is None:
+                # AI provider unavailable / not configured -- surface as recoverable state
+                ai_error = "AI analysis unavailable. Please retry from the contract detail page."
+            else:
+                if ai_analysis.get("error"):
+                    ai_error = ai_analysis.get("error")
+                risk_level = ai_analysis.get("riskLevel")
+                dates = ai_analysis.get("dates", {}) or {}
+                effective_date = dates.get("effectiveDate")
+                expiry_date = dates.get("expiryDate")
+                contract_value = ai_analysis.get("value")
+        except Exception as e:
+            logger.error(f"AI analysis failed: {e}")
+            ai_error = f"AI analysis failed: {str(e)[:200]}"
+
+        contract = Contract(
+            organizationId=current_user["organizationId"],
+            uploadedBy=current_user["sub"],
+            title=title,
+            counterparty=counterparty,
+            contractType=contractType,
+            status="draft",
+            value=contract_value,
+            effectiveDate=effective_date,
+            expiryDate=expiry_date,
+            riskLevel=risk_level,
+            originalText=extracted_text,
+            aiAnalysis=ai_analysis,
+            storageKey=storage_key,
+            fileName=file.filename,
+            fileSize=len(file_content),
+            mimeType=file.content_type
+        )
+
+        contract_doc = contract.model_dump()
+        # Attach AI error onto the stored document so the UI can render a
+        # recoverable state instead of silently missing analysis.
+        if ai_error:
+            contract_doc["aiAnalysisError"] = ai_error
+            contract_doc["aiAnalysisStatus"] = "failed"
+        else:
+            contract_doc["aiAnalysisStatus"] = "success"
+        await db.contracts.insert_one(contract_doc)
+
+        await log_action(
+            organization_id=current_user["organizationId"],
+            user_id=current_user["sub"],
+            user_email=current_user.get("email"),
+            action="contract_uploaded",
+            resource_type="contract",
+            resource_id=contract.id,
+            resource_title=title,
+        )
+    except HTTPException:
+        # Refund the reserved slot on any HTTP failure between reservation and DB insert.
+        if not quota_released:
+            await release_trial_upload(current_user["organizationId"])
+            quota_released = True
+        raise
     except Exception as e:
-        logger.error(f"AI analysis failed: {e}")
-    
-    contract = Contract(
-        organizationId=current_user["organizationId"],
-        uploadedBy=current_user["sub"],
-        title=title,
-        counterparty=counterparty,
-        contractType=contractType,
-        status="draft",
-        value=contract_value,
-        effectiveDate=effective_date,
-        expiryDate=expiry_date,
-        riskLevel=risk_level,
-        originalText=extracted_text,
-        aiAnalysis=ai_analysis,
-        storageKey=storage_key,
-        fileName=file.filename,
-        fileSize=len(file_content),
-        mimeType=file.content_type
-    )
-    
-    contract_doc = contract.model_dump()
-    await db.contracts.insert_one(contract_doc)
-    
-    await log_action(
-        organization_id=current_user["organizationId"],
-        user_id=current_user["sub"],
-        user_email=current_user.get("email"),
-        action="contract_uploaded",
-        resource_type="contract",
-        resource_id=contract.id,
-        resource_title=title,
-    )
-    
-    # Increment trial usage counter
-    await increment_trial_usage(current_user["organizationId"])
-    
+        # Unknown failure -- refund quota so the trial isn't unfairly consumed.
+        if not quota_released:
+            await release_trial_upload(current_user["organizationId"])
+            quota_released = True
+        logger.error(f"Contract upload failed after quota reservation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Upload failed. Your trial quota was not consumed. Please retry."
+        )
+
     uploader = await db.users.find_one({"id": current_user["sub"]}, {"_id": 0, "email": 1})
     
     return ContractResponse(
@@ -274,6 +313,8 @@ async def upload_contract(
         expiryDate=contract.expiryDate,
         riskLevel=contract.riskLevel,
         aiAnalysis=contract.aiAnalysis,
+        aiAnalysisStatus="failed" if ai_error else "success",
+        aiAnalysisError=ai_error,
         fileName=contract.fileName,
         fileSize=contract.fileSize,
         tags=contract.tags,
@@ -328,73 +369,90 @@ async def bulk_upload_contracts(
                 })
                 continue
             
-            # Check trial limits before allowing upload
-            can_upload, trial_message = await check_trial_access(current_user["organizationId"])
-            if not can_upload:
+            # Atomically reserve one trial slot per file. Concurrent bulk
+            # requests cannot exceed the cap.
+            reserved, trial_message = await reserve_trial_upload_atomic(current_user["organizationId"])
+            if not reserved:
                 results["failed"].append({
                     "filename": file.filename,
                     "error": trial_message
                 })
                 continue
-            
-            storage_key = await upload_file_to_s3(
-                file_content,
-                file.filename,
-                current_user["organizationId"],
-                file.content_type
-            )
-            
-            # Generate title from filename
-            title = file.filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
-            
-            # Analyze contract
-            ai_analysis = None
-            risk_level = None
-            effective_date = None
-            expiry_date = None
-            contract_value = None
-            
+
+            file_upload_ok = False
             try:
-                ai_analysis = await analyze_contract(extracted_text)
-                if ai_analysis:
-                    risk_level = ai_analysis.get("riskLevel")
-                    dates = ai_analysis.get("dates", {})
-                    effective_date = dates.get("effectiveDate")
-                    expiry_date = dates.get("expiryDate")
-                    contract_value = ai_analysis.get("value")
-            except Exception as e:
-                logger.error(f"AI analysis failed for {file.filename}: {e}")
-            
-            contract = Contract(
-                organizationId=current_user["organizationId"],
-                uploadedBy=current_user["sub"],
-                title=title,
-                contractType=contractType,
-                status="draft",
-                value=contract_value,
-                effectiveDate=effective_date,
-                expiryDate=expiry_date,
-                riskLevel=risk_level,
-                originalText=extracted_text,
-                aiAnalysis=ai_analysis,
-                storageKey=storage_key,
-                fileName=file.filename,
-                fileSize=len(file_content),
-                mimeType=file.content_type
-            )
-            
-            await db.contracts.insert_one(contract.model_dump())
-            
-            results["successful"].append({
-                "id": contract.id,
-                "filename": file.filename,
-                "title": title,
-                "riskLevel": risk_level
-            })
-            
-            # Increment trial usage counter
-            await increment_trial_usage(current_user["organizationId"])
-            
+                storage_key = await upload_file_to_s3(
+                    file_content,
+                    file.filename,
+                    current_user["organizationId"],
+                    file.content_type
+                )
+
+                # Generate title from filename
+                title = file.filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
+
+                # Analyze contract
+                ai_analysis = None
+                ai_error = None
+                risk_level = None
+                effective_date = None
+                expiry_date = None
+                contract_value = None
+
+                try:
+                    ai_analysis = await analyze_contract(extracted_text)
+                    if ai_analysis is None:
+                        ai_error = "AI analysis unavailable."
+                    else:
+                        if ai_analysis.get("error"):
+                            ai_error = ai_analysis.get("error")
+                        risk_level = ai_analysis.get("riskLevel")
+                        dates = ai_analysis.get("dates", {}) or {}
+                        effective_date = dates.get("effectiveDate")
+                        expiry_date = dates.get("expiryDate")
+                        contract_value = ai_analysis.get("value")
+                except Exception as e:
+                    logger.error(f"AI analysis failed for {file.filename}: {e}")
+                    ai_error = f"AI analysis failed: {str(e)[:200]}"
+
+                contract = Contract(
+                    organizationId=current_user["organizationId"],
+                    uploadedBy=current_user["sub"],
+                    title=title,
+                    contractType=contractType,
+                    status="draft",
+                    value=contract_value,
+                    effectiveDate=effective_date,
+                    expiryDate=expiry_date,
+                    riskLevel=risk_level,
+                    originalText=extracted_text,
+                    aiAnalysis=ai_analysis,
+                    storageKey=storage_key,
+                    fileName=file.filename,
+                    fileSize=len(file_content),
+                    mimeType=file.content_type
+                )
+
+                contract_doc = contract.model_dump()
+                if ai_error:
+                    contract_doc["aiAnalysisError"] = ai_error
+                    contract_doc["aiAnalysisStatus"] = "failed"
+                else:
+                    contract_doc["aiAnalysisStatus"] = "success"
+                await db.contracts.insert_one(contract_doc)
+                file_upload_ok = True
+
+                results["successful"].append({
+                    "id": contract.id,
+                    "filename": file.filename,
+                    "title": title,
+                    "riskLevel": risk_level
+                })
+            finally:
+                # If the DB insert never succeeded, refund the reserved slot.
+                if not file_upload_ok:
+                    await release_trial_upload(current_user["organizationId"])
+
         except Exception as e:
             logger.error(f"Bulk upload failed for {file.filename}: {e}")
             results["failed"].append({

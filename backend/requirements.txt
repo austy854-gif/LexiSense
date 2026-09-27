@@ -133,3 +133,6 @@ yarl==1.23.0
 zipp==3.23.0
 celery==5.3.6
 redis==5.0.1
+# NOTE: emergentintegrations must be installed with --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
+# Handled by Emergent deploy pipeline (see backend/Dockerfile).
+emergentintegrations==0.2.2

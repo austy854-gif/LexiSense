@@ -61,28 +61,102 @@ async def get_or_create_billing(org_id: str) -> OrganizationBilling:
 
 
 async def check_trial_access(org_id: str) -> tuple[bool, str]:
-    """Check if organization can upload contracts (trial limits)"""
+    """Check if organization can upload contracts (trial limits).
+
+    NOTE: This is a READ-only check. It is NOT a reservation. The actual
+    quota reservation is performed atomically in `reserve_trial_upload_atomic`.
+    Call this only for pre-flight UX messaging.
+    """
     billing = await get_or_create_billing(org_id)
-    
+
     # If paid subscription, always allow
     if billing.subscriptionTier == SubscriptionTier.TEAM and billing.billingStatus == BillingStatus.ACTIVE:
         return True, ""
-    
+
     # Check if trial has expired
     if billing.trialEndDate:
         trial_end = datetime.fromisoformat(billing.trialEndDate.replace("Z", "+00:00"))
         if datetime.now(timezone.utc) > trial_end:
             return False, "Your 7-day free trial has ended. Please upgrade to continue using LexiSense."
-    
+
     # Check contract upload limit
     if billing.trialContractsUsed >= billing.trialContractsLimit:
         return False, f"You've reached the trial limit of {TRIAL_CONTRACT_LIMIT} contract uploads. Please upgrade to continue."
-    
+
     return True, ""
 
 
+async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
+    """Atomically reserve one trial upload slot.
+
+    Uses `find_one_and_update` with a filter that requires
+    `trialContractsUsed < trialContractsLimit` so concurrent requests cannot
+    exceed the cap. Paid Team orgs bypass the counter entirely.
+
+    Returns (True, "") on successful reservation, or (False, message) on
+    trial expiry / quota exhaustion. Caller MUST call `release_trial_upload`
+    if the upload subsequently fails (e.g. S3 write or DB insert fails).
+    """
+    # Ensure billing record exists so filter has stable fields.
+    await get_or_create_billing(org_id)
+    now = datetime.now(timezone.utc).isoformat()
+
+    # First check for paid subscription -- paid orgs never consume trial quota.
+    billing_doc = await db.organization_billing.find_one({"organizationId": org_id})
+    if (
+        billing_doc
+        and billing_doc.get("subscriptionTier") == SubscriptionTier.TEAM
+        and billing_doc.get("billingStatus") == BillingStatus.ACTIVE
+    ):
+        return True, ""
+
+    # Check trial expiration BEFORE we try to reserve.
+    trial_end_str = billing_doc.get("trialEndDate") if billing_doc else None
+    if trial_end_str:
+        trial_end = datetime.fromisoformat(trial_end_str.replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) > trial_end:
+            return False, "Your 7-day free trial has ended. Please upgrade to continue using LexiSense."
+
+    # Atomic conditional increment: only succeeds if we're strictly below the limit.
+    result = await db.organization_billing.find_one_and_update(
+        {
+            "organizationId": org_id,
+            "$expr": {"$lt": ["$trialContractsUsed", "$trialContractsLimit"]},
+        },
+        {
+            "$inc": {"trialContractsUsed": 1},
+            "$set": {"updatedAt": now},
+        },
+    )
+    if result is None:
+        return False, f"You've reached the trial limit of {TRIAL_CONTRACT_LIMIT} contract uploads. Please upgrade to continue."
+    return True, ""
+
+
+async def release_trial_upload(org_id: str) -> None:
+    """Refund one trial upload slot. Used when an upload fails after reservation.
+
+    Safe to call multiple times; will never take the counter below zero.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    await db.organization_billing.find_one_and_update(
+        {
+            "organizationId": org_id,
+            "trialContractsUsed": {"$gt": 0},
+        },
+        {
+            "$inc": {"trialContractsUsed": -1},
+            "$set": {"updatedAt": now},
+        },
+    )
+
+
 async def increment_trial_usage(org_id: str):
-    """Increment trial contract usage counter"""
+    """DEPRECATED. Kept for backwards compatibility only.
+
+    Non-atomic. Do not call for new code paths — use
+    `reserve_trial_upload_atomic` + `release_trial_upload` instead.
+    """
     await db.organization_billing.update_one(
         {"organizationId": org_id},
         {"$inc": {"trialContractsUsed": 1}, "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()}}
@@ -441,4 +515,12 @@ async def get_plans():
 
 
 # Export the check function for use in contracts route
-__all__ = ["router", "check_trial_access", "increment_trial_usage", "get_or_create_billing", "init_db"]
+__all__ = [
+    "router",
+    "check_trial_access",
+    "reserve_trial_upload_atomic",
+    "release_trial_upload",
+    "increment_trial_usage",
+    "get_or_create_billing",
+    "init_db",
+]

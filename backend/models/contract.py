@@ -62,6 +62,8 @@ class ContractResponse(BaseModel):
     expiryDate: Optional[str] = None
     riskLevel: Optional[str] = None
     aiAnalysis: Optional[Dict[str, Any]] = None
+    aiAnalysisStatus: Optional[str] = None
+    aiAnalysisError: Optional[str] = None
     fileName: Optional[str] = None
     fileSize: Optional[int] = None
     tags: List[str] = []

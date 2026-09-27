@@ -14,7 +14,8 @@ import AlertsPage from './pages/AlertsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import TemplatesPage from './pages/TemplatesPage';
 import AuditLogPage from './pages/AuditLogPage';
-import AgenticDashboardPage from './pages/AgenticDashboardPage';
+// Agentic subsystem is stripped for launch. Backend code kept, UI removed.
+// import AgenticDashboardPage from './pages/AgenticDashboardPage';
 import BillingPage from './pages/BillingPage';
 
 import './App.css';
@@ -92,14 +93,6 @@ function App() {
               element={
                 <ProtectedRoute>
                   <AuditLogPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/agentic"
-              element={
-                <ProtectedRoute allowedRoles={['admin', 'manager']}>
-                  <AgenticDashboardPage />
                 </ProtectedRoute>
               }
             />
