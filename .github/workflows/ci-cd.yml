@@ -1,10 +1,12 @@
 name: LexiSense CI/CD
 
 on:
+  # Run on every push and every pull request so the unit suite always runs.
+  # Deploy jobs stay gated on main via their own `if:` conditions.
   push:
-    branches: [main, develop]
+    branches: ['**']
   pull_request:
-    branches: [main]
+    branches: ['**']
   schedule:
     # Weekly security scan
     - cron: '0 2 * * 1'
@@ -92,13 +94,49 @@ jobs:
       - name: Run tests
         run: |
           source venv/bin/activate
-          pytest tests/ -v --tb=short --junitxml=test-results.xml
+          # tests/unit is covered by the dedicated backend-unit-tests job,
+          # which installs requirements-test.txt.
+          pytest tests/ -v --tb=short --junitxml=test-results.xml --ignore=tests/unit
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: backend-test-results
           path: backend/test-results.xml
+
+  backend-unit-tests:
+    name: Backend Unit Tests (PATCH RBAC & Accept-Invite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-test.txt
+      - name: Install dependencies
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          # emergentintegrations is only published on the Emergent index.
+          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements.txt
+          pip install -r requirements-test.txt
+      - name: Run unit tests
+        run: |
+          source venv/bin/activate
+          pytest tests/unit -v --tb=short --junitxml=unit-test-results.xml
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-unit-test-results
+          path: backend/unit-test-results.xml
 
   frontend-lint:
     name: Frontend Lint & Build
@@ -255,7 +293,7 @@ jobs:
 
   notify:
     name: Notify on Failure
-    needs: [backend-lint, backend-test, frontend-lint, frontend-test, security-scan, dependency-check]
+    needs: [backend-lint, backend-test, backend-unit-tests, frontend-lint, frontend-test, security-scan, dependency-check]
     if: failure()
     runs-on: ubuntu-latest
     steps:
