@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from motor.motor_asyncio import AsyncIOMotorClient
-from models.template import Template, TemplateCreate
+from models.template import ContractTemplate
 from models.organization import Organization
 from models.user import User
 from utils.auth import hash_password
@@ -309,8 +309,12 @@ async def seed_database():
     else:
         print("Seeding default templates...")
         for template_data in DEFAULT_TEMPLATES:
-            template = Template(**template_data)
-            await db.templates.insert_one(template.model_dump())
+            template = ContractTemplate(**template_data)
+            doc = template.model_dump()
+            # `isDefault` is not a declared model field (extra="ignore" drops it),
+            # so persist it explicitly -- the seed guard above queries on it.
+            doc["isDefault"] = True
+            await db.templates.insert_one(doc)
             print(f"  Created: {template.name}")
         print(f"Seeded {len(DEFAULT_TEMPLATES)} default templates")
     

@@ -234,7 +234,7 @@ async def create_checkout_session(
             metadata={"organizationId": org_id}
         )
         return CheckoutSessionResponse(sessionId=session.id, url=session.url)
-    except stripe.error.StripeError as e:
+    except stripe.StripeError as e:
         logger.error(f"Stripe checkout error: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -269,7 +269,7 @@ async def create_billing_portal(
             return_url=request.returnUrl,
         )
         return BillingPortalResponse(url=session.url)
-    except stripe.error.StripeError as e:
+    except stripe.StripeError as e:
         logger.error(f"Stripe portal error: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -299,7 +299,7 @@ async def stripe_webhook(request: Request):
     except ValueError as e:
         logger.error(f"Invalid payload: {e}")
         raise HTTPException(status_code=400, detail="Invalid payload")
-    except stripe.error.SignatureVerificationError as e:
+    except stripe.SignatureVerificationError as e:
         logger.error(f"Invalid signature: {e}")
         raise HTTPException(status_code=400, detail="Invalid signature")
     

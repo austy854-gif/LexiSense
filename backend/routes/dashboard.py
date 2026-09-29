@@ -27,12 +27,15 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)) ->
         "status": "active"
     })
     
-    thirty_days_later = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-    today = datetime.now(timezone.utc).isoformat()
-    
+    # expiryDate is stored as a date-only string (YYYY-MM-DD). Comparing it
+    # against a full ISO timestamp excluded contracts expiring *today*.
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    thirty_days_later = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
+
     expiring_soon = await db.contracts.count_documents({
         "organizationId": org_id,
-        "expiryDate": {"$gte": today, "$lte": thirty_days_later}
+        "expiryDate": {"$gte": today, "$lte": thirty_days_later},
+        "status": {"$ne": "expired"},
     })
     
     high_risk = await db.contracts.count_documents({
