@@ -184,7 +184,13 @@ jobs:
           # file is not found".
           cache-dependency-path: frontend/yarn.lock
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        # The lockfile is pinned to registry.npmjs.org; set the registry
+        # explicitly so a runner/global yarn config cannot redirect resolution
+        # and invalidate --frozen-lockfile. The longer network timeout covers
+        # the cold-cache install of ~1400 packages on a CI runner.
+        run: |
+          yarn config set registry https://registry.npmjs.org/
+          yarn install --frozen-lockfile --network-timeout 600000
       - name: Lint with ESLint
         # CRA runs ESLint over src/ as part of `yarn build` below, using the
         # eslint-config-react-app ruleset. The previous `yarn run lint` fallback
@@ -217,7 +223,11 @@ jobs:
           # The lockfile lives in frontend/, not at the repo root.
           cache-dependency-path: frontend/yarn.lock
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        # See the frontend-lint job: pin the registry and allow a longer
+        # network timeout for the cold-cache install.
+        run: |
+          yarn config set registry https://registry.npmjs.org/
+          yarn install --frozen-lockfile --network-timeout 600000
       - name: Run tests
         run: yarn test --watchAll=false --passWithNoTests --coverage
         env:
