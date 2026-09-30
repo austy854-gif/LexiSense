@@ -1,0 +1,50 @@
+name: CI Probe (diagnostic)
+
+# TEMPORARY diagnostic workflow -- delete once the frontend "Install
+# dependencies" failure in ci-cd.yml is fixed.
+#
+# Job logs and check-run annotations are not retrievable from this environment
+# (the logs endpoint returns "Must have admin rights", and annotations need
+# auth), but job/step *conclusions* are. So each probe encodes its answer in its
+# own pass/fail result, which is all that is needed to locate the failure.
+#
+# It triggers on push rather than workflow_dispatch so that it runs without a
+# token being available to dispatch it.
+on:
+  push:
+    branches: ['**']
+
+jobs:
+  probe:
+    name: CI Probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # Which of the two registries the lockfile resolves from is unreachable?
+      - name: probe npm registry reachable
+        run: |
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://registry.npmjs.org/axios || echo 000)
+          echo "registry.npmjs.org -> $CODE"
+          test "$CODE" = "200"
+
+      - name: probe emergent asset host reachable
+        run: |
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://assets.emergent.sh/npm/emergentbase-visual-edits-1.0.8.tgz || echo 000)
+          echo "assets.emergent.sh -> $CODE"
+          test "$CODE" = "200"
+
+      # Does the install succeed when devDependencies are skipped? If it does,
+      # the culprit is a devDependency (the stand-out candidate being
+      # @emergentbase/visual-edits, the one dep not served from npmjs).
+      - name: probe install without devDependencies
+        working-directory: ./frontend
+        run: yarn install --production --frozen-lockfile --network-timeout 600000
+
+      - name: probe install with devDependencies
+        working-directory: ./frontend
+        continue-on-error: true
+        run: yarn install --frozen-lockfile --network-timeout 600000
