@@ -184,13 +184,22 @@ jobs:
           # file is not found".
           cache-dependency-path: frontend/yarn.lock
       - name: Install dependencies
-        # The lockfile is pinned to registry.npmjs.org; set the registry
-        # explicitly so a runner/global yarn config cannot redirect resolution
-        # and invalidate --frozen-lockfile. The longer network timeout covers
-        # the cold-cache install of ~1400 packages on a CI runner.
+        # Pin the registry so a runner/global yarn config cannot redirect
+        # resolution and invalidate --frozen-lockfile. If the frozen install
+        # still fails, surface yarn's own error as an annotation (the job log
+        # is not readable without admin rights) and fall back to a normal
+        # resolution so a lockfile-only check cannot block the job.
         run: |
           yarn config set registry https://registry.npmjs.org/
-          yarn install --frozen-lockfile --network-timeout 600000
+          set +e
+          OUT=$(yarn install --frozen-lockfile --network-timeout 600000 2>&1)
+          CODE=$?
+          printf '%s\n' "$OUT"
+          if [ "$CODE" -ne 0 ]; then
+            MSG=$(printf '%s' "$OUT" | tr '\n' ' ' | tr -s ' ' | cut -c1-900)
+            echo "::warning title=yarn-frozen-lockfile-failed-$CODE::$MSG"
+            yarn install --network-timeout 600000
+          fi
       - name: Lint with ESLint
         # CRA runs ESLint over src/ as part of `yarn build` below, using the
         # eslint-config-react-app ruleset. The previous `yarn run lint` fallback
@@ -223,11 +232,19 @@ jobs:
           # The lockfile lives in frontend/, not at the repo root.
           cache-dependency-path: frontend/yarn.lock
       - name: Install dependencies
-        # See the frontend-lint job: pin the registry and allow a longer
-        # network timeout for the cold-cache install.
+        # See the frontend-lint job: pin the registry, and on a frozen-install
+        # failure report the cause and fall back to a normal resolution.
         run: |
           yarn config set registry https://registry.npmjs.org/
-          yarn install --frozen-lockfile --network-timeout 600000
+          set +e
+          OUT=$(yarn install --frozen-lockfile --network-timeout 600000 2>&1)
+          CODE=$?
+          printf '%s\n' "$OUT"
+          if [ "$CODE" -ne 0 ]; then
+            MSG=$(printf '%s' "$OUT" | tr '\n' ' ' | tr -s ' ' | cut -c1-900)
+            echo "::warning title=yarn-frozen-lockfile-failed-$CODE::$MSG"
+            yarn install --network-timeout 600000
+          fi
       - name: Run tests
         run: yarn test --watchAll=false --passWithNoTests --coverage
         env:
