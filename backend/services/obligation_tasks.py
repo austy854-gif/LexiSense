@@ -10,6 +10,10 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 from celery import shared_task
 
+# Imported at module scope: ObligationAlert is used inside _send_obligation_alert,
+# and a module-level import keeps the reference resolvable for tooling.
+from models.agentic import ObligationAlert
+
 logger = logging.getLogger(__name__)
 
 # Database reference
@@ -23,7 +27,7 @@ def set_database(database):
 
 
 def get_db():
-    """Get the database reference."""
+    """Get the database reference for tasks."""
     return _db
 
 
@@ -405,6 +409,10 @@ async def _send_daily_obligation_alerts_async():
 
 async def _send_obligation_alert(obligation: Dict, alert_type: str, days_until: int, db):
     """Send notification for obligation alert."""
+    # send_notification is imported here rather than at module scope so that
+    # importing this module does not pull in services.audit_service.
+    from services.audit_service import send_notification
+
     org_id = obligation["organizationId"]
     
     # Get assigned user or admins

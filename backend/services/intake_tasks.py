@@ -16,6 +16,10 @@ import httpx
 import PyPDF2
 import io
 
+# Imported at module scope because ContractIntake is referenced in a function
+# annotation, which Python evaluates when the `async def` statement runs.
+from models.agentic import ContractIntake
+
 logger = logging.getLogger(__name__)
 
 # Database reference
@@ -29,7 +33,7 @@ def set_database(database):
 
 
 def get_db():
-    """Get the database reference."""
+    """Get the database reference for tasks."""
     return _db
 
 
