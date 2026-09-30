@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 
 from models.user import User, UserResponse
-from models.invitation import Invitation, InvitationCreate, InvitationResponse
+from models.invitation import Invitation, InvitationCreate, InvitationResponse, AcceptInvitationRequest
 from utils.auth import get_current_user, hash_password
 from services.email_service import send_invitation_email
 from services.audit_service import log_action
@@ -150,22 +150,20 @@ async def list_invitations(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/accept-invite")
-async def accept_invitation(
-    token: str,
-    password: str,
-    firstName: str = None,
-    lastName: str = None
-):
+async def accept_invitation(payload: AcceptInvitationRequest):
     """Accept an invitation and create user account."""
-    invitation = await db.invitations.find_one({"token": token, "status": "pending"})
+    invitation = await db.invitations.find_one({"token": payload.token, "status": "pending"})
     
     if not invitation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invalid or expired invitation"
         )
-    
-    if datetime.fromisoformat(invitation["expiresAt"]) < datetime.now(timezone.utc):
+
+    expires_at = datetime.fromisoformat(invitation["expiresAt"].replace("Z", "+00:00"))
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
         await db.invitations.update_one(
             {"id": invitation["id"]},
             {"$set": {"status": "expired"}}
@@ -177,9 +175,9 @@ async def accept_invitation(
     
     user = User(
         email=invitation["email"],
-        passwordHash=hash_password(password),
-        firstName=firstName,
-        lastName=lastName,
+        passwordHash=hash_password(payload.password),
+        firstName=payload.firstName,
+        lastName=payload.lastName,
         role=invitation["role"],
         organizationId=invitation["organizationId"]
     )

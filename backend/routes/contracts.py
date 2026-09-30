@@ -2,9 +2,10 @@ from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File,
 from typing import List, Optional
 from datetime import datetime, timezone
 import logging
+import re
 import uuid
 
-from models.contract import Contract, ContractCreate, ContractResponse, ChatMessage, ChatResponse
+from models.contract import Contract, ContractCreate, ContractResponse, ContractUpdate, ChatMessage, ChatResponse
 from models.contract_version import ContractVersion, ContractVersionResponse
 from utils.auth import get_current_user
 from services.ai_service import analyze_contract, get_chat_response
@@ -12,10 +13,8 @@ from services.storage_service import upload_file_to_s3, delete_file_from_s3
 from services.pdf_service import extract_text_from_file
 from services.audit_service import log_action
 from routes.billing import (
-    check_trial_access,
     reserve_trial_upload_atomic,
     release_trial_upload,
-    increment_trial_usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,6 +23,16 @@ router = APIRouter(prefix="/contracts", tags=["Contracts"])
 db = None
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_MIME_TYPES = ["application/pdf", "text/plain"]
+
+
+def _escape_regex(value: str) -> str:
+    """Escape user input before embedding it in a MongoDB ``$regex``.
+
+    Without this, a crafted ``search``/``counterparty`` value is interpreted as
+    a regular expression (regex injection / ReDoS) instead of a literal string.
+    """
+    return re.escape(value)
+
 
 def init_db(database):
     global db
@@ -56,14 +65,15 @@ async def list_contracts(
     if risk_level and risk_level != "all":
         query["riskLevel"] = risk_level
     if counterparty:
-        query["counterparty"] = {"$regex": counterparty, "$options": "i"}
+        query["counterparty"] = {"$regex": _escape_regex(counterparty), "$options": "i"}
     
     # Text search
     if search:
+        escaped = _escape_regex(search)
         query["$or"] = [
-            {"title": {"$regex": search, "$options": "i"}},
-            {"counterparty": {"$regex": search, "$options": "i"}},
-            {"tags": {"$regex": search, "$options": "i"}}
+            {"title": {"$regex": escaped, "$options": "i"}},
+            {"counterparty": {"$regex": escaped, "$options": "i"}},
+            {"tags": {"$regex": escaped, "$options": "i"}}
         ]
     
     # Date range filters
@@ -81,7 +91,9 @@ async def list_contracts(
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         future = (datetime.now(timezone.utc) + timedelta(days=expiring_within)).strftime("%Y-%m-%d")
         query["expiryDate"] = {"$gte": today, "$lte": future}
-        query["status"] = {"$ne": "expired"}
+        # Do not clobber an explicit status filter the caller already supplied.
+        if "status" not in query:
+            query["status"] = {"$ne": "expired"}
     
     # Tags filter
     if tags:
@@ -524,12 +536,7 @@ async def chat_with_contract(
 @router.patch("/{contract_id}")
 async def update_contract(
     contract_id: str,
-    title: Optional[str] = None,
-    counterparty: Optional[str] = None,
-    contractType: Optional[str] = None,
-    contract_status: Optional[str] = None,
-    tags: Optional[List[str]] = None,
-    changeReason: Optional[str] = None,
+    payload: ContractUpdate,
     current_user: dict = Depends(get_current_user)
 ):
     """Update a contract's metadata and create a version history entry."""
@@ -542,6 +549,33 @@ async def update_contract(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Contract not found"
+        )
+
+    # RBAC: viewers are read-only; non-admin/manager may only edit their own uploads.
+    if current_user["role"] == "viewer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Viewers cannot modify contracts"
+        )
+    if current_user["role"] not in ("admin", "manager") and contract["uploadedBy"] != current_user["sub"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins, managers, or the uploader can modify this contract"
+        )
+
+    title = payload.title
+    counterparty = payload.counterparty
+    contractType = payload.contractType
+    contract_status = payload.status
+    tags = payload.tags
+    changeReason = payload.changeReason
+
+    if contract_status is not None and contract_status not in (
+        "draft", "review", "approved", "active", "expired"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid status value"
         )
     
     # Get current version number

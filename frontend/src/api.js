@@ -1,6 +1,14 @@
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_BACKEND_URL + '/api/v1';
+// Guard against a missing REACT_APP_BACKEND_URL: previously this produced the
+// literal string "undefined/api/v1" and every request failed with a confusing
+// 404 instead of a clear configuration error.
+const BACKEND_URL = (process.env.REACT_APP_BACKEND_URL || '').replace(/\/+$/, '');
+if (!BACKEND_URL) {
+  // eslint-disable-next-line no-console
+  console.error('REACT_APP_BACKEND_URL is not set - API requests will fail.');
+}
+const API_URL = `${BACKEND_URL}/api/v1`;
 
 const api = axios.create({
   baseURL: API_URL,
@@ -62,8 +70,8 @@ export const teamAPI = {
   cancelInvitation: (id) => api.delete(`/team/invitations/${id}`),
   updateRole: (memberId, role) => api.patch(`/team/members/${memberId}/role`, null, { params: { role } }),
   removeMember: (memberId) => api.delete(`/team/members/${memberId}`),
-  acceptInvite: (token, password, firstName, lastName) => 
-    api.post('/team/accept-invite', null, { params: { token, password, firstName, lastName } }),
+  acceptInvite: (token, password, firstName, lastName) =>
+    api.post('/team/accept-invite', { token, password, firstName, lastName }),
 };
 
 // Dashboard API
