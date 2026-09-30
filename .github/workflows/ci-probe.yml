@@ -1,50 +1,59 @@
 name: CI Probe (diagnostic)
 
-# TEMPORARY diagnostic workflow -- delete once the frontend "Install
-# dependencies" failure in ci-cd.yml is fixed.
+# TEMPORARY diagnostic workflow -- delete once the frontend jobs in ci-cd.yml
+# are confirmed green.
 #
 # Job logs and check-run annotations are not retrievable from this environment
-# (the logs endpoint returns "Must have admin rights", and annotations need
-# auth), but job/step *conclusions* are. So each probe encodes its answer in its
-# own pass/fail result, which is all that is needed to locate the failure.
+# ("Must have admin rights" / annotations 404 without auth), so each probe
+# encodes its answer in its own step conclusion.
 #
-# It triggers on push rather than workflow_dispatch so that it runs without a
-# token being available to dispatch it.
+# The first probe run established:
+#   - registry.npmjs.org reachable                       -> success
+#   - assets.emergent.sh reachable                       -> success
+#   - yarn install --production --frozen-lockfile on 18  -> FAILURE
+# so the failure is the install itself, not network. Cause: react-router-dom
+# ^7.5.1 declares engines.node ">=20.0.0" and yarn 1 hard-fails the whole
+# install on an unsatisfied engine.
+#
+# This run proves it side by side: the same frozen-lockfile install under
+# Node 18 must fail and under Node 20 must succeed. The Node 18 job is allowed
+# to fail (continue-on-error at job level via a wrapper step) so the workflow
+# result itself stays readable as "the Node 20 path is green".
 on:
   push:
     branches: ['**']
 
 jobs:
-  probe:
-    name: CI Probe
+  install-on-node-18:
+    name: Install (Node 18 - expected to fail)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '18'
-
-      # Which of the two registries the lockfile resolves from is unreachable?
-      - name: probe npm registry reachable
-        run: |
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://registry.npmjs.org/axios || echo 000)
-          echo "registry.npmjs.org -> $CODE"
-          test "$CODE" = "200"
-
-      - name: probe emergent asset host reachable
-        run: |
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://assets.emergent.sh/npm/emergentbase-visual-edits-1.0.8.tgz || echo 000)
-          echo "assets.emergent.sh -> $CODE"
-          test "$CODE" = "200"
-
-      # Does the install succeed when devDependencies are skipped? If it does,
-      # the culprit is a devDependency (the stand-out candidate being
-      # @emergentbase/visual-edits, the one dep not served from npmjs).
-      - name: probe install without devDependencies
-        working-directory: ./frontend
-        run: yarn install --production --frozen-lockfile --network-timeout 600000
-
-      - name: probe install with devDependencies
-        working-directory: ./frontend
+      - name: yarn install --frozen-lockfile
         continue-on-error: true
+        working-directory: ./frontend
         run: yarn install --frozen-lockfile --network-timeout 600000
+      - name: report react-router-dom engine requirement
+        working-directory: ./frontend
+        run: |
+          node -e "console.log('node', process.version)"
+          node -e "const p=require('./node_modules/react-router-dom/package.json');console.log('react-router-dom engines:', JSON.stringify(p.engines))" || echo "react-router-dom not installed"
+
+  install-on-node-20:
+    name: Install (Node 20 - expected to pass)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+          cache-dependency-path: frontend/yarn.lock
+      - name: yarn install --frozen-lockfile
+        working-directory: ./frontend
+        run: yarn install --frozen-lockfile --network-timeout 600000
+      - name: report node version
+        run: node -v
