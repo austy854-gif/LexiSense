@@ -5,55 +5,53 @@ name: CI Probe (diagnostic)
 #
 # Job logs and check-run annotations are not retrievable from this environment
 # ("Must have admin rights" / annotations 404 without auth), so each probe
-# encodes its answer in its own step conclusion.
+# encodes its answer in its own job conclusion.
 #
-# The first probe run established:
-#   - registry.npmjs.org reachable                       -> success
-#   - assets.emergent.sh reachable                       -> success
-#   - yarn install --production --frozen-lockfile on 18  -> FAILURE
-# so the failure is the install itself, not network. Cause: react-router-dom
-# ^7.5.1 declares engines.node ">=20.0.0" and yarn 1 hard-fails the whole
-# install on an unsatisfied engine.
+# Findings so far:
+#   run 1: registry reachable, emergent host reachable, but the install failed
+#          (so it is the install, not network)
+#   run 2: install on Node 18 WITHOUT a yarn cache -> SUCCESS
+#          install on Node 20 WITH    a yarn cache -> FAILURE
+#   run 2 changed two variables at once, so this run separates them: the same
+#   frozen-lockfile install across Node 18/20 x cache/no-cache. Whichever jobs
+#   fail name the culprit.
 #
-# This run proves it side by side: the same frozen-lockfile install under
-# Node 18 must fail and under Node 20 must succeed. The Node 18 job is allowed
-# to fail (continue-on-error at job level via a wrapper step) so the workflow
-# result itself stays readable as "the Node 20 path is green".
+# No continue-on-error anywhere: each job's conclusion IS the result to read.
 on:
   push:
     branches: ['**']
 
 jobs:
-  install-on-node-18:
-    name: Install (Node 18 - expected to fail)
+  without-cache:
+    name: nocache-node${{ matrix.node }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '${{ matrix.node }}'
       - name: yarn install --frozen-lockfile
-        continue-on-error: true
         working-directory: ./frontend
-        run: yarn install --frozen-lockfile --network-timeout 600000
-      - name: report react-router-dom engine requirement
-        working-directory: ./frontend
-        run: |
-          node -e "console.log('node', process.version)"
-          node -e "const p=require('./node_modules/react-router-dom/package.json');console.log('react-router-dom engines:', JSON.stringify(p.engines))" || echo "react-router-dom not installed"
+        run: yarn install --frozen-lockfile
 
-  install-on-node-20:
-    name: Install (Node 20 - expected to pass)
+  with-cache:
+    name: cache-node${{ matrix.node }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '${{ matrix.node }}'
           cache: 'yarn'
           cache-dependency-path: frontend/yarn.lock
       - name: yarn install --frozen-lockfile
         working-directory: ./frontend
-        run: yarn install --frozen-lockfile --network-timeout 600000
-      - name: report node version
-        run: node -v
+        run: yarn install --frozen-lockfile
