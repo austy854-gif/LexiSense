@@ -46,7 +46,9 @@ jobs:
           python -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
-          pip install -r requirements.txt
+          # emergentintegrations is only published on the Emergent index,
+          # so the default PyPI index alone cannot resolve requirements.txt.
+          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements.txt
           pip install flake8 black mypy
       - name: Lint with flake8
         run: |
@@ -90,7 +92,8 @@ jobs:
           python -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
-          pip install -r requirements.txt
+          # emergentintegrations is only published on the Emergent index.
+          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements.txt
       - name: Run tests
         run: |
           source venv/bin/activate
@@ -150,6 +153,10 @@ jobs:
         with:
           node-version: '18'
           cache: 'yarn'
+          # The lockfile lives in frontend/, not at the repo root: without this
+          # setup-node looks for ./yarn.lock and fails with "Dependencies lock
+          # file is not found".
+          cache-dependency-path: frontend/yarn.lock
       - name: Install dependencies
         run: yarn install --frozen-lockfile
       - name: Lint with ESLint
@@ -176,6 +183,8 @@ jobs:
         with:
           node-version: '18'
           cache: 'yarn'
+          # The lockfile lives in frontend/, not at the repo root.
+          cache-dependency-path: frontend/yarn.lock
       - name: Install dependencies
         run: yarn install --frozen-lockfile
       - name: Run tests
@@ -192,8 +201,16 @@ jobs:
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
+    # upload-sarif needs write access to security events. Without this the step
+    # fails with "Resource not accessible by integration" on push events.
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # TruffleHog diffs `base`..`head`, so it needs the full history.
+          fetch-depth: 0
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
