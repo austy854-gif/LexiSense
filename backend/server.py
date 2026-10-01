@@ -3,25 +3,56 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from contextlib import asynccontextmanager
+import asyncio
 import os
 import logging
+import re
 import time
+import uuid
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # Configure structured logging FIRST (before other imports that may log)
-from utils.logging_config import setup_logging, RequestLoggingMiddleware, get_logger
+from utils.logging_config import (
+    RequestLoggingMiddleware,
+    get_logger,
+    request_id_var,
+    setup_logging,
+)
 setup_logging(
     level=os.environ.get("LOG_LEVEL", "INFO"),
     json_format=os.environ.get("LOG_JSON", "true").lower() == "true"
 )
 logger = get_logger("main")
 
-# MongoDB connection
+# MongoDB connection.
+#
+# Pool and timeout options are set explicitly instead of relying on driver
+# defaults because every worker holds its own pool:
+#   * maxPoolSize=50 caps worst-case connections at (workers x 50); with the
+#     default of 100 a handful of replicas can exhaust a standard Atlas tier.
+#   * maxIdleTimeMS retires sockets before an idle-timeout proxy/LB closes them,
+#     which avoids periodic "connection reset" spikes.
+#   * connect=False keeps import side-effect free: `motor` connects lazily, so a
+#     transient database outage at boot no longer crashes the process before it
+#     can serve health checks.
+#   * serverSelectionTimeoutMS bounds how long a request waits for a primary,
+#     so a database outage fails fast instead of hanging every request.
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+client = AsyncIOMotorClient(
+    mongo_url,
+    connect=False,
+    maxPoolSize=int(os.environ.get("MONGO_MAX_POOL_SIZE", "50")),
+    minPoolSize=0,
+    maxIdleTimeMS=45_000,
+    connectTimeoutMS=10_000,
+    serverSelectionTimeoutMS=5_000,
+    socketTimeoutMS=45_000,
+    appname="lexisense-api",
+)
 db = client[os.environ['DB_NAME']]
 
 # Initialize Sentry
@@ -31,12 +62,12 @@ if sentry_dsn and not sentry_dsn.startswith("your-"):
     from sentry_sdk.integrations.fastapi import FastApiIntegration
     from sentry_sdk.integrations.starlette import StarletteIntegration
     from sentry_sdk.integrations.logging import LoggingIntegration
-    
+
     sentry_logging = LoggingIntegration(
         level=logging.INFO,
         event_level=logging.ERROR
     )
-    
+
     sentry_sdk.init(
         dsn=sentry_dsn,
         integrations=[
@@ -53,6 +84,51 @@ if sentry_dsn and not sentry_dsn.startswith("your-"):
 else:
     logger.info("Sentry not configured (SENTRY_DSN not set)")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifecycle.
+
+    Replaces the deprecated ``@app.on_event`` handlers so startup/shutdown work
+    participates in the lifespan protocol (and is exercised by the test client
+    instead of being skipped).
+    """
+    logger.info("LexiSense API starting up...")
+
+    # Canonical index specification (see utils/database.py for the rationale
+    # behind each index). Without the id indexes every by-id endpoint was a
+    # collection scan, and the compound indexes back the list/dashboard sorts.
+    from utils.database import apply_indexes
+    result = await apply_indexes(db)
+    logger.info(
+        "Database indexes ensured",
+        extra={"indexes_created": result["created"], "indexes_failed": result["failed"]},
+    )
+
+    # Ensure S3 bucket exists
+    from services.storage_service import ensure_bucket_exists
+    bucket_ok = await ensure_bucket_exists()
+    if bucket_ok:
+        logger.info("S3 bucket verified")
+    else:
+        logger.warning("S3 bucket not available (check AWS credentials)")
+
+    # Celery is not initialized -- agentic subsystem is stripped for launch.
+    # Re-enable when Redis + Celery worker + beat are provisioned.
+
+    # Run pending database migrations (idempotent)
+    try:
+        from utils.migrations import run_migrations
+        await run_migrations(db)
+    except Exception as e:
+        logger.error(f"Migration run failed: {e}")
+
+    yield
+
+    logger.info("LexiSense API shutting down...")
+    client.close()
+
+
 # Create the main app
 app = FastAPI(
     title="LexiSense API",
@@ -60,8 +136,13 @@ app = FastAPI(
     version="2.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json"
+    openapi_url="/api/openapi.json",
+    lifespan=lifespan,
 )
+
+# Expose the handles so the lifespan protocol / tests can re-point them.
+app.state.mongo_client = client
+app.state.db_name = os.environ["DB_NAME"]
 
 # Add request logging middleware
 app.add_middleware(RequestLoggingMiddleware)
@@ -124,55 +205,80 @@ async def root():
     return {"message": "LexiSense API", "version": "2.0.0", "docs": "/api/docs"}
 
 
+# Timeout budget for a single dependency probe inside the health check.
+HEALTH_PROBE_TIMEOUT_SECONDS = float(os.environ.get("HEALTH_PROBE_TIMEOUT_SECONDS", "3"))
+
+
+async def _probe_storage() -> dict:
+    """Probe S3 on a worker thread inside a bounded timeout.
+
+    ``boto3`` is synchronous: calling it directly from the event loop blocked
+    all concurrent requests for the duration of the network round trip, and an
+    unresponsive S3 endpoint could hang the health check indefinitely.
+    """
+    try:
+        from services.storage_service import get_s3_client
+
+        s3_client = get_s3_client()
+        if not s3_client:
+            return {"status": "degraded", "details": "Using mock storage"}
+
+        await asyncio.wait_for(
+            asyncio.to_thread(
+                s3_client.head_bucket, Bucket=os.environ.get("AWS_S3_BUCKET", "")
+            ),
+            timeout=HEALTH_PROBE_TIMEOUT_SECONDS,
+        )
+        return {"status": "healthy", "details": "S3 accessible"}
+    except asyncio.TimeoutError:
+        return {"status": "unhealthy", "details": "Storage probe timed out"}
+    except Exception as exc:
+        logger.warning("Health check storage probe failed: %s", exc)
+        return {"status": "unhealthy", "details": "Storage probe failed"}
+
+
+def _probe_config(env_var: str) -> dict:
+    """Report whether an optional integration is configured."""
+    value = os.environ.get(env_var)
+    if value and not value.startswith("your-"):
+        return {"status": "healthy", "details": "Configured"}
+    return {"status": "degraded", "details": "Not configured"}
+
+
 # Health check endpoint with detailed checks. MUST be registered on
 # `api_router` BEFORE `app.include_router(api_router)` -- otherwise the
 # route is silently dropped (this is exactly the Gate 2 release-stopper
 # from the pre-launch checklist).
 @api_router.get("/health")
 async def health_check():
-    """Health check endpoint with detailed service status."""
+    """Health check endpoint with detailed service status.
+
+    Dependency failures are reported as a *status*, never as raw exception
+    text, and the underlying error goes to the logs instead: this endpoint is
+    unauthenticated, so echoing driver/proxy error strings leaks internal
+    topology and credentials-adjacent detail to anonymous callers.
+    """
     checks = {}
     overall_healthy = True
 
     # Database check
     try:
-        await db.command("ping")
+        await asyncio.wait_for(db.command("ping"), timeout=HEALTH_PROBE_TIMEOUT_SECONDS)
         checks["database"] = {"status": "healthy", "details": "Connected"}
-    except Exception as e:
-        checks["database"] = {"status": "unhealthy", "details": str(e)}
+    except asyncio.TimeoutError:
+        checks["database"] = {"status": "unhealthy", "details": "Database probe timed out"}
+        overall_healthy = False
+    except Exception as exc:
+        logger.warning("Health check database probe failed: %s", exc)
+        checks["database"] = {"status": "unhealthy", "details": "Database unreachable"}
         overall_healthy = False
 
-    # S3 check
-    try:
-        from services.storage_service import get_s3_client
-        s3_client = get_s3_client()
-        if s3_client:
-            s3_client.head_bucket(Bucket=os.environ.get("AWS_S3_BUCKET", ""))
-            checks["storage"] = {"status": "healthy", "details": "S3 accessible"}
-        else:
-            checks["storage"] = {"status": "degraded", "details": "Using mock storage"}
-    except Exception as e:
-        checks["storage"] = {"status": "unhealthy", "details": str(e)}
+    # S3 check (offloaded -- see _probe_storage)
+    checks["storage"] = await _probe_storage()
 
-    # AI service check
-    try:
-        emergent_key = os.environ.get("EMERGENT_LLM_KEY")
-        if emergent_key and not emergent_key.startswith("your-"):
-            checks["ai"] = {"status": "healthy", "details": "Configured"}
-        else:
-            checks["ai"] = {"status": "degraded", "details": "Not configured"}
-    except Exception as e:
-        checks["ai"] = {"status": "unhealthy", "details": str(e)}
-
-    # Email service check
-    try:
-        resend_key = os.environ.get("RESEND_API_KEY")
-        if resend_key and not resend_key.startswith("your-"):
-            checks["email"] = {"status": "healthy", "details": "Configured"}
-        else:
-            checks["email"] = {"status": "degraded", "details": "Not configured"}
-    except Exception as e:
-        checks["email"] = {"status": "unhealthy", "details": str(e)}
+    # AI + email configuration checks (no outbound calls, no secret values)
+    checks["ai"] = _probe_config("EMERGENT_LLM_KEY")
+    checks["email"] = _probe_config("RESEND_API_KEY")
 
     return {
         "status": "healthy" if overall_healthy else "degraded",
@@ -197,52 +303,39 @@ app.add_middleware(
     allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "X-Total-Count", "X-Page-Limit", "X-Page-Offset"],
 )
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("LexiSense API starting up...")
+# ---------------------------------------------------------------------------
+# Correlation id propagation + uniform error envelope
+# ---------------------------------------------------------------------------
+_ALLOWED_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
-    # Create indexes for better query performance
-    await db.users.create_index("email", unique=True)
-    await db.users.create_index("organizationId")
-    await db.contracts.create_index("organizationId")
-    await db.contracts.create_index([("organizationId", 1), ("createdAt", -1)])
-    await db.contracts.create_index([("organizationId", 1), ("expiryDate", 1)])
-    await db.contracts.create_index([("organizationId", 1), ("riskLevel", 1)])
-    await db.contracts.create_index([("organizationId", 1), ("contractType", 1)])
-    await db.invitations.create_index("token", unique=True)
-    await db.invitations.create_index([("organizationId", 1), ("email", 1)])
-    await db.contract_versions.create_index([("contractId", 1), ("version", -1)])
-    await db.expiration_alerts.create_index([("contractId", 1), ("daysBeforeExpiry", 1)])
-    await db.templates.create_index([("organizationId", 1), ("name", 1)])
-    await db.audit_logs.create_index([("organizationId", 1), ("createdAt", -1)])
-    await db.audit_logs.create_index([("organizationId", 1), ("resourceType", 1)])
-    await db.notifications.create_index([("userId", 1), ("createdAt", -1)])
-    await db.notifications.create_index([("userId", 1), ("isRead", 1)])
-    logger.info("Database indexes created")
 
-    # Agentic indexes are intentionally NOT created — agentic subsystem is stripped for launch.
-    # (see PRODUCT_SCOPE.md and comments in this file above.)
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Honour an inbound ``X-Request-ID`` (or mint one) and echo it back.
 
-    # Ensure S3 bucket exists
-    from services.storage_service import ensure_bucket_exists
-    bucket_ok = await ensure_bucket_exists()
-    if bucket_ok:
-        logger.info("S3 bucket verified")
-    else:
-        logger.warning("S3 bucket not available (check AWS credentials)")
+    Without this the correlation id existed only inside log lines, so a client
+    reporting a failure had nothing to quote and support could not tie a
+    response back to its trace.
+    """
 
-    # Celery is not initialized — agentic subsystem is stripped for launch.
-    # Re-enable when Redis + Celery worker + beat are provisioned.
+    async def dispatch(self, request: Request, call_next):
+        incoming = request.headers.get("X-Request-ID", "")
+        request_id = incoming if _ALLOWED_REQUEST_ID.match(incoming) else str(uuid.uuid4())
+        request_id_var.set(request_id)
+        try:
+            response = await call_next(request)
+        finally:
+            # Reset so an id can never leak into a later request's context.
+            request_id_var.set("")
+        response.headers["X-Request-ID"] = request_id
+        return response
 
-    # Run pending database migrations (idempotent)
-    try:
-        from utils.migrations import run_migrations
-        await run_migrations(db)
-    except Exception as e:
-        logger.error(f"Migration run failed: {e}")
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+app.add_middleware(RequestIDMiddleware)
+
+# Every error -- HTTPException, validation failure or unhandled exception --
+# returns one machine-readable envelope: {"error": {...}, "requestId", "status"}.
+from utils.errors import register_exception_handlers  # noqa: E402
+register_exception_handlers(app)

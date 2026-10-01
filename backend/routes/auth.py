@@ -4,19 +4,40 @@ import logging
 
 from models.user import User, UserCreate, UserLogin, UserResponse, TokenResponse
 from models.organization import Organization
-from utils.auth import hash_password, verify_password, create_access_token, get_current_user
+from utils.auth import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    get_current_user,
+    init_identity_store,
+)
+from utils.rbac import (
+    ADMIN_ROLES,
+    AUTH_RATE_LIMITER,
+    ROLE_ADMIN,
+    rate_limit,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 db = None
 
+
 def init_db(database):
     global db
     db = database
+    # The authorisation dependency must resolve identity/role from the same
+    # database, otherwise a demoted or deactivated account keeps its old
+    # privileges until its token expires.
+    init_identity_store(database)
 
 
-@router.post("/register", response_model=TokenResponse)
+@router.post(
+    "/register",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limit(AUTH_RATE_LIMITER, "auth:register"))],
+)
 async def register(user_data: UserCreate):
     """Register a new user and create their organization."""
     existing_user = await db.users.find_one({"email": user_data.email})
@@ -25,23 +46,26 @@ async def register(user_data: UserCreate):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
+
     org_name = user_data.organizationName or f"{user_data.email.split('@')[0]}'s Organization"
     org = Organization(name=org_name)
     org_doc = org.model_dump()
     await db.organizations.insert_one(org_doc)
-    
+
+    # The account that creates the organisation is its owner (admin). Every
+    # other account is created through the invitation flow with an explicit,
+    # validated role.
     user = User(
         email=user_data.email,
         passwordHash=hash_password(user_data.password),
         firstName=user_data.firstName,
         lastName=user_data.lastName,
-        role="admin",
+        role=ROLE_ADMIN,
         organizationId=org.id
     )
     user_doc = user.model_dump()
     await db.users.insert_one(user_doc)
-    
+
     access_token = create_access_token(
         data={
             "sub": user.id,
@@ -50,7 +74,7 @@ async def register(user_data: UserCreate):
             "organizationId": user.organizationId
         }
     )
-    
+
     user_response = UserResponse(
         id=user.id,
         email=user.email,
@@ -62,37 +86,42 @@ async def register(user_data: UserCreate):
         lastLogin=user.lastLogin,
         createdAt=user.createdAt
     )
-    
+
     return TokenResponse(access_token=access_token, user=user_response)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limit(AUTH_RATE_LIMITER, "auth:login"))],
+)
 async def login(credentials: UserLogin):
     """Authenticate a user and return access token."""
     user_doc = await db.users.find_one({"email": credentials.email})
     if not user_doc:
+        # Identical response to a wrong password: do not leak which emails exist.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
         )
-    
+
     if not verify_password(credentials.password, user_doc["passwordHash"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
         )
-    
+
     if not user_doc.get("isActive", True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is deactivated"
         )
-    
+
     await db.users.update_one(
         {"id": user_doc["id"]},
         {"$set": {"lastLogin": datetime.now(timezone.utc).isoformat()}}
     )
-    
+
     access_token = create_access_token(
         data={
             "sub": user_doc["id"],
@@ -101,7 +130,7 @@ async def login(credentials: UserLogin):
             "organizationId": user_doc.get("organizationId")
         }
     )
-    
+
     user_response = UserResponse(
         id=user_doc["id"],
         email=user_doc["email"],
@@ -113,7 +142,7 @@ async def login(credentials: UserLogin):
         lastLogin=datetime.now(timezone.utc).isoformat(),
         createdAt=user_doc["createdAt"]
     )
-    
+
     return TokenResponse(access_token=access_token, user=user_response)
 
 
@@ -126,7 +155,7 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     return UserResponse(
         id=user_doc["id"],
         email=user_doc["email"],

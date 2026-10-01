@@ -42,6 +42,7 @@ from models.invitation import Invitation  # noqa: E402
 from routes import contracts as contracts_route  # noqa: E402
 from routes import team as team_route  # noqa: E402
 from services import audit_service, email_service  # noqa: E402
+from utils import rbac as rbac_module  # noqa: E402
 from utils.auth import create_access_token, hash_password  # noqa: E402
 
 API_PREFIX = "/api/v1"
@@ -61,6 +62,24 @@ def _build_app() -> FastAPI:
     api_router.include_router(team_route.router)
     app.include_router(api_router)
     return app
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiters():
+    """Reset the process-global rate limiters around every test.
+
+    The limiters are module-level singletons keyed by client identity, and the
+    in-process test client always presents the same client host. Without a
+    reset, earlier tests in a module would consume the budget and later ones
+    would (correctly) receive 429 -- a real cross-test coupling that has nothing
+    to do with the behaviour under test. Dedicated rate-limit tests drive the
+    limiter directly instead.
+    """
+    rbac_module.AUTH_RATE_LIMITER.reset()
+    rbac_module.INVITE_RATE_LIMITER.reset()
+    yield
+    rbac_module.AUTH_RATE_LIMITER.reset()
+    rbac_module.INVITE_RATE_LIMITER.reset()
 
 
 @pytest.fixture

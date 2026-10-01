@@ -1,12 +1,16 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from typing import List, Optional
 import logging
 
 from models.audit import AuditLogResponse
-from utils.auth import get_current_user
+from utils.auth import get_current_user, require_role
+from utils.rbac import AUDIT_READER_ROLES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/audit", tags=["Audit"])
+
+#: Audit data is organisation-sensitive: admin/manager only, from the registry.
+_require_audit_reader = require_role(*AUDIT_READER_ROLES)
 
 db = None
 
@@ -19,13 +23,15 @@ def init_db(database):
 async def list_audit_logs(
     resource_type: Optional[str] = None,
     action: Optional[str] = None,
-    limit: int = 50,
-    current_user: dict = Depends(get_current_user),
+    limit: int = Query(50, ge=1, le=500),
+    current_user: dict = Depends(_require_audit_reader),
 ):
-    """List audit logs for the organization. Admin only."""
-    if current_user["role"] not in ("admin", "manager"):
-        return []
+    """List audit logs for the organization. Admin/manager only.
 
+    Previously an unauthorised caller received ``200 []``, which is
+    indistinguishable from "this organisation has no audit history" -- the
+    endpoint now returns a proper 403 from the shared role registry.
+    """
     query = {"organizationId": current_user["organizationId"]}
     if resource_type:
         query["resourceType"] = resource_type
