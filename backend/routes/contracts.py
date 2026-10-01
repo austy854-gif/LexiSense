@@ -1,21 +1,22 @@
-from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Response
 from typing import List, Optional
 from datetime import datetime, timezone
 import logging
+import re
 import uuid
 
-from models.contract import Contract, ContractCreate, ContractResponse, ChatMessage, ChatResponse
+from models.contract import Contract, ContractCreate, ContractResponse, ContractUpdate, ChatMessage, ChatResponse
 from models.contract_version import ContractVersion, ContractVersionResponse
 from utils.auth import get_current_user
+from utils.pagination import normalize_date_bound, resolve_pagination
+from utils.rbac import ROLE_ADMIN, ROLE_MANAGER, WRITE_ROLES
 from services.ai_service import analyze_contract, get_chat_response
 from services.storage_service import upload_file_to_s3, delete_file_from_s3
 from services.pdf_service import extract_text_from_file
 from services.audit_service import log_action
 from routes.billing import (
-    check_trial_access,
     reserve_trial_upload_atomic,
     release_trial_upload,
-    increment_trial_usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,16 @@ db = None
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_MIME_TYPES = ["application/pdf", "text/plain"]
 
+
+def _escape_regex(value: str) -> str:
+    """Escape user input before embedding it in a MongoDB ``$regex``.
+
+    Without this, a crafted ``search``/``counterparty`` value is interpreted as
+    a regular expression (regex injection / ReDoS) instead of a literal string.
+    """
+    return re.escape(value)
+
+
 def init_db(database):
     global db
     db = database
@@ -32,6 +43,7 @@ def init_db(database):
 
 @router.get("", response_model=List[ContractResponse])
 async def list_contracts(
+    response: Response,
     status_filter: Optional[str] = None,
     contract_type: Optional[str] = None,
     risk_level: Optional[str] = None,
@@ -43,9 +55,17 @@ async def list_contracts(
     tags: Optional[str] = None,
     sort_by: Optional[str] = "createdAt",
     sort_order: Optional[str] = "desc",
+    pagination: tuple = Depends(resolve_pagination),
     current_user: dict = Depends(get_current_user)
 ):
-    """List all contracts with advanced filtering options."""
+    """List all contracts with advanced filtering options.
+
+    Results are paginated (``limit``/``offset``, both bounded server-side) and
+    the total number of matching records is returned in the ``X-Total-Count``
+    response header, so a client can render pagination controls without a
+    second round trip and without silently truncating a large result set.
+    """
+    limit, offset = pagination
     query = {"organizationId": current_user["organizationId"]}
     
     # Basic filters
@@ -56,24 +76,29 @@ async def list_contracts(
     if risk_level and risk_level != "all":
         query["riskLevel"] = risk_level
     if counterparty:
-        query["counterparty"] = {"$regex": counterparty, "$options": "i"}
+        query["counterparty"] = {"$regex": _escape_regex(counterparty), "$options": "i"}
     
     # Text search
     if search:
+        escaped = _escape_regex(search)
         query["$or"] = [
-            {"title": {"$regex": search, "$options": "i"}},
-            {"counterparty": {"$regex": search, "$options": "i"}},
-            {"tags": {"$regex": search, "$options": "i"}}
+            {"title": {"$regex": escaped, "$options": "i"}},
+            {"counterparty": {"$regex": escaped, "$options": "i"}},
+            {"tags": {"$regex": escaped, "$options": "i"}}
         ]
     
-    # Date range filters
-    if date_from:
-        query["createdAt"] = {"$gte": date_from}
-    if date_to:
-        if "createdAt" in query:
-            query["createdAt"]["$lte"] = date_to
-        else:
-            query["createdAt"] = {"$lte": date_to}
+    # Date range filters. Callers may send a bare date (YYYY-MM-DD) or a full
+    # ISO timestamp; a date-only upper bound is widened to the end of that UTC
+    # day so "created before X" cannot silently exclude records created on X.
+    normalized_from = normalize_date_bound(date_from, "createdAt", is_upper_bound=False)
+    normalized_to = normalize_date_bound(date_to, "createdAt", is_upper_bound=True)
+    if normalized_from or normalized_to:
+        created_filter = {}
+        if normalized_from:
+            created_filter["$gte"] = normalized_from
+        if normalized_to:
+            created_filter["$lte"] = normalized_to
+        query["createdAt"] = created_filter
     
     # Expiring within N days
     if expiring_within:
@@ -81,7 +106,9 @@ async def list_contracts(
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         future = (datetime.now(timezone.utc) + timedelta(days=expiring_within)).strftime("%Y-%m-%d")
         query["expiryDate"] = {"$gte": today, "$lte": future}
-        query["status"] = {"$ne": "expired"}
+        # Do not clobber an explicit status filter the caller already supplied.
+        if "status" not in query:
+            query["status"] = {"$ne": "expired"}
     
     # Tags filter
     if tags:
@@ -92,7 +119,19 @@ async def list_contracts(
     sort_direction = -1 if sort_order == "desc" else 1
     sort_field = sort_by if sort_by in ["createdAt", "title", "expiryDate", "riskLevel"] else "createdAt"
     
-    contracts = await db.contracts.find(query, {"_id": 0, "originalText": 0}).sort(sort_field, sort_direction).to_list(1000)
+    total = await db.contracts.count_documents(query)
+
+    contracts = (
+        await db.contracts.find(query, {"_id": 0, "originalText": 0})
+        .sort(sort_field, sort_direction)
+        .skip(offset)
+        .limit(limit)
+        .to_list(limit)
+    )
+
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Page-Limit"] = str(limit)
+    response.headers["X-Page-Offset"] = str(offset)
     
     # Batch fetch uploader emails to avoid N+1 queries
     uploader_ids = list(set(c.get("uploadedBy") for c in contracts if c.get("uploadedBy")))
@@ -524,12 +563,7 @@ async def chat_with_contract(
 @router.patch("/{contract_id}")
 async def update_contract(
     contract_id: str,
-    title: Optional[str] = None,
-    counterparty: Optional[str] = None,
-    contractType: Optional[str] = None,
-    contract_status: Optional[str] = None,
-    tags: Optional[List[str]] = None,
-    changeReason: Optional[str] = None,
+    payload: ContractUpdate,
     current_user: dict = Depends(get_current_user)
 ):
     """Update a contract's metadata and create a version history entry."""
@@ -542,6 +576,35 @@ async def update_contract(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Contract not found"
+        )
+
+    # RBAC: viewers are read-only; a non-admin/manager may only edit contracts
+    # they uploaded themselves. Roles resolve through the shared registry
+    # (utils.rbac) so a newly added role cannot silently inherit write access.
+    if current_user["role"] not in WRITE_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Viewers cannot modify contracts"
+        )
+    if current_user["role"] not in (ROLE_ADMIN, ROLE_MANAGER) and contract["uploadedBy"] != current_user["sub"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins, managers, or the uploader can modify this contract"
+        )
+
+    title = payload.title
+    counterparty = payload.counterparty
+    contractType = payload.contractType
+    contract_status = payload.status
+    tags = payload.tags
+    changeReason = payload.changeReason
+
+    if contract_status is not None and contract_status not in (
+        "draft", "review", "approved", "active", "expired"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid status value"
         )
     
     # Get current version number
@@ -695,6 +758,20 @@ async def restore_contract_version(
             detail="Version not found"
         )
     
+    # Restoring a version mutates the contract, so it requires the same write
+    # authorisation as PATCH. Previously any authenticated member -- including a
+    # read-only viewer -- could roll a contract back.
+    if current_user["role"] not in WRITE_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Viewers cannot modify contracts"
+        )
+    if current_user["role"] not in (ROLE_ADMIN, ROLE_MANAGER) and contract.get("uploadedBy") != current_user["sub"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins, managers, or the uploader can restore this contract"
+        )
+
     # Create a new version entry for the current state before restoring
     latest_version = await db.contract_versions.find_one(
         {"contractId": contract_id},
@@ -758,7 +835,7 @@ async def delete_contract(
             detail="Contract not found"
         )
     
-    if current_user["role"] not in ("admin", "manager") and contract["uploadedBy"] != current_user["sub"]:
+    if current_user["role"] not in (ROLE_ADMIN, ROLE_MANAGER) and contract["uploadedBy"] != current_user["sub"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins or the uploader can delete this contract"
