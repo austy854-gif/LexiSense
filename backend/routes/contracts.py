@@ -12,6 +12,14 @@ from services.ai_service import analyze_contract, get_chat_response
 from services.storage_service import upload_file_to_s3, delete_file_from_s3
 from services.pdf_service import extract_text_from_file
 from services.audit_service import log_action
+from services.workflow_service import (
+    PRIVILEGED_TRANSITION_ROLES,
+    TRANSITION_ROLES,
+    VALID_STATUSES,
+    record_transition_audit,
+    status_update_fields,
+    validate_transition,
+)
 from routes.billing import (
     reserve_trial_upload_atomic,
     release_trial_upload,
@@ -570,14 +578,37 @@ async def update_contract(
     tags = payload.tags
     changeReason = payload.changeReason
 
-    if contract_status is not None and contract_status not in (
-        "draft", "review", "approved", "active", "expired"
-    ):
+    if contract_status is not None and contract_status not in VALID_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid status value"
         )
-    
+
+    # A status change is a workflow transition, not a free-form field edit: it
+    # must pass the state machine (allowed transition + role gate) and is
+    # recorded in workflowHistory + the audit log. Without this, PATCH was a
+    # side door around the workflow endpoints (e.g. draft -> approved).
+    current_status = contract.get("status", "draft")
+    status_changed = contract_status is not None and contract_status != current_status
+    if status_changed:
+        if current_user["role"] not in TRANSITION_ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Role '{current_user['role']}' cannot change contract status",
+            )
+        if (
+            contract_status in ("approved", "active")
+            and current_user["role"] not in PRIVILEGED_TRANSITION_ROLES
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Role '{current_user['role']}' cannot move a contract "
+                    f"to '{contract_status}'"
+                ),
+            )
+        validate_transition(current_status, contract_status)
+
     # Get current version number
     latest_version = await db.contract_versions.find_one(
         {"contractId": contract_id},
@@ -613,16 +644,36 @@ async def update_contract(
         update_data["counterparty"] = counterparty
     if contractType is not None:
         update_data["contractType"] = contractType
-    if contract_status is not None:
-        update_data["status"] = contract_status
     if tags is not None:
         update_data["tags"] = tags
-    
+
+    update = {"$set": update_data}
+    if status_changed:
+        transition = status_update_fields(
+            current_status,
+            contract_status,
+            current_user,
+            action="status_change",
+            comment=changeReason,
+        )
+        update["$set"].update(transition["$set"])
+        update["$push"] = transition["$push"]
+
     await db.contracts.update_one(
         {"id": contract_id},
-        {"$set": update_data}
+        update
     )
-    
+
+    if status_changed:
+        await record_transition_audit(
+            contract,
+            current_status,
+            contract_status,
+            current_user,
+            action="status_change",
+            comment=changeReason,
+        )
+
     return {"message": "Contract updated successfully", "version": new_version}
 
 
@@ -707,7 +758,13 @@ async def restore_contract_version(
     version_num: int,
     current_user: dict = Depends(get_current_user)
 ):
-    """Restore a contract to a previous version."""
+    """Restore a contract to a previous version.
+
+    Restoring mutates the contract, so it is gated exactly like PATCH: the
+    actor must be a writer (not a viewer) and either an admin/manager or the
+    uploader. The restored status is a workflow transition, so it is validated
+    against the state machine and recorded in workflowHistory + the audit log.
+    """
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]}
     )
@@ -728,6 +785,29 @@ async def restore_contract_version(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Version not found"
         )
+
+    # RBAC: restoring is a write. Viewers are read-only; a non-admin/manager may
+    # only restore their own uploads. Existence is checked first so a 404 is
+    # never leaked as a 403.
+    if current_user["role"] not in TRANSITION_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Viewers cannot modify contracts"
+        )
+    if (
+        current_user["role"] not in PRIVILEGED_TRANSITION_ROLES
+        and contract.get("uploadedBy") != current_user["sub"]
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins, managers, or the uploader can restore this contract"
+        )
+
+    # The restored status is a workflow transition: validate it against the
+    # state machine so a restore cannot bypass the workflow (e.g. draft->approved).
+    current_status = contract.get("status", "draft")
+    restored_status = version.get("status", current_status)
+    validate_transition(current_status, restored_status)
     
     # Create a new version entry for the current state before restoring
     latest_version = await db.contract_versions.find_one(
@@ -756,22 +836,42 @@ async def restore_contract_version(
     await db.contract_versions.insert_one(current_version.model_dump())
     
     # Restore the contract to the selected version
-    await db.contracts.update_one(
-        {"id": contract_id},
-        {"$set": {
-            "title": version["title"],
-            "counterparty": version.get("counterparty"),
-            "contractType": version["contractType"],
-            "status": version["status"],
-            "value": version.get("value"),
-            "effectiveDate": version.get("effectiveDate"),
-            "expiryDate": version.get("expiryDate"),
-            "riskLevel": version.get("riskLevel"),
-            "originalText": version.get("originalText"),
-            "aiAnalysis": version.get("aiAnalysis"),
-            "updatedAt": datetime.now(timezone.utc).isoformat()
-        }}
-    )
+    update = {"$set": {
+        "title": version["title"],
+        "counterparty": version.get("counterparty"),
+        "contractType": version["contractType"],
+        "value": version.get("value"),
+        "effectiveDate": version.get("effectiveDate"),
+        "expiryDate": version.get("expiryDate"),
+        "riskLevel": version.get("riskLevel"),
+        "originalText": version.get("originalText"),
+        "aiAnalysis": version.get("aiAnalysis"),
+        "updatedAt": datetime.now(timezone.utc).isoformat()
+    }}
+    if restored_status != current_status:
+        transition = status_update_fields(
+            current_status,
+            restored_status,
+            current_user,
+            action="restore",
+            comment=f"Restored to version {version_num}",
+        )
+        update["$set"].update(transition["$set"])
+        update["$push"] = transition["$push"]
+    else:
+        update["$set"]["status"] = restored_status
+
+    await db.contracts.update_one({"id": contract_id}, update)
+
+    if restored_status != current_status:
+        await record_transition_audit(
+            contract,
+            current_status,
+            restored_status,
+            current_user,
+            action="restore",
+            comment=f"Restored to version {version_num}",
+        )
     
     return {"message": f"Contract restored to version {version_num}", "newVersion": new_version}
 
