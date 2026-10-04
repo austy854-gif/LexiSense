@@ -60,6 +60,10 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # CRA inlines REACT_APP_BACKEND_URL at build time (see frontend/Dockerfile),
+        # so it must be passed as a build arg here, not merely as a runtime env.
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-http://localhost:8000}
     container_name: lexisense-frontend-prod
     restart: unless-stopped
     ports:

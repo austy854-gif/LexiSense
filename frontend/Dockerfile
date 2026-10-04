@@ -3,6 +3,14 @@ FROM node:18-alpine as builder
 
 WORKDIR /app
 
+# Create React App inlines REACT_APP_* variables at BUILD time, so the backend
+# URL must be present during this build. Supply it with
+#   docker build --build-arg REACT_APP_BACKEND_URL=https://api.example.com .
+# (see the `build.args` block in docker-compose*.yml). A value provided only at
+# container runtime is ignored by the compiled bundle (PR #1 blocker 3).
+ARG REACT_APP_BACKEND_URL
+ENV REACT_APP_BACKEND_URL=$REACT_APP_BACKEND_URL
+
 # Copy package files
 COPY package.json yarn.lock ./
 

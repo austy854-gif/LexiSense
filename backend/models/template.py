@@ -8,7 +8,11 @@ class ContractTemplate(BaseModel):
     model_config = ConfigDict(extra="ignore")
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    organizationId: str
+    # Default templates are shared, "system"-owned rows, so the seeder builds
+    # them from DEFAULT_TEMPLATES without an explicit owner. These fields were
+    # required, which made backend/seed_database.py raise a pydantic
+    # ValidationError on every run (PR #1 blocker 1).
+    organizationId: str = Field(default="system")
     name: str
     description: Optional[str] = None
     contractType: str = "General"
@@ -16,7 +20,7 @@ class ContractTemplate(BaseModel):
     fields: List[Dict[str, Any]] = Field(default_factory=list)  # Customizable fields
     tags: List[str] = Field(default_factory=list)
     isPublic: bool = False  # Shared across organizations
-    createdBy: str
+    createdBy: str = Field(default="system")
     createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 

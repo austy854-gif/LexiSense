@@ -120,6 +120,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # CRA inlines REACT_APP_BACKEND_URL at build time (see frontend/Dockerfile).
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-http://localhost:8000}
     container_name: lexisense-frontend
     ports:
       - "3000:3000"

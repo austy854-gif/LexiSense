@@ -93,6 +93,13 @@ jobs:
         run: |
           source venv/bin/activate
           pytest tests/ -v --tb=short --junitxml=test-results.xml
+      - name: Run seed harness (template ownership regression)
+        # PR #1 blocker 1: guards ContractTemplate's required organizationId /
+        # createdBy and the isDefault seed guard. Runs the real seed coroutine
+        # against the Mongo service above.
+        run: |
+          source venv/bin/activate
+          python scripts/seed_harness.py
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -117,7 +124,9 @@ jobs:
       - name: Lint with ESLint
         run: yarn run lint 2>/dev/null || npx eslint src --ext .js,.jsx
       - name: Build
-        run: yarn build
+        # CRA inlines REACT_APP_* at build time; export it so any container
+        # build in this step also receives it (PR #1 blocker 3).
+        run: export REACT_APP_BACKEND_URL="$REACT_APP_BACKEND_URL" && yarn build
         env:
           REACT_APP_BACKEND_URL: http://localhost:8000
       - name: Upload build artifacts
