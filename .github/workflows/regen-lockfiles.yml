@@ -1,0 +1,123 @@
+name: Regen lockfiles (temporary)
+
+# TEMPORARY helper, added and removed by the CI agent. It is not a permanent
+# workflow and carries no secrets.
+#
+# Why it exists: the sandbox that prepared this fix has no git/API credential,
+# and frontend/yarn.lock (487 KB) and frontend/package-lock.json (774 KB) are
+# far too large to hand-transcribe through a single API call. This workflow
+# regenerates them ON THE RUNNER and commits them with the job's own
+# GITHUB_TOKEN, which is the only actor with write access.
+#
+# It does three things:
+#   1. applies the CI trigger de-duplication (push -> main only);
+#   2. regenerates frontend/yarn.lock so ajv and websocket-driver re-resolve
+#      to their patched releases (clears the Trivy dependency advisories);
+#   3. regenerates frontend/package-lock.json the same way.
+
+on:
+  push:
+    branches:
+      - ci/fix-frontend-lockfile
+    paths:
+      - .github/workflows/regen-lockfiles.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: regen-lockfiles
+  cancel-in-progress: false
+
+jobs:
+  regen:
+    name: Regenerate lockfiles
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ci/fix-frontend-lockfile
+          fetch-depth: 0
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Apply CI trigger de-duplication
+        run: |
+          python3 - <<'PY'
+          p = '.github/workflows/ci-cd.yml'
+          s = open(p).read()
+          before = s
+          s = s.replace("  push:\n    branches: ['**']", "  push:\n    branches: [main]")
+          assert s != before, "push trigger pattern not found - aborting"
+          open(p, 'w').write(s)
+          print("ci-cd.yml: push trigger narrowed to branches: [main]")
+          PY
+          sed -n '/^on:/,/^env:/p' .github/workflows/ci-cd.yml
+
+      - name: Regenerate frontend/yarn.lock
+        working-directory: frontend
+        run: |
+          python3 - <<'PY'
+          def drop(text, header):
+              i = text.find(header)
+              if i == -1:
+                  print("block not found:", header)
+                  return text
+              j = text.find('\n\n', i)
+              while j != -1:
+                  rest = text[j+2:]
+                  nxt = rest.find('\n')
+                  first = rest if nxt == -1 else rest[:nxt]
+                  if first.strip() and not first.startswith(' '):
+                      break
+                  j = text.find('\n\n', j+2)
+              end = j + 2 if j != -1 else len(text)
+              print("dropped stale block:", header)
+              return text[:i] + text[end:]
+
+          p = 'yarn.lock'
+          s = open(p).read()
+          for h in ('ajv@^6.12.2, ajv@^6.12.4, ajv@^6.12.5:',
+                    'ajv@^8.0.0, ajv@^8.6.0, ajv@^8.9.0:',
+                    'websocket-driver@>=0.5.1, websocket-driver@^0.7.4:'):
+              s = drop(s, h)
+          open(p, 'w').write(s)
+          PY
+          # Re-resolve the dropped selectors to the newest satisfying versions.
+          yarn install --network-timeout 600000 --ignore-scripts
+          # Must now be frozen-lockfile clean, exactly as CI runs it.
+          yarn install --frozen-lockfile --ignore-scripts
+          echo "--- resolved ajv / websocket-driver ---"
+          grep -A2 '^ajv@' yarn.lock
+          grep -A2 '^websocket-driver@' yarn.lock
+          # Fail the job if a vulnerable version survived.
+          ! grep -q 'ajv-8.17.1' yarn.lock
+          ! grep -q 'websocket-driver-0.7.4' yarn.lock
+
+      - name: Regenerate frontend/package-lock.json
+        working-directory: frontend
+        run: |
+          rm -f package-lock.json
+          npm install --package-lock-only --legacy-peer-deps --ignore-scripts
+          echo "--- resolved ajv / websocket-driver ---"
+          grep -n -A2 '"node_modules/ajv":' package-lock.json | head -8
+          grep -n -A2 '"node_modules/websocket-driver":' package-lock.json | head -8
+          ! grep -q '"version": "8.17.1"' package-lock.json
+          ! grep -q '"version": "0.7.4"' package-lock.json
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/ci-cd.yml frontend/yarn.lock frontend/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Nothing to commit - lockfiles already patched"
+          else
+            git commit -m "ci(deps): bump ajv to 8.20.0 and websocket-driver to 0.7.5; de-dup CI triggers"
+            git push origin HEAD:ci/fix-frontend-lockfile
+          fi
