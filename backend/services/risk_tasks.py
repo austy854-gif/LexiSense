@@ -22,7 +22,7 @@ def set_database(database):
 
 
 def get_db():
-    """Get the database reference."""
+    """Get the database reference for tasks."""
     return _db
 
 
@@ -352,7 +352,7 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
             breakdown=breakdown,
             factors=factors,
             top_risks=top_risks,
-            mitigation_priorities=unique_mitigations,
+            mitigation_priorities=mitigations,
             previous_score=previous_score,
             score_trend=trend,
             confidence=0.85 if factors_data else 0.5,
