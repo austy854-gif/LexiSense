@@ -1,6 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Layout } from '../components/Layout';
 import { auditAPI } from '../api';
+import { useAuth } from '../contexts/AuthContext';
+import { canReadAudit, getErrorInfo } from '../lib/apiHelpers.mjs';
+import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Skeleton } from '../components/ui/skeleton';
@@ -52,29 +55,60 @@ const RESOURCE_ICONS = {
   settings: Shield,
 };
 
+// The backend bounds `limit` to 500; page through it in 100-row windows.
+const PAGE_SIZE = 100;
+const MAX_LIMIT = 500;
+
 export default function AuditLogPage() {
+  const { user } = useAuth();
+  const canRead = canReadAudit(user?.role);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [limit, setLimit] = useState(PAGE_SIZE);
   const [resourceFilter, setResourceFilter] = useState('');
 
-  useEffect(() => {
-    fetchLogs();
-  }, [resourceFilter]);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
+    if (!canRead) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
-      const params = { limit: 100 };
+      const params = { limit };
       if (resourceFilter && resourceFilter !== 'all') {
         params.resource_type = resourceFilter;
       }
       const response = await auditAPI.list(params);
       setLogs(response.data);
     } catch (error) {
-      toast.error('Failed to load audit logs');
+      toast.error(getErrorInfo(error).message || 'Failed to load audit logs');
     } finally {
       setLoading(false);
     }
-  };
+  }, [resourceFilter, limit, canRead]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
+
+  const handleLoadMore = () => setLimit((l) => Math.min(l + PAGE_SIZE, MAX_LIMIT));
+
+  // Audit data is organisation-sensitive: the backend returns 403 for
+  // non-admin/manager callers, so gate the UI on the same registry rather than
+  // firing a request that is guaranteed to fail.
+  if (!canRead) {
+    return (
+      <Layout>
+        <div className="text-center py-16" data-testid="audit-page">
+          <Shield className="h-16 w-16 text-muted-foreground/30 mx-auto mb-4" />
+          <h3 className="text-lg font-medium">Audit log access required</h3>
+          <p className="text-muted-foreground mt-1">
+            Only admins and managers can view the organization audit log.
+          </p>
+        </div>
+      </Layout>
+    );
+  }
 
   const formatTime = (dateStr) => {
     const d = new Date(dateStr);
@@ -183,6 +217,13 @@ export default function AuditLogPage() {
                     })}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+            {!loading && logs.length >= limit && limit < MAX_LIMIT && (
+              <div className="flex justify-center p-4 border-t border-border">
+                <Button variant="outline" size="sm" onClick={handleLoadMore} data-testid="audit-load-more">
+                  Load more
+                </Button>
               </div>
             )}
           </CardContent>

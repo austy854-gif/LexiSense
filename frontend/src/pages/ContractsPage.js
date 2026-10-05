@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, exportAPI } from '../api';
+import { useAuth } from '../contexts/AuthContext';
+import { usePagination } from '../hooks/usePagination';
+import { PaginationBar } from '../components/PaginationBar';
+import { canWriteContracts, getErrorInfo, parseTotalCount } from '../lib/apiHelpers.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -98,6 +102,8 @@ const CONTRACT_TYPES = [
 ];
 
 export default function ContractsPage() {
+  const { user } = useAuth();
+  const canWrite = canWriteContracts(user?.role);
   const [contracts, setContracts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -112,6 +118,9 @@ export default function ContractsPage() {
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkFiles, setBulkFiles] = useState([]);
   const [bulkContractType, setBulkContractType] = useState('General');
+  const {
+    page, pageSize, total, totalPages, offset, setTotal, goToPage, setPageSize, reset,
+  } = usePagination({ pageSize: 25 });
   const [uploadData, setUploadData] = useState({
     title: '',
     counterparty: '',
@@ -120,26 +129,36 @@ export default function ContractsPage() {
   });
 
   const fetchContracts = useCallback(async () => {
+    setLoading(true);
     try {
-      const params = {};
+      const params = { limit: pageSize, offset };
       if (searchQuery) params.search = searchQuery;
       if (statusFilter && statusFilter !== 'all') params.status_filter = statusFilter;
       if (typeFilter && typeFilter !== 'all') params.contract_type = typeFilter;
       if (riskFilter && riskFilter !== 'all') params.risk_level = riskFilter;
       if (expiringFilter && expiringFilter !== 'all') params.expiring_within = parseInt(expiringFilter);
-      
+
       const response = await contractsAPI.list(params);
       setContracts(response.data);
+      // The backend reports the full match count in X-Total-Count so the
+      // pagination controls never have to guess from a truncated page.
+      setTotal(parseTotalCount(response.headers) ?? response.data.length);
     } catch (error) {
-      toast.error('Failed to load contracts');
+      toast.error(getErrorInfo(error).message || 'Failed to load contracts');
     } finally {
       setLoading(false);
     }
-  }, [searchQuery, statusFilter, typeFilter, riskFilter, expiringFilter]);
+  }, [searchQuery, statusFilter, typeFilter, riskFilter, expiringFilter, pageSize, offset, setTotal]);
 
   useEffect(() => {
     fetchContracts();
   }, [fetchContracts]);
+
+  // Any filter change invalidates the current page: go back to page 1 so the
+  // user is never stranded on an out-of-range page after narrowing results.
+  useEffect(() => {
+    reset();
+  }, [searchQuery, statusFilter, typeFilter, riskFilter, expiringFilter, reset]);
 
   const handleUpload = async (e) => {
     e.preventDefault();
@@ -162,7 +181,7 @@ export default function ContractsPage() {
       setUploadData({ title: '', counterparty: '', contractType: 'General', file: null });
       fetchContracts();
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Upload failed');
+      toast.error(getErrorInfo(error).message || 'Upload failed');
     } finally {
       setUploading(false);
     }
@@ -176,7 +195,7 @@ export default function ContractsPage() {
       toast.success('Contract deleted');
       fetchContracts();
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Delete failed');
+      toast.error(getErrorInfo(error).message || 'Delete failed');
     }
   };
 
@@ -251,6 +270,7 @@ export default function ContractsPage() {
             <h1 className="text-3xl font-bold">Contracts</h1>
             <p className="text-muted-foreground mt-1">Manage and analyze your contracts</p>
           </div>
+          {canWrite && (
           <div className="flex gap-2">
             {/* Bulk Upload */}
             <Dialog open={bulkUploadOpen} onOpenChange={setBulkUploadOpen}>
@@ -440,6 +460,7 @@ export default function ContractsPage() {
             </DialogContent>
           </Dialog>
           </div>
+          )}
         </div>
 
         {/* Filters */}
@@ -548,7 +569,7 @@ export default function ContractsPage() {
                     ? 'Try adjusting your filters'
                     : 'Upload your first contract to get started'}
                 </p>
-                {!searchQuery && !statusFilter && !typeFilter && (
+                {canWrite && !searchQuery && !statusFilter && !typeFilter && (
                   <Button className="mt-4" onClick={() => setUploadOpen(true)}>
                     <Upload className="mr-2 h-4 w-4" />
                     Upload Contract
@@ -610,6 +631,7 @@ export default function ContractsPage() {
                           >
                             <Download className="h-4 w-4" />
                           </Button>
+                          {canWrite && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -618,6 +640,7 @@ export default function ContractsPage() {
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -626,6 +649,16 @@ export default function ContractsPage() {
               </Table>
             )}
           </CardContent>
+          <PaginationBar
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            pageSize={pageSize}
+            onPageChange={goToPage}
+            onPageSizeChange={setPageSize}
+            loading={loading}
+            itemLabel="contracts"
+          />
         </Card>
       </div>
     </Layout>

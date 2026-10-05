@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { notificationsAPI } from '../api';
+import { hasRole, AUDIT_READER_ROLES, ADMIN_ROLES } from '../lib/apiHelpers.mjs';
 import {
   LayoutDashboard,
   FileText,
@@ -40,8 +41,8 @@ const navItems = [
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
   { path: '/alerts', label: 'Alerts', icon: Bell },
   { path: '/team', label: 'Team', icon: Users },
-  { path: '/audit', label: 'Audit Log', icon: ScrollText },
-  { path: '/billing', label: 'Billing', icon: CreditCard, roles: ['admin'] },
+  { path: '/audit', label: 'Audit Log', icon: ScrollText, roles: AUDIT_READER_ROLES },
+  { path: '/billing', label: 'Billing', icon: CreditCard, roles: ADMIN_ROLES },
 ];
 
 export function Layout({ children }) {
@@ -155,7 +156,7 @@ export function Layout({ children }) {
           {/* Navigation */}
           <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
             {navItems
-              .filter((item) => !item.roles || (user?.role && item.roles.includes(user.role)))
+              .filter((item) => !item.roles || hasRole(user?.role, item.roles))
               .map((item) => {
                 const Icon = item.icon;
                 const isActive = location.pathname === item.path;
