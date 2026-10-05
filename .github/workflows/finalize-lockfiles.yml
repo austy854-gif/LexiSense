@@ -1,0 +1,62 @@
+name: Finalize lockfiles (temporary)
+
+# TEMPORARY helper. Rewrites frontend/package-lock.json as (main's file + a
+# 4-package version bump), so the diff stays tiny and GitHub does not treat
+# the whole 774 KB file as replaced - which is what made the Trivy check report
+# 162 pre-existing advisories as "new in this PR". Also drops the now-unneeded
+# yarn `resolutions` from frontend/package.json. Removed in a following commit.
+on:
+  push:
+    branches: [ci/fix-frontend-lockfile]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-lockfiles
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rewrite package-lock.json minimally
+        run: |
+          git fetch --depth=1 origin main
+          git checkout origin/main -- frontend/package.json
+          git show origin/main:frontend/package-lock.json > frontend/package-lock.json
+          python3 - <<'PY'
+          import json
+          p = 'frontend/package-lock.json'
+          s = open(p).read()
+          def rep(o, n):
+              global s
+              c = s.count(o)
+              assert c, 'not found: ' + o[:40]
+              s = s.replace(o, n)
+              print(c, 'x', o[:40])
+          rep('"version": "8.17.1"', '"version": "8.20.0"')
+          rep('"resolved": "https://registry.npmjs.org/ajv/-/ajv-8.17.1.tgz"', '"resolved": "https://registry.npmjs.org/ajv/-/ajv-8.20.0.tgz"')
+          rep('sha512-B/gBuNg5SiMTrPkC+A2+cW0RszwxYmn6VYxB/inlBStS5nx6xHIt/ehKRhIMhqusl7a8LjQoZnjCs5vhwxOQ1g==', 'sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==')
+          rep('"version": "0.7.4"', '"version": "0.7.5"')
+          rep('"resolved": "https://registry.npmjs.org/websocket-driver/-/websocket-driver-0.7.4.tgz"', '"resolved": "https://registry.npmjs.org/websocket-driver/-/websocket-driver-0.7.5.tgz"')
+          rep('sha512-b17KeDIQVjvb0ssuSDF2cYXSg2iztliJ4B9WdsuB6J952qCPKmnVq4DyW5motImXHDC1cBT/1UezrJVsKw5zjg==', 'sha512-ZL2+3c7kMBdIRCMz6l8jQMHyGVxj+UL+xVk74Ombiciboca8rHa15L86B19E5oh1pL9Ii/uj54gtsIrZGMo6zA==')
+          json.loads(s)
+          open(p, 'w').write(s)
+          print('minimal package-lock written')
+          PY
+          echo "--- diff lines vs main ---"
+          diff <(git show origin/main:frontend/package-lock.json) frontend/package-lock.json | wc -l
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "ci(deps): minimal package-lock bump (ajv 8.20.0, websocket-driver 0.7.5)"
+            git push origin HEAD:ci/fix-frontend-lockfile
+          fi
