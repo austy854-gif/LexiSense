@@ -1,5 +1,6 @@
 import os
 import uuid
+import asyncio
 import logging
 from typing import Optional
 import boto3
@@ -43,11 +44,14 @@ async def upload_file_to_s3(
         return storage_key
 
     try:
-        s3_client.put_object(
+        # boto3 is synchronous; run it in a worker thread so the event loop
+        # (and every other in-flight request) is not blocked during upload.
+        await asyncio.to_thread(
+            s3_client.put_object,
             Bucket=S3_BUCKET_NAME,
             Key=storage_key,
             Body=file_content,
-            ContentType=content_type
+            ContentType=content_type,
         )
         logger.info(f"Uploaded file to S3: {storage_key}")
         return storage_key
@@ -64,10 +68,11 @@ async def generate_presigned_url(storage_key: str, expiration: int = 3600) -> Op
         return None
 
     try:
-        url = s3_client.generate_presigned_url(
+        url = await asyncio.to_thread(
+            s3_client.generate_presigned_url,
             'get_object',
             Params={'Bucket': S3_BUCKET_NAME, 'Key': storage_key},
-            ExpiresIn=expiration
+            ExpiresIn=expiration,
         )
         return url
     except ClientError as e:
@@ -83,7 +88,7 @@ async def delete_file_from_s3(storage_key: str) -> bool:
         return True
 
     try:
-        s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=storage_key)
+        await asyncio.to_thread(s3_client.delete_object, Bucket=S3_BUCKET_NAME, Key=storage_key)
         logger.info(f"Deleted file from S3: {storage_key}")
         return True
     except ClientError as e:
@@ -98,18 +103,19 @@ async def ensure_bucket_exists():
         return False
 
     try:
-        s3_client.head_bucket(Bucket=S3_BUCKET_NAME)
+        await asyncio.to_thread(s3_client.head_bucket, Bucket=S3_BUCKET_NAME)
         return True
     except ClientError as e:
         error_code = e.response.get('Error', {}).get('Code')
         if error_code == '404':
             try:
                 if AWS_REGION == 'us-east-1':
-                    s3_client.create_bucket(Bucket=S3_BUCKET_NAME)
+                    await asyncio.to_thread(s3_client.create_bucket, Bucket=S3_BUCKET_NAME)
                 else:
-                    s3_client.create_bucket(
+                    await asyncio.to_thread(
+                        s3_client.create_bucket,
                         Bucket=S3_BUCKET_NAME,
-                        CreateBucketConfiguration={'LocationConstraint': AWS_REGION}
+                        CreateBucketConfiguration={'LocationConstraint': AWS_REGION},
                     )
                 logger.info(f"Created S3 bucket: {S3_BUCKET_NAME}")
                 return True

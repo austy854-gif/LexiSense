@@ -32,7 +32,11 @@ async def export_contract_pdf(
     
     pdf_bytes = generate_contract_pdf(contract)
     
-    filename = f"{contract.get('title', 'contract').replace(' ', '_')}_report.pdf"
+    # Sanitize the title before it reaches the Content-Disposition header
+    # (prevents header injection / broken downloads from odd characters).
+    import re
+    safe_title = re.sub(r"[^A-Za-z0-9._-]+", "_", contract.get("title") or "contract").strip("_") or "contract"
+    filename = f"{safe_title}_report.pdf"
     
     return Response(
         content=pdf_bytes,
@@ -55,12 +59,14 @@ async def export_analytics_pdf(
     active_contracts = await db.contracts.count_documents({"organizationId": org_id, "status": "active"})
     
     from datetime import datetime, timezone, timedelta
-    thirty_days_later = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-    today = datetime.now(timezone.utc).isoformat()
-    
+    # expiryDate is a date-only string; a full ISO timestamp excluded today's expiries.
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    thirty_days_later = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
+
     expiring_soon = await db.contracts.count_documents({
         "organizationId": org_id,
-        "expiryDate": {"$gte": today, "$lte": thirty_days_later}
+        "expiryDate": {"$gte": today, "$lte": thirty_days_later},
+        "status": {"$ne": "expired"},
     })
     
     high_risk = await db.contracts.count_documents({"organizationId": org_id, "riskLevel": "high"})

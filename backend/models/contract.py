@@ -72,6 +72,20 @@ class ContractResponse(BaseModel):
     uploaderEmail: Optional[str] = None
 
 
+class ContractUpdate(BaseModel):
+    """Body model for PATCH /contracts/{id}.
+
+    Using a body model (instead of bare query parameters) keeps the update
+    payload out of URLs/logs and gives FastAPI a single validated schema.
+    """
+    title: Optional[str] = None
+    counterparty: Optional[str] = None
+    contractType: Optional[str] = None
+    status: Optional[str] = None
+    tags: Optional[List[str]] = None
+    changeReason: Optional[str] = None
+
+
 class ChatMessage(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
 

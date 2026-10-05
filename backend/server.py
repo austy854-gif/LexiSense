@@ -185,10 +185,16 @@ async def health_check():
 # Include the router in the main app
 app.include_router(api_router)
 
+# Parse CORS origins defensively: an unset/empty CORS_ORIGINS previously
+# produced [''] (a bogus origin) instead of an empty allow-list.
+cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+if not cors_origins:
+    logger.warning("CORS_ORIGINS is empty - no cross-origin requests will be allowed")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '').split(','),
+    allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

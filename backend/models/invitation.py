@@ -24,6 +24,18 @@ class Invitation(BaseModel):
     createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class AcceptInvitationRequest(BaseModel):
+    """Body model for POST /team/accept-invite.
+
+    Previously the password was passed as a query parameter, which leaks it
+    into access logs, browser history and proxy logs.
+    """
+    token: str
+    password: str = Field(min_length=8)
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+
+
 class InvitationResponse(BaseModel):
     id: str
     email: str
