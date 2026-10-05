@@ -5,12 +5,22 @@ These tests exercise the FastAPI routers **in-process** (via
 ``mongomock-motor``.  No live server, no real database and no network access
 are required, so the suite runs in CI out of the box.
 
-The fixtures here back the regression tests for two security fixes:
+The fixtures here back the regression tests for three security fixes:
 
 * ``PATCH /api/v1/contracts/{id}`` -- role-based access control plus a
   validated JSON body model (``ContractUpdate``).
 * ``POST /api/v1/team/accept-invite`` -- the password moved from a query
   parameter to a validated JSON body (``AcceptInvitationRequest``).
+* ``utils.auth.get_current_user`` -- identity/role are re-read from the
+  database on every request instead of being trusted from the token body.
+
+The third item needs an extra switch. ``utils.auth`` keeps the identity store
+in a module global that is only wired by ``routes.auth.init_db`` -- which a
+narrow test app mounting a single router never calls. As long as the store is
+unwired, ``get_current_user`` degrades to token-only verification, so
+DB-authoritative behaviour is invisible to the suite. Tests that exercise it
+request the ``db_authoritative_auth`` fixture, which wires the store through
+``monkeypatch`` and therefore cannot leak into the other test modules.
 """
 import os
 import sys
@@ -42,6 +52,7 @@ from models.invitation import Invitation  # noqa: E402
 from routes import contracts as contracts_route  # noqa: E402
 from routes import team as team_route  # noqa: E402
 from services import audit_service, email_service  # noqa: E402
+from utils import rbac as rbac_module  # noqa: E402
 from utils.auth import create_access_token, hash_password  # noqa: E402
 
 API_PREFIX = "/api/v1"
@@ -61,6 +72,24 @@ def _build_app() -> FastAPI:
     api_router.include_router(team_route.router)
     app.include_router(api_router)
     return app
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiters():
+    """Reset the process-global rate limiters around every test.
+
+    The limiters are module-level singletons keyed by client identity, and the
+    in-process test client always presents the same client host. Without a
+    reset, earlier tests in a module would consume the budget and later ones
+    would (correctly) receive 429 -- a real cross-test coupling that has nothing
+    to do with the behaviour under test. Dedicated rate-limit tests drive the
+    limiter directly instead.
+    """
+    rbac_module.AUTH_RATE_LIMITER.reset()
+    rbac_module.INVITE_RATE_LIMITER.reset()
+    yield
+    rbac_module.AUTH_RATE_LIMITER.reset()
+    rbac_module.INVITE_RATE_LIMITER.reset()
 
 
 @pytest.fixture
@@ -97,6 +126,22 @@ async def client(app):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as http_client:
         yield http_client
+
+
+@pytest.fixture
+def db_authoritative_auth(db, monkeypatch):
+    """Make ``utils.auth`` resolve identity/role from the in-memory database.
+
+    This mirrors exactly what ``routes.auth.init_db`` does in production
+    (``init_identity_store(database)`` binds ``database.users``). It is applied
+    via ``monkeypatch`` so the module global is restored after the test -- a
+    plain call would leak the wiring into later modules and break the existing
+    token-only tests, which never seed a ``users`` collection.
+    """
+    from utils import auth as auth_module
+
+    monkeypatch.setattr(auth_module, "_users_collection", db.users)
+    return db.users
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +222,17 @@ def auth_headers(user):
 def iso_in(days):
     """An ISO-8601 UTC timestamp ``days`` from now (negative = in the past)."""
     return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+
+
+async def seed_users(db, *users):
+    """Insert user documents into the in-memory database.
+
+    The role fixtures only build detached dictionaries. The DB-authoritative
+    auth tests need the documents to exist, because ``get_current_user``
+    re-reads the account on every request.
+    """
+    for user in users:
+        await db.users.insert_one(dict(user))
 
 
 # ---------------------------------------------------------------------------

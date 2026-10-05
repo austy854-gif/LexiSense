@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, versionsAPI, workflowAPI } from '../api';
+import { useAuth } from '../contexts/AuthContext';
+import { canWriteContracts, getErrorInfo } from '../lib/apiHelpers.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -74,6 +76,8 @@ const StatusBadge = ({ status }) => {
 export default function ContractDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canWrite = canWriteContracts(user?.role);
   const [contract, setContract] = useState(null);
   const [loading, setLoading] = useState(true);
   const [chatMessages, setChatMessages] = useState([]);
@@ -137,7 +141,7 @@ export default function ContractDetailPage() {
       fetchContract();
       fetchWorkflow();
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Workflow action failed');
+      toast.error(getErrorInfo(error).message || 'Workflow action failed');
     } finally {
       setWorkflowLoading(false);
     }
@@ -155,7 +159,14 @@ export default function ContractDetailPage() {
       fetchContract();
       fetchVersions();
     } catch (error) {
-      toast.error('Failed to restore version');
+      const info = getErrorInfo(error);
+      // Restore is authorised server-side (uploader/manager/admin only); a
+      // viewer or non-uploader gets a 403 and must be told why.
+      toast.error(
+        info.status === 403
+          ? 'You do not have permission to restore this contract version.'
+          : info.message || 'Failed to restore version'
+      );
     } finally {
       setRestoringVersion(null);
     }
@@ -215,6 +226,8 @@ export default function ContractDetailPage() {
   }
 
   const analysis = contract.aiAnalysis || {};
+  const analysisFailed = contract.aiAnalysisStatus === 'failed';
+  const analysisPending = Boolean(contract.aiAnalysisStatus) && !analysisFailed && !analysis.summary;
 
   return (
     <Layout>
@@ -262,13 +275,13 @@ export default function ContractDetailPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-wrap" data-testid="workflow-actions">
-                {contract.status === 'draft' && (
+                {canWrite && contract.status === 'draft' && (
                   <Button size="sm" onClick={() => handleWorkflowAction('submit_for_review')} disabled={workflowLoading} data-testid="workflow-submit">
                     {workflowLoading ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1 h-3.5 w-3.5" />}
                     Submit for Review
                   </Button>
                 )}
-                {contract.status === 'review' && (
+                {canWrite && contract.status === 'review' && (
                   <>
                     <Button size="sm" variant="default" onClick={() => handleWorkflowAction('approve')} disabled={workflowLoading} data-testid="workflow-approve">
                       <CheckCircle className="mr-1 h-3.5 w-3.5" /> Approve
@@ -278,7 +291,7 @@ export default function ContractDetailPage() {
                     </Button>
                   </>
                 )}
-                {contract.status === 'approved' && (
+                {canWrite && contract.status === 'approved' && (
                   <Button size="sm" onClick={() => handleWorkflowAction('activate')} disabled={workflowLoading} data-testid="workflow-activate">
                     <CheckCircle className="mr-1 h-3.5 w-3.5" /> Activate
                   </Button>
@@ -366,7 +379,18 @@ export default function ContractDetailPage() {
                 </CardHeader>
                 <CardContent className="pt-6">
                   <TabsContent value="summary" className="mt-0">
-                    {analysis.summary ? (
+                    {analysisFailed ? (
+                      <div className="flex items-start gap-3 p-4 rounded-lg border border-destructive/30 bg-destructive/5">
+                        <AlertTriangle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+                        <div>
+                          <p className="font-medium text-destructive">AI analysis failed</p>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {contract.aiAnalysisError ||
+                              'The analysis could not be completed. Re-upload the contract to retry.'}
+                          </p>
+                        </div>
+                      </div>
+                    ) : analysis.summary ? (
                       <div className="prose prose-sm dark:prose-invert max-w-none">
                         <p>{analysis.summary}</p>
                         {analysis.parties && analysis.parties.length > 0 && (
@@ -380,6 +404,8 @@ export default function ContractDetailPage() {
                           </div>
                         )}
                       </div>
+                    ) : analysisPending ? (
+                      <p className="text-muted-foreground">Analysis in progress…</p>
                     ) : (
                       <p className="text-muted-foreground">No summary available</p>
                     )}
@@ -493,6 +519,7 @@ export default function ContractDetailPage() {
                                 )}
                               </div>
                             </div>
+                            {canWrite && (
                             <Button
                               variant="outline"
                               size="sm"
@@ -509,6 +536,7 @@ export default function ContractDetailPage() {
                                 </>
                               )}
                             </Button>
+                            )}
                           </div>
                         ))}
                       </div>

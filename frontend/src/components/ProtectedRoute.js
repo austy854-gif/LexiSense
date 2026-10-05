@@ -1,5 +1,6 @@
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { hasRole } from '../lib/apiHelpers.mjs';
 import { Loader2 } from 'lucide-react';
 
 export function ProtectedRoute({ children, allowedRoles }) {
@@ -17,7 +18,7 @@ export function ProtectedRoute({ children, allowedRoles }) {
     return <Navigate to="/login" replace />;
   }
 
-  if (allowedRoles && user.role && !allowedRoles.includes(user.role)) {
+  if (allowedRoles && !hasRole(user.role, allowedRoles)) {
     return <Navigate to="/" replace />;
   }
 

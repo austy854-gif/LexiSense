@@ -36,6 +36,19 @@ class AcceptInvitationRequest(BaseModel):
     lastName: Optional[str] = None
 
 
+class MemberRoleUpdate(BaseModel):
+    """Body model for PATCH /team/members/{member_id}/role.
+
+    The role previously arrived as a ``?role=`` query parameter. A query
+    parameter is the wrong transport for a state change: it is validated only
+    inside the handler (after the request has been routed and logged), it leaks
+    into access/proxy logs and browser history, and it advertises no request
+    body in OpenAPI. A body model is validated by FastAPI before the handler
+    runs and keeps the payload out of the URL.
+    """
+    role: str
+
+
 class InvitationResponse(BaseModel):
     id: str
     email: str

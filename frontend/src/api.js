@@ -68,7 +68,7 @@ export const teamAPI = {
   listInvitations: () => api.get('/team/invitations'),
   invite: (email, role) => api.post('/team/invite', { email, role }),
   cancelInvitation: (id) => api.delete(`/team/invitations/${id}`),
-  updateRole: (memberId, role) => api.patch(`/team/members/${memberId}/role`, null, { params: { role } }),
+  updateRole: (memberId, role) => api.patch(`/team/members/${memberId}/role`, { role }),
   removeMember: (memberId) => api.delete(`/team/members/${memberId}`),
   acceptInvite: (token, password, firstName, lastName) =>
     api.post('/team/accept-invite', { token, password, firstName, lastName }),
