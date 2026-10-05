@@ -9,11 +9,11 @@ name: Regen lockfiles (temporary)
 # regenerates them ON THE RUNNER and commits them with the job's own
 # GITHUB_TOKEN, which is the only actor with write access.
 #
-# It does three things:
-#   1. applies the CI trigger de-duplication (push -> main only);
-#   2. regenerates frontend/yarn.lock so ajv and websocket-driver re-resolve
-#      to their patched releases (clears the Trivy dependency advisories);
-#   3. regenerates frontend/package-lock.json the same way.
+# It regenerates and commits ONLY the two lockfiles. It deliberately does NOT
+# touch any workflow file: a push authenticated with GITHUB_TOKEN is refused
+# when it would create or update a file under .github/workflows/, because the
+# token has no `workflows` permission. The ci-cd.yml trigger de-duplication is
+# landed separately through the API, which has that permission.
 
 on:
   push:
@@ -45,19 +45,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Apply CI trigger de-duplication
-        run: |
-          python3 - <<'PY'
-          p = '.github/workflows/ci-cd.yml'
-          s = open(p).read()
-          before = s
-          s = s.replace("  push:\n    branches: ['**']", "  push:\n    branches: [main]")
-          assert s != before, "push trigger pattern not found - aborting"
-          open(p, 'w').write(s)
-          print("ci-cd.yml: push trigger narrowed to branches: [main]")
-          PY
-          sed -n '/^on:/,/^env:/p' .github/workflows/ci-cd.yml
 
       - name: Regenerate frontend/yarn.lock
         working-directory: frontend
@@ -114,10 +101,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/ci-cd.yml frontend/yarn.lock frontend/package-lock.json
+          git add frontend/yarn.lock frontend/package-lock.json
           if git diff --cached --quiet; then
             echo "Nothing to commit - lockfiles already patched"
           else
-            git commit -m "ci(deps): bump ajv to 8.20.0 and websocket-driver to 0.7.5; de-dup CI triggers"
+            git commit -m "ci(deps): bump ajv to 8.20.0 and websocket-driver to 0.7.5"
             git push origin HEAD:ci/fix-frontend-lockfile
           fi

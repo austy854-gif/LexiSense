@@ -1,10 +1,17 @@
 name: LexiSense CI/CD
 
 on:
-  # Run on every push and every pull request so the unit suite always runs.
-  # Deploy jobs stay gated on main via their own `if:` conditions.
+  # De-duplicated triggers (PR #5). A feature-branch push used to start TWO
+  # identical full suites, because `push` and `pull_request` both matched
+  # `branches: ['**']` - one run per event for the same commit, doubling the
+  # CI load and racing to cancel each other.
+  #
+  # Branch work is now validated exactly once, by the `pull_request` event
+  # (updated automatically whenever the branch is pushed). `push` is limited
+  # to `main`, which is where it is actually needed: the deploy jobs below are
+  # gated on `github.ref == 'refs/heads/main' && github.event_name == 'push'`.
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
     branches: ['**']
   schedule:
