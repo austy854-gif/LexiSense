@@ -354,7 +354,7 @@ jobs:
             -H "Authorization: Bearer ${{ env.RENDER_API_KEY }}"
       - name: Deploy to Fly.io
         if: ${{ env.FLY_API_TOKEN != '' }}
-        uses: superfly/flyctl-actions@1.3
+        uses: superfly/flyctl-actions@1.6
         with:
           args: "deploy --app lexisense-backend"
 
