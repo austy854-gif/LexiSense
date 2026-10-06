@@ -82,7 +82,7 @@
     "@emergentbase/visual-edits": "https://assets.emergent.sh/npm/emergentbase-visual-edits-1.0.8.tgz",
     "@eslint/js": "9.23.0",
     "autoprefixer": "^10.4.20",
-    "eslint": "9.23.0",
+    "eslint": "10.12.0",
     "eslint-config-react-app": "^7.0.1",
     "eslint-plugin-import": "2.31.0",
     "eslint-plugin-jsx-a11y": "6.10.2",
