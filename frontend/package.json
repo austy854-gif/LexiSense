@@ -32,7 +32,7 @@
     "@radix-ui/react-toggle-group": "^1.1.7",
     "@radix-ui/react-tooltip": "^1.2.4",
     "@sentry/browser": "^8.0.0",
-    "@sentry/react": "^8.0.0",
+    "@sentry/react": "^11.4.0",
     "ajv": "^8.20.0",
     "antd": "^6.6.5",
     "axios": "^1.8.4",
