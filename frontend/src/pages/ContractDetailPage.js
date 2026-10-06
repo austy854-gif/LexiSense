@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, versionsAPI, workflowAPI } from '../api';
@@ -94,13 +94,13 @@ export default function ContractDetailPage() {
     fetchContract();
     fetchVersions();
     fetchWorkflow();
-  }, [id]);
+  }, [fetchContract, fetchVersions, fetchWorkflow]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  const fetchContract = async () => {
+  const fetchContract = useCallback(async () => {
     try {
       const response = await contractsAPI.get(id);
       setContract(response.data);
@@ -110,9 +110,9 @@ export default function ContractDetailPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id, navigate]);
 
-  const fetchVersions = async () => {
+  const fetchVersions = useCallback(async () => {
     setVersionsLoading(true);
     try {
       const response = await versionsAPI.getVersions(id);
@@ -122,16 +122,16 @@ export default function ContractDetailPage() {
     } finally {
       setVersionsLoading(false);
     }
-  };
+  }, [id]);
 
-  const fetchWorkflow = async () => {
+  const fetchWorkflow = useCallback(async () => {
     try {
       const response = await workflowAPI.getHistory(id);
       setWorkflowData(response.data);
     } catch (error) {
       console.error('Failed to load workflow:', error);
     }
-  };
+  }, [id]);
 
   const handleWorkflowAction = async (action) => {
     setWorkflowLoading(true);

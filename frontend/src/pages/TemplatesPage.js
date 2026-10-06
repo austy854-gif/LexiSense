@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Layout } from '../components/Layout';
 import { templatesAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
@@ -61,9 +61,9 @@ export default function TemplatesPage() {
 
   useEffect(() => {
     fetchTemplates();
-  }, [searchQuery, typeFilter]);
+  }, [fetchTemplates]);
 
-  const fetchTemplates = async () => {
+  const fetchTemplates = useCallback(async () => {
     try {
       const params = {};
       if (searchQuery) params.search = searchQuery;
@@ -76,7 +76,7 @@ export default function TemplatesPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchQuery, typeFilter]);
 
   const handleCreate = async (e) => {
     e.preventDefault();

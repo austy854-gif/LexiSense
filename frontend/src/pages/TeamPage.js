@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Layout } from '../components/Layout';
 import { teamAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
@@ -96,9 +96,9 @@ export default function TeamPage() {
 
   useEffect(() => {
     fetchTeamData();
-  }, []);
+  }, [fetchTeamData]);
 
-  const fetchTeamData = async () => {
+  const fetchTeamData = useCallback(async () => {
     try {
       const [membersRes, invitesRes] = await Promise.all([
         teamAPI.listMembers(),
@@ -111,7 +111,7 @@ export default function TeamPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [isAdmin]);
 
   const handleInvite = async (e) => {
     e.preventDefault();
