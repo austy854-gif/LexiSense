@@ -48,7 +48,7 @@ jobs:
       run:
         working-directory: ./backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -103,7 +103,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -167,7 +167,7 @@ jobs:
       run:
         working-directory: ./backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -201,7 +201,7 @@ jobs:
       run:
         working-directory: ./frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           # Must be >= 20: react-router-dom (^7.5.1) declares engines.node
@@ -242,7 +242,7 @@ jobs:
       run:
         working-directory: ./frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           # See the frontend-lint job: react-router-dom 7 requires Node >= 20.
@@ -272,7 +272,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # TruffleHog diffs `base`..`head`, so it needs the full history.
           fetch-depth: 0
@@ -303,7 +303,7 @@ jobs:
     name: Dependency Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check Python dependencies
         run: |
           pip install pip-audit
@@ -340,7 +340,7 @@ jobs:
       JWT_ISSUER: ${{ vars.JWT_ISSUER || 'lexisense-api' }}
       JWT_AUDIENCE: ${{ vars.JWT_AUDIENCE || 'lexisense-client' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy to Railway
         uses: railwayapp/railway-deploy@v1
         if: ${{ env.RAILWAY_TOKEN != '' }}
@@ -372,7 +372,7 @@ jobs:
       NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
       NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v25
         if: ${{ env.VERCEL_TOKEN != '' }}
