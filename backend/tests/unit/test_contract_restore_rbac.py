@@ -92,7 +92,10 @@ class TestRestoreAuthentication:
             RESTORE_URL.format(contract_id=contract["id"], version_num=1)
         )
 
-        assert response.status_code == 403  # HTTPBearer rejects a missing header
+        # HTTPBearer rejects a missing header. FastAPI >=0.115 returns 401
+        # (Unauthorized) for absent credentials; 403 is reserved for an
+        # authenticated-but-forbidden caller.
+        assert response.status_code == 401
 
     async def test_rejects_invalid_token(self, client, db, contract, owner):
         await _seed(db, contract, make_version(contract["id"], 1, owner["id"]))
