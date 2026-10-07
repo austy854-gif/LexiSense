@@ -29,6 +29,14 @@ let webpackConfig = {
       rules: {
         "react-hooks/rules-of-hooks": "error",
         "react-hooks/exhaustive-deps": "warn",
+        // eslint-plugin-react-hooks v7 ships the React Compiler rules in its
+        // `recommended` preset. This codebase predates them, so the upgrade
+        // surfaces them as build-breaking errors. Keep the two long-standing
+        // rules above enforced and turn the new compiler-only rules off until
+        // the components are migrated.
+        "react-hooks/immutability": "off",
+        "react-hooks/preserve-manual-memoization": "off",
+        "react-hooks/set-state-in-effect": "off",
       },
     },
   },
@@ -89,7 +97,7 @@ if (isDevServer) {
   } catch (err) {
     if (err.code === 'MODULE_NOT_FOUND' && err.message.includes('@emergentbase/visual-edits/craco')) {
       console.warn(
-        "[visual-edits] @emergentbase/visual-edits not installed — visual editing disabled."
+        "[visual-edits] @emergentbase/visual-edits not installed \u2014 visual editing disabled."
       );
     } else {
       throw err;
