@@ -36,7 +36,10 @@ class TestPatchContractAuthentication:
             json={"title": "Renamed"},
         )
 
-        assert response.status_code == 403  # HTTPBearer rejects a missing header
+        # HTTPBearer rejects a missing header. FastAPI >=0.115 returns 401
+        # (Unauthorized) for absent credentials; 403 is reserved for an
+        # authenticated-but-forbidden caller.
+        assert response.status_code == 401
         stored = await db.contracts.find_one({"id": contract["id"]})
         assert stored["title"] == contract["title"]
         assert stored["status"] == contract["status"]
@@ -562,5 +565,6 @@ class TestPatchContractBodyModel:
         assert ref.endswith("/ContractUpdate")
 
         query_params = {p["name"] for p in operation.get("parameters", [])}
+        assert "viewer" not in query_params
         assert "title" not in query_params
         assert "status" not in query_params
