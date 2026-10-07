@@ -1,0 +1,16 @@
+# Trivy ignore list — LexiSense
+#
+# Only vulnerabilities with NO fixed version available are listed here.
+# Everything with a fix is remediated in frontend/package.json (resolutions)
+# and frontend/yarn.lock, so it must NOT be suppressed.
+#
+# Each entry is a CVE/GHSA id, one per line. Trivy skips these findings when
+# producing the SARIF that feeds the "Trivy" code-scanning check.
+
+# node-forge: signature forgery in RSA PKCS#1 v1.5 verification.
+# No fixed version published as of 2026-10-06 (upstream advisory open).
+CVE-2026-85393
+
+# braces: DoS via stack overflow from deeply nested patterns.
+# No fixed version published as of 2026-10-06 (upstream advisory open).
+CVE-2026-93687
