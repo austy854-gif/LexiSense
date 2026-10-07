@@ -1,0 +1,46 @@
+name: Regenerate frontend lockfile (temporary)
+
+# TEMPORARY helper. Regenerates frontend/yarn.lock from the `resolutions`
+# block in frontend/package.json so the security-scan (Trivy) check stops
+# reporting pre-existing transitive CVEs. Delete this file once the lockfile
+# commit has landed.
+on:
+  push:
+    branches:
+      - ci/trivy-security-scan-fix
+      - dependabot/npm_and_yarn/frontend/frontend-minor-patch-3ab5631b86
+      - dependabot/npm_and_yarn/frontend/eslint-10.12.0
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  regen:
+    # Never re-trigger on the bot's own commit.
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Regenerate lockfile
+        working-directory: frontend
+        run: |
+          corepack enable || true
+          yarn install --ignore-scripts --network-timeout 600000
+      - name: Commit regenerated lockfile
+        run: |
+          git config user.name "lexisense-ci-bot"
+          git config user.email "ci-bot@lexisense.dev"
+          git add frontend/yarn.lock frontend/package.json
+          if git diff --cached --quiet; then
+            echo "No lockfile changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(ci): regenerate frontend yarn.lock with security resolutions"
+          git push origin HEAD:${{ github.ref_name }}
