@@ -41,7 +41,23 @@ logger = get_logger("main")
 #     can serve health checks.
 #   * serverSelectionTimeoutMS bounds how long a request waits for a primary,
 #     so a database outage fails fast instead of hanging every request.
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ.get("DATABASE_URL") or os.environ.get("MONGO_URL")
+if not mongo_url:
+    raise RuntimeError("DATABASE_URL (or MONGO_URL) must be set at runtime")
+
+
+def _resolve_db_name(url: str) -> str:
+    name = os.environ.get("DB_NAME")
+    if name:
+        return name
+    try:
+        from pymongo.uri_parser import parse_uri
+        return parse_uri(url).get("database") or "lexisense"
+    except Exception:
+        return "lexisense"
+
+
+DB_NAME = _resolve_db_name(mongo_url)
 client = AsyncIOMotorClient(
     mongo_url,
     connect=False,
@@ -53,7 +69,7 @@ client = AsyncIOMotorClient(
     socketTimeoutMS=45_000,
     appname="lexisense-api",
 )
-db = client[os.environ['DB_NAME']]
+db = client[DB_NAME]
 
 # Initialize Sentry
 sentry_dsn = os.environ.get("SENTRY_DSN")
@@ -95,37 +111,49 @@ async def lifespan(app: FastAPI):
     """
     logger.info("LexiSense API starting up...")
 
-    # Canonical index specification (see utils/database.py for the rationale
-    # behind each index). Without the id indexes every by-id endpoint was a
-    # collection scan, and the compound indexes back the list/dashboard sorts.
-    from utils.database import apply_indexes
-    result = await apply_indexes(db)
-    logger.info(
-        "Database indexes ensured",
-        extra={"indexes_created": result["created"], "indexes_failed": result["failed"]},
-    )
+    # Database/storage bootstrap runs in the background so the server starts
+    # accepting requests (and passing platform health checks) immediately,
+    # even when the database is slow or temporarily unreachable.
+    async def _bootstrap():
+        try:
+            # Canonical index specification (see utils/database.py for the rationale
+            # behind each index). Without the id indexes every by-id endpoint was a
+            # collection scan, and the compound indexes back the list/dashboard sorts.
+            from utils.database import apply_indexes
+            result = await apply_indexes(db)
+            logger.info(
+                "Database indexes ensured",
+                extra={"indexes_created": result["created"], "indexes_failed": result["failed"]},
+            )
 
-    # Ensure S3 bucket exists
-    from services.storage_service import ensure_bucket_exists
-    bucket_ok = await ensure_bucket_exists()
-    if bucket_ok:
-        logger.info("S3 bucket verified")
-    else:
-        logger.warning("S3 bucket not available (check AWS credentials)")
+            # Ensure S3 bucket exists
+            from services.storage_service import ensure_bucket_exists
+            bucket_ok = await ensure_bucket_exists()
+            if bucket_ok:
+                logger.info("S3 bucket verified")
+            else:
+                logger.warning("S3 bucket not available (check AWS credentials)")
 
-    # Celery is not initialized -- agentic subsystem is stripped for launch.
-    # Re-enable when Redis + Celery worker + beat are provisioned.
+            # Celery is not initialized -- agentic subsystem is stripped for launch.
+            # Re-enable when Redis + Celery worker + beat are provisioned.
 
-    # Run pending database migrations (idempotent)
-    try:
-        from utils.migrations import run_migrations
-        await run_migrations(db)
-    except Exception as e:
-        logger.error(f"Migration run failed: {e}")
+            # Run pending database migrations (idempotent)
+            try:
+                from utils.migrations import run_migrations
+                await run_migrations(db)
+            except Exception as e:
+                logger.error(f"Migration run failed: {e}")
+
+        except Exception as exc:  # never crash the server on bootstrap errors
+            logger.error(f"Startup bootstrap failed: {exc}")
+
+    bootstrap_task = asyncio.create_task(_bootstrap())
 
     yield
 
     logger.info("LexiSense API shutting down...")
+    if not bootstrap_task.done():
+        bootstrap_task.cancel()
     client.close()
 
 
@@ -142,7 +170,7 @@ app = FastAPI(
 
 # Expose the handles so the lifespan protocol / tests can re-point them.
 app.state.mongo_client = client
-app.state.db_name = os.environ["DB_NAME"]
+app.state.db_name = DB_NAME
 
 # Add request logging middleware
 app.add_middleware(RequestLoggingMiddleware)
@@ -339,3 +367,26 @@ app.add_middleware(RequestIDMiddleware)
 # returns one machine-readable envelope: {"error": {...}, "requestId", "status"}.
 from utils.errors import register_exception_handlers  # noqa: E402
 register_exception_handlers(app)
+
+
+# ---------------------------------------------------------------------------
+# Serve the built frontend (single-container deploy). Registered last so all
+# /api routes take precedence; unknown non-API paths fall back to index.html.
+# ---------------------------------------------------------------------------
+from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+
+FRONTEND_BUILD_DIR = Path(os.environ.get("FRONTEND_BUILD_DIR", str(ROOT_DIR / "static")))
+
+if (FRONTEND_BUILD_DIR / "index.html").is_file():
+    _frontend_root = FRONTEND_BUILD_DIR.resolve()
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        if full_path == "api" or full_path.startswith("api/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        candidate = (_frontend_root / full_path).resolve()
+        if full_path and candidate.is_file() and _frontend_root in candidate.parents:
+            return FileResponse(candidate)
+        return FileResponse(_frontend_root / "index.html")
+else:
+    logger.info("Frontend build not found; serving API only", extra={"dir": str(FRONTEND_BUILD_DIR)})

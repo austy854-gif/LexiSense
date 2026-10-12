@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "LexiSense <onboarding@resend.dev>")
-APP_URL = os.environ.get("APP_URL", "http://localhost:3000")
+APP_URL = os.environ.get("APP_URL", "")
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
