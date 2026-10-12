@@ -38,6 +38,31 @@ let webpackConfig = {
     },
     configure: (webpackConfig) => {
 
+      // Tailwind CSS v4 moved its PostCSS plugin out of the `tailwindcss`
+      // package into `@tailwindcss/postcss`. CRA (react-scripts) still injects
+      // the bare `tailwindcss` package as a PostCSS plugin whenever a
+      // `tailwind.config.js` exists at the app root, and it hard-codes
+      // `config: false` so `postcss.config.js` is never read. Swap the plugin
+      // in the postcss-loader options so the v4 build works.
+      const swapTailwindPostcssPlugin = (rules) => {
+        for (const rule of rules || []) {
+          if (!rule) continue;
+          if (Array.isArray(rule.oneOf)) swapTailwindPostcssPlugin(rule.oneOf);
+          if (Array.isArray(rule.use)) {
+            for (const use of rule.use) {
+              const plugins = use && use.options && use.options.postcssOptions
+                && use.options.postcssOptions.plugins;
+              if (Array.isArray(plugins)) {
+                use.options.postcssOptions.plugins = plugins.map((plugin) =>
+                  plugin === "tailwindcss" ? "@tailwindcss/postcss" : plugin
+                );
+              }
+            }
+          }
+        }
+      };
+      swapTailwindPostcssPlugin(webpackConfig.module && webpackConfig.module.rules);
+
       // Add ignored patterns to reduce watched directories
         webpackConfig.watchOptions = {
           ...webpackConfig.watchOptions,
