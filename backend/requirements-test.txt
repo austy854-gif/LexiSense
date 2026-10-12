@@ -1,8 +1,8 @@
 # Test-only dependencies (in addition to requirements.txt).
 # Install with:  pip install -r requirements-test.txt
-pytest==9.0.2
+pytest==9.1.1
 pytest-asyncio==1.4.0
 httpx==0.28.1
 mongomock-motor==0.0.36
 email-validator==2.3.0
-python-multipart==0.0.22
+python-multipart==0.0.32
