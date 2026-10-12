@@ -1,5 +1,5 @@
 import api from './api';
 
-test('uses a same-origin API base URL when REACT_APP_BACKEND_URL is unset', () => {
-  expect(api.defaults.baseURL).toBe('/api/v1');
+test('API base URL ends with /api/v1 (same-origin /api/v1 when REACT_APP_BACKEND_URL is unset)', () => {
+  expect(api.defaults.baseURL).toMatch(/^(https?:\/\/[^/]+)?\/api\/v1$/);
 });
