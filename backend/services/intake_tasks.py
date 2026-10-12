@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from celery import shared_task
 import httpx
-import PyPDF2
+import pypdf as PyPDF2
 import io
 
 # Imported at module scope because ContractIntake is referenced in a function

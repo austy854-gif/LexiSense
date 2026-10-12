@@ -61,7 +61,9 @@ jobs:
           pip install --upgrade pip
           # emergentintegrations is only published on the Emergent index,
           # so the default PyPI index alone cannot resolve requirements.txt.
-          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements.txt
+          pip install -r requirements.txt
+          # emergentintegrations pins old litellm/openai; install without deps (matches Dockerfile).
+          pip install --no-deps --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ emergentintegrations==0.2.2
           pip install flake8 black mypy
       - name: Lint with flake8
         run: |
@@ -115,7 +117,9 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           # emergentintegrations is only published on the Emergent index.
-          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements.txt
+          pip install -r requirements.txt
+          # emergentintegrations pins old litellm/openai; install without deps (matches Dockerfile).
+          pip install --no-deps --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ emergentintegrations==0.2.2
       - name: Run tests
         # These are live-API integration tests: they issue real HTTP requests
         # against a running service and need EMERGENT_LLM_KEY / S3 credentials.
@@ -181,7 +185,9 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           # emergentintegrations is only published on the Emergent index.
-          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements.txt
+          pip install -r requirements.txt
+          # emergentintegrations pins old litellm/openai; install without deps (matches Dockerfile).
+          pip install --no-deps --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ emergentintegrations==0.2.2
           pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-test.txt
       - name: Run unit tests
         run: |
