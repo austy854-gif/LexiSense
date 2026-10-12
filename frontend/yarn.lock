@@ -2944,7 +2944,28 @@
     "@sentry-internal/browser-utils" "8.55.2"
     "@sentry/core" "8.55.2"
 
-"@sentry/browser@8.55.2", "@sentry/browser@^8.0.0":
+"@sentry/browser-utils@11.6.0":
+  version "11.6.0"
+  resolved "https://registry.yarnpkg.com/@sentry/browser-utils/-/browser-utils-11.6.0.tgz#9997e8a9954fa6409c18a80635fba1c43987c3e6"
+  integrity sha512-s4zuuE71NORfyNd6ciS27/o97qgfu70qDRdPCkLK8UOcs1REsaAQPgmvNBSADRYm4eeFwWejKBCQKjL5kOzLqw==
+  dependencies:
+    "@sentry/conventions" "^0.26.0"
+    "@sentry/core" "11.6.0"
+    web-vitals "^6.2.3"
+
+"@sentry/browser@11.6.0":
+  version "11.6.0"
+  resolved "https://registry.yarnpkg.com/@sentry/browser/-/browser-11.6.0.tgz#2322ea11d95c5f1dabcb8fa82a3c03f5dd6a2ce6"
+  integrity sha512-zkqUIbRc9HCBMsoL67HOAr6PSfNzJSMw4JhytCHuDZ5O7KuOwwgBENGhVh3mr5lj2D47Bhv01MpwCJMP3yBnZQ==
+  dependencies:
+    "@sentry/browser-utils" "11.6.0"
+    "@sentry/conventions" "^0.26.0"
+    "@sentry/core" "11.6.0"
+    "@sentry/feedback" "11.6.0"
+    "@sentry/replay" "11.6.0"
+    "@sentry/replay-canvas" "11.6.0"
+
+"@sentry/browser@^8.0.0":
   version "8.55.2"
   resolved "https://registry.npmjs.org/@sentry/browser/-/browser-8.55.2.tgz"
   integrity sha512-xHuPIEKhx9zw5quWvv4YgZprnwoVMCfxIhmOIf6KJ9iizyUHeUDcKpLS59xERroqwX4RpvK+l/27AZu4zfZlzQ==
@@ -2955,19 +2976,54 @@
     "@sentry-internal/replay-canvas" "8.55.2"
     "@sentry/core" "8.55.2"
 
+"@sentry/conventions@^0.26.0":
+  version "0.26.0"
+  resolved "https://registry.yarnpkg.com/@sentry/conventions/-/conventions-0.26.0.tgz#3da6c91e1c4e570914b998f8b4f97ab7e5144a23"
+  integrity sha512-ttSRcoLf2kIENDIFzH12aJaVMdxnidMYLvVNwEX/JjXfXaQot8u5M47QmgAFOOhVJ4nQ2uU8wTCh+fwSPrrCfg==
+
+"@sentry/core@11.6.0":
+  version "11.6.0"
+  resolved "https://registry.yarnpkg.com/@sentry/core/-/core-11.6.0.tgz#1b01452a097b45493df90b75b443754fb078f016"
+  integrity sha512-PbITT1kfJYKJiS9fH4ZtOcwIONKyt+tUsTZSPtcAjPdkUDOzMKT61MkUa1Ze07VzNtLALT24ZdUOc6d9K4YoKA==
+  dependencies:
+    "@sentry/conventions" "^0.26.0"
+
 "@sentry/core@8.55.2":
   version "8.55.2"
   resolved "https://registry.npmjs.org/@sentry/core/-/core-8.55.2.tgz"
   integrity sha512-YlEBwybUcOQ/KjMHDmof1vwweVnBtBxYlQp7DE3fOdtW4pqqdHWTnTntQs4VgYfxzjJYgtkd9LHlGtg8qy+JVQ==
 
-"@sentry/react@^8.0.0":
-  version "8.55.2"
-  resolved "https://registry.npmjs.org/@sentry/react/-/react-8.55.2.tgz"
-  integrity sha512-1TPfKZYkJal2Dyt2W0tf1roOZmu7sqr6/dTqjdsuu2WgGTilMEreK26YqB8ROOYdMjkVJpNCcIKXQHyMp2eCwA==
+"@sentry/feedback@11.6.0":
+  version "11.6.0"
+  resolved "https://registry.yarnpkg.com/@sentry/feedback/-/feedback-11.6.0.tgz#cff70e594797886209691834ebd07777f590c81a"
+  integrity sha512-V52/+SkMcPdlldExPC9TWS2sZ+CC+8BSzvVbRtkQxvy+jTOXFAJfInaVLPAAVt8W4WbPw9iAxVMzwHGaZ2muBw==
   dependencies:
-    "@sentry/browser" "8.55.2"
-    "@sentry/core" "8.55.2"
-    hoist-non-react-statics "^3.3.2"
+    "@sentry/core" "11.6.0"
+
+"@sentry/react@^11.4.0":
+  version "11.6.0"
+  resolved "https://registry.yarnpkg.com/@sentry/react/-/react-11.6.0.tgz#abb8d3e59d45d1e5b2d4c98ba0ecd94ea4064bf8"
+  integrity sha512-z9UScxzkfXjz7dGJW/or1ADiEStFPIsiv7u14vHonOPPFzQS3XClWafcS7AKc4g/9x6LUqGY4mMbHLC6Dfxq8A==
+  dependencies:
+    "@sentry/browser" "11.6.0"
+    "@sentry/conventions" "^0.26.0"
+    "@sentry/core" "11.6.0"
+
+"@sentry/replay-canvas@11.6.0":
+  version "11.6.0"
+  resolved "https://registry.yarnpkg.com/@sentry/replay-canvas/-/replay-canvas-11.6.0.tgz#d251577e8d52928facc5d8fb15105d4fe011f444"
+  integrity sha512-cRuiC8N9xXDoaKEDpMPRDtmGAr0G2YMx1m2JrnrmTnMt9z/VcIKNwaiURTTW8W8u96/RyRQfflMHYARX7FG8YQ==
+  dependencies:
+    "@sentry/core" "11.6.0"
+    "@sentry/replay" "11.6.0"
+
+"@sentry/replay@11.6.0":
+  version "11.6.0"
+  resolved "https://registry.yarnpkg.com/@sentry/replay/-/replay-11.6.0.tgz#8c27c452f7ae0cdd253d070b2737f0b61687597a"
+  integrity sha512-cJyPYnF6QJA8ADRfAW06YoU7EVIebtWezBOCU9Vag5+W1VLBkXEvH7C4LbeMUiDmrqw92sumq06NgqipIxA7BA==
+  dependencies:
+    "@sentry/browser-utils" "11.6.0"
+    "@sentry/core" "11.6.0"
 
 "@sinclair/typebox@^0.24.1":
   version "0.24.51"
@@ -6817,13 +6873,6 @@ he@^1.2.0:
   resolved "https://registry.npmjs.org/he/-/he-1.2.0.tgz"
   integrity sha512-F/1DnUGPopORZi0ni+CvrCgHQ5FyEAHRLSApuYWMmrbSwoN2Mn/7k+Gl38gJnR7yyDZk6WLXwiGod1JOWNDKGw==
 
-hoist-non-react-statics@^3.3.2:
-  version "3.3.2"
-  resolved "https://registry.npmjs.org/hoist-non-react-statics/-/hoist-non-react-statics-3.3.2.tgz"
-  integrity sha512-/gGivxi8JPKWNm/W0jSmzcMPpfpPLc3dY/6GxhX2hQ9iGj3aDfklV4ET7NjKpSinLpJ5vafa9iiGIEZg10SfBw==
-  dependencies:
-    react-is "^16.7.0"
-
 hoopy@^0.1.4:
   version "0.1.4"
   resolved "https://registry.npmjs.org/hoopy/-/hoopy-0.1.4.tgz"
@@ -9726,7 +9775,7 @@ react-hook-form@^7.56.2:
   resolved "https://registry.npmjs.org/react-hook-form/-/react-hook-form-7.69.0.tgz"
   integrity sha512-yt6ZGME9f4F6WHwevrvpAjh42HMvocuSnSIHUGycBqXIJdhqGSPQzTpGF+1NLREk/58IdPxEMfPcFCjlMhclGw==
 
-react-is@^16.13.1, react-is@^16.7.0:
+react-is@^16.13.1:
   version "16.13.1"
   resolved "https://registry.npmjs.org/react-is/-/react-is-16.13.1.tgz"
   integrity sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==
@@ -11445,6 +11494,11 @@ wbuf@^1.1.0, wbuf@^1.7.3:
   integrity sha512-O84QOnr0icsbFGLS0O3bI5FswxzRr8/gHwWkDlQFskhSPryQXvrTMxjxGP4+iWYoauLoBvfDpkrOauZ+0iZpDA==
   dependencies:
     minimalistic-assert "^1.0.0"
+
+web-vitals@^6.2.3:
+  version "6.2.3"
+  resolved "https://registry.yarnpkg.com/web-vitals/-/web-vitals-6.2.3.tgz#8581188b2a46875d04b9536ab06b352e3a0468b8"
+  integrity sha512-Dmy+vdO1UPMqXiAtZSNayhl4f794Bxfd94W4HIj2HlYtczEQfEOon969memlcpcHrTuOKLa5baFjX7WbgmOq+A==
 
 webidl-conversions@^4.0.2:
   version "4.0.2"
