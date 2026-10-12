@@ -17,9 +17,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Resolve package.json and regenerate yarn.lock
+      - name: Regen
         run: |
-          set -e
           git config user.email "actions@github.com"
           git config user.name "github-actions[bot]"
           git fetch origin main
@@ -47,9 +46,19 @@ jobs:
           git add frontend/package.json
           git checkout origin/main -- frontend/yarn.lock
           cd frontend
-          yarn install --network-timeout 600000
+          yarn install --network-timeout 600000 > /tmp/y.log 2>&1
+          RC=$?
           cd ..
+          echo "::error::YARN_EXIT=$RC"
+          echo "::error::YARN_TAIL=$(tail -6 /tmp/y.log | tr '\n' '~')"
           git add frontend/yarn.lock
           git rm -f .github/workflows/regen-lockfile.yml
-          git commit -m "Merge main into branch; resolve package.json and regenerate yarn.lock"
-          git push origin HEAD
+          git commit -m "Merge main into branch; resolve package.json and regenerate yarn.lock" > /tmp/c.log 2>&1
+          CRC=$?
+          echo "::error::COMMIT_EXIT=$CRC"
+          echo "::error::COMMIT_TAIL=$(tail -3 /tmp/c.log | tr '\n' '~')"
+          git push origin HEAD > /tmp/p.log 2>&1
+          PRC=$?
+          echo "::error::PUSH_EXIT=$PRC"
+          echo "::error::PUSH_TAIL=$(tail -6 /tmp/p.log | tr '\n' '~')"
+          exit 1
