@@ -2,7 +2,7 @@
 # FastAPI backend (same origin, so the SPA calls /api/v1 relatively).
 
 # ---- Stage 1: frontend build ----
-FROM node:20-slim AS frontend
+FROM node:22-slim AS frontend
 WORKDIR /app/frontend
 ENV CI=false \
     GENERATE_SOURCEMAP=false
