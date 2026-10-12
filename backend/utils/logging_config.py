@@ -6,6 +6,7 @@ import logging
 import sys
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict
 from pythonjsonlogger import jsonlogger
 from contextvars import ContextVar
@@ -21,7 +22,7 @@ class StructuredFormatter(jsonlogger.JsonFormatter):
         super().add_fields(log_record, record, message_dict)
         
         # Standard fields
-        log_record['timestamp'] = self.formatTime(record, self.datefmt)
+        log_record['timestamp'] = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         log_record['level'] = record.levelname
         log_record['logger'] = record.name
         log_record['module'] = record.module
