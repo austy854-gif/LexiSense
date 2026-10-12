@@ -155,7 +155,7 @@ jobs:
           python scripts/seed_harness.py
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-test-results
           path: backend/test-results.xml
@@ -189,7 +189,7 @@ jobs:
           pytest tests/unit -v --tb=short --junitxml=unit-test-results.xml
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-unit-test-results
           path: backend/unit-test-results.xml
@@ -230,7 +230,7 @@ jobs:
         env:
           REACT_APP_BACKEND_URL: http://localhost:8000
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-build
           path: frontend/build
@@ -258,7 +258,7 @@ jobs:
           REACT_APP_BACKEND_URL: http://localhost:8000
           CI: true
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-coverage
           path: frontend/coverage
@@ -313,7 +313,7 @@ jobs:
           cd frontend
           yarn audit --level moderate --json > audit.json || true
       - name: Upload dependency audit results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dependency-audit
           path: |
