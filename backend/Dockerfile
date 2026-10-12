@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements and install dependencies
 # emergentintegrations must be installed from Emergent's private index
-COPY requirements.txt .
+COPY requirements.txt requirements-emergent.txt ./
 RUN pip install --no-cache-dir --user -r requirements.txt && \
-    pip install --no-cache-dir --user --no-deps \
-    --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
-    emergentintegrations==0.2.2
+    pip install --no-cache-dir --user --no-deps --require-hashes \
+      --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+      -r requirements-emergent.txt
 
 # Production stage
 FROM python:3.11-slim as production

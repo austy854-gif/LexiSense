@@ -105,7 +105,6 @@ rich==14.3.3
 rpds-py==0.30.0
 rsa==4.9.1
 s3transfer==0.19.2
-s5cmd==0.3.3
 sentry-sdk==2.71.0
 shellingham==1.5.4
 six==1.17.0

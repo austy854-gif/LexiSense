@@ -2,8 +2,9 @@
 Celery application for LexiSense Agentic AI Platform.
 Distributed task queue for background AI processing.
 """
+import logging
 import os
-from celery import Celery
+from celery import Celery, Task
 from celery.schedules import crontab
 from kombu import Queue
 
@@ -11,9 +12,35 @@ from kombu import Queue
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL") or os.environ.get("REDIS_URL")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND") or os.environ.get("REDIS_URL")
 
+logger = logging.getLogger(__name__)
+
+if not CELERY_BROKER_URL:
+    logger.warning(
+        "CELERY_BROKER_URL/REDIS_URL not set - background tasks are disabled; "
+        "calling .delay()/.apply_async() will raise CeleryNotConfiguredError"
+    )
+
+
+class CeleryNotConfiguredError(RuntimeError):
+    """Raised when a task is enqueued but no broker is configured."""
+
+
+class GuardedTask(Task):
+    """Fail fast with a clear error instead of silently connecting to a
+    default broker when CELERY_BROKER_URL/REDIS_URL is unset."""
+
+    def apply_async(self, *args, **kwargs):
+        if not CELERY_BROKER_URL:
+            raise CeleryNotConfiguredError(
+                f"Cannot enqueue task {self.name!r}: set CELERY_BROKER_URL or REDIS_URL"
+            )
+        return super().apply_async(*args, **kwargs)
+
+
 # Create Celery app
 celery_app = Celery(
     "lexisense_agentic",
+    task_cls=GuardedTask,
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
     include=[

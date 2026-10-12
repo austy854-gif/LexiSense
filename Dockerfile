@@ -22,12 +22,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app/backend
 
-COPY backend/requirements.txt ./requirements.txt
+COPY backend/requirements.txt backend/requirements-emergent.txt ./
 # emergentintegrations pins old litellm/openai; install it without deps.
 RUN pip install -r requirements.txt && \
-    pip install --no-deps \
+    pip install --no-deps --require-hashes \
       --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
-      emergentintegrations==0.2.2
+      -r requirements-emergent.txt && \
+    # pip is not needed at runtime and its vendored libs trip image scanners.
+    python -m pip uninstall -y pip
 
 COPY backend/ ./
 COPY --from=frontend /app/frontend/build ./static
@@ -37,4 +39,9 @@ USER appuser
 
 ENV FRONTEND_BUILD_DIR=/app/backend/static
 EXPOSE 8080
-CMD uvicorn server:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips="*"
+# FORWARDED_ALLOW_IPS defaults to "*", which assumes the container is only
+# reachable through the platform's trusted reverse proxy. Narrow it (e.g. to the
+# proxy's CIDR) if the container port is exposed directly.
+ENV FORWARDED_ALLOW_IPS="*"
+# exec => uvicorn becomes PID 1 and receives SIGTERM directly.
+CMD ["sh", "-c", "exec uvicorn server:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips \"$FORWARDED_ALLOW_IPS\""]
