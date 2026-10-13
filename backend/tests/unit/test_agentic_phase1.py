@@ -248,8 +248,28 @@ async def test_bulk_rate_limit(phase1, queued, users):
     for _ in range(limit):
         r = await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["admin"]))
         assert r.status_code == 200
-    r = await phase1.post(f"{API_PREFIX}/agentic/obligations/bulk-extract", headers=auth_headers(users["manager"]))
+    r = await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["manager"]))
     assert r.status_code == 429
+
+
+async def test_bulk_budgets_are_separate_per_feature(phase1, queued, users):
+    """agentic:bulk:risk and agentic:bulk:obligations are independent budgets."""
+    limit = agentic_route.AGENTIC_BULK_LIMITER._inner.max_requests
+    for _ in range(limit):
+        r = await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["admin"]))
+        assert r.status_code == 200
+    assert (await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["admin"]))).status_code == 429
+    for _ in range(limit):
+        r = await phase1.post(f"{API_PREFIX}/agentic/obligations/bulk-extract", headers=auth_headers(users["admin"]))
+        assert r.status_code == 200
+    r = await phase1.post(f"{API_PREFIX}/agentic/obligations/bulk-extract", headers=auth_headers(users["admin"]))
+    assert r.status_code == 429
+
+
+async def test_single_tasks_are_enqueued_with_the_callers_org(phase1, seeded, queued, alice, org_id):
+    await phase1.post(f"{API_PREFIX}/agentic/risk/assess", json={"contractId": "c-1"}, headers=auth_headers(alice))
+    await phase1.post(f"{API_PREFIX}/agentic/obligations/extract", json={"contractId": "c-1"}, headers=auth_headers(alice))
+    assert [kw["args"][-1] for _, kw in queued] == [org_id, org_id]
 
 
 async def test_forbidden_callers_do_not_consume_bulk_budget(phase1, queued, users):
