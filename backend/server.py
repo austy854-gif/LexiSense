@@ -144,6 +144,10 @@ async def lifespan(app: FastAPI):
                 from utils.migrations import run_migrations
                 await run_migrations(db)
 
+                if AGENTIC_GROUPS:
+                    from routes.agentic import _create_indexes as create_agentic_indexes
+                    await create_agentic_indexes()
+
                 app.state.bootstrap_ok = True
                 logger.info("Startup bootstrap complete", extra={"attempt": attempt})
                 return
@@ -203,7 +207,7 @@ from routes.workflow import router as workflow_router, init_db as init_workflow_
 # NOTE: Agentic subsystem is stripped from launch (see PRODUCT_SCOPE.md).
 # Backend code kept for future re-enable, but router is NOT mounted and DB is NOT initialized here.
 # Also requires Redis + Celery worker + beat which are not provisioned for launch.
-# from routes.agentic import router as agentic_router, init_db as init_agentic_db
+from routes.agentic import build_router as build_agentic_router, enabled_groups as agentic_enabled_groups, init_db as init_agentic_db
 from routes.billing import router as billing_router, init_db as init_billing_db
 from services.audit_service import init_db as init_audit_service_db
 
@@ -219,7 +223,6 @@ init_analytics_db(db)
 init_audit_db(db)
 init_notifications_db(db)
 init_workflow_db(db)
-# init_agentic_db(db)  # Stripped for launch
 init_billing_db(db)
 init_audit_service_db(db)
 
@@ -235,7 +238,15 @@ api_router.include_router(analytics_router)
 api_router.include_router(audit_router)
 api_router.include_router(notifications_router)
 api_router.include_router(workflow_router)
-# api_router.include_router(agentic_router)  # Stripped for launch
+# Agentic routes are feature-flagged (all flags default to off):
+#   AGENTIC_PHASE1_ENABLED  -> risk + obligations
+#   AGENTIC_AGENTS_ENABLED / AGENTIC_INTAKE_ENABLED / AGENTIC_REDLINE_ENABLED
+AGENTIC_GROUPS = agentic_enabled_groups()
+# Only wire the agentic routes to the database when at least one group is enabled.
+if AGENTIC_GROUPS:
+    init_agentic_db(db)
+    api_router.include_router(build_agentic_router(AGENTIC_GROUPS))
+    logger.info("Agentic routes enabled", extra={"groups": sorted(AGENTIC_GROUPS)})
 api_router.include_router(billing_router)
 
 @api_router.get("/")
