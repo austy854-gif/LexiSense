@@ -385,7 +385,7 @@ jobs:
           REACT_APP_BACKEND_URL: ${{ secrets.BACKEND_URL }}
       - name: Deploy to Netlify
         if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' }}
-        uses: nwtgck/actions-netlify@v3.0
+        uses: nwtgck/actions-netlify@v4.0
         with:
           publish-dir: './frontend/build'
           production-branch: main
