@@ -41,14 +41,22 @@ def _env_int(name: str, default: int) -> int:
 AGENTIC_TASK_LIMITER = make_org_limiter(
     _env_int("AGENTIC_TASK_RATE_LIMIT_PER_MINUTE", 30), 60.0, prefix="rl"
 )
-#: Org-wide bulk endpoints: much stricter, per organisation.
+#: Org-wide bulk endpoints: much stricter, per organisation. Risk and
+#: obligations use separate keys (agentic:bulk:risk / agentic:bulk:obligations),
+#: so each has its own budget. Fails CLOSED (503) when Redis is configured but
+#: unreachable, because a per-process fallback would multiply the budget by the
+#: replica count for the most expensive endpoints. Fixed window: up to 2x the
+#: budget is possible across a window boundary (see RedisRateLimiter).
 AGENTIC_BULK_LIMITER = make_org_limiter(
-    _env_int("AGENTIC_BULK_RATE_LIMIT_PER_HOUR", 3), 3600.0, prefix="rl"
+    _env_int("AGENTIC_BULK_RATE_LIMIT_PER_HOUR", 3), 3600.0, prefix="rl", fail_closed=True
 )
 
 _ADMIN_OR_MANAGER = require_role("admin", "manager")
 _task_user = org_rate_limit(AGENTIC_TASK_LIMITER, "agentic:task")
-_bulk_user = org_rate_limit(AGENTIC_BULK_LIMITER, "agentic:bulk", user_dependency=_ADMIN_OR_MANAGER)
+_bulk_risk_user = org_rate_limit(AGENTIC_BULK_LIMITER, "agentic:bulk:risk", user_dependency=_ADMIN_OR_MANAGER)
+_bulk_obligations_user = org_rate_limit(
+    AGENTIC_BULK_LIMITER, "agentic:bulk:obligations", user_dependency=_ADMIN_OR_MANAGER
+)
 
 
 async def _enqueue(task, *args, **kwargs):
@@ -252,11 +260,11 @@ async def assess_risk(
         raise HTTPException(status_code=404, detail="Contract not found")
     
     # Queue assessment
-    task = await _enqueue(assess_contract_risk, request.contractId, request.force_refresh)
+    task = await _enqueue(assess_contract_risk, request.contractId, request.force_refresh, current_user["organizationId"])
     
     # Return latest assessment if exists
     existing = await db.risk_assessments.find_one(
-        {"contractId": request.contractId},
+        {"contractId": request.contractId, "organizationId": current_user["organizationId"]},
         sort=[("assessed_at", -1)]
     )
     
@@ -292,7 +300,7 @@ async def get_risk_assessment(
         raise HTTPException(status_code=404, detail="Contract not found")
     
     assessment = await db.risk_assessments.find_one(
-        {"contractId": contract_id},
+        {"contractId": contract_id, "organizationId": current_user["organizationId"]},
         sort=[("assessed_at", -1)]
     )
     if not assessment:
@@ -347,7 +355,7 @@ async def get_organization_risk_summary(
 
 @router.post("/risk/bulk-assess")
 async def bulk_assess_organization(
-    current_user: dict = Depends(_bulk_user)
+    current_user: dict = Depends(_bulk_risk_user)
 ):
     """Trigger risk assessment for all active contracts in organization."""
     from services.risk_tasks import bulk_assess_organization_contracts
@@ -684,7 +692,7 @@ async def extract_obligations(
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
     
-    task = await _enqueue(extract_obligations_from_contract, request.contractId, request.force_refresh)
+    task = await _enqueue(extract_obligations_from_contract, request.contractId, request.force_refresh, current_user["organizationId"])
     return {"task_id": task.id, "status": "queued"}
 
 
@@ -702,7 +710,7 @@ async def get_contract_obligations(
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
     
-    query = {"contractId": contract_id}
+    query = {"contractId": contract_id, "organizationId": current_user["organizationId"]}
     if status_filter:
         query["status"] = status_filter
     
@@ -818,7 +826,7 @@ async def acknowledge_alert(
 
 @router.post("/obligations/bulk-extract")
 async def bulk_extract_obligations(
-    current_user: dict = Depends(_bulk_user)
+    current_user: dict = Depends(_bulk_obligations_user)
 ):
     """Extract obligations for all signed contracts in organization."""
     from services.obligation_tasks import bulk_extract_obligations
@@ -863,26 +871,10 @@ async def agentic_health():
 # FEATURE-FLAGGED MOUNTING
 # =============================================================================
 
-#: Route groups (first path segment after /agentic) and the flag gating each.
-#: ``/agentic/health`` is deliberately not in any group: it is unauthenticated
-#: and calls Celery's synchronous inspect() on the event loop.
-ROUTE_GROUP_FLAGS = {
-    "risk": "AGENTIC_PHASE1_ENABLED",
-    "obligations": "AGENTIC_PHASE1_ENABLED",
-    "agents": "AGENTIC_AGENTS_ENABLED",
-    "intake": "AGENTIC_INTAKE_ENABLED",
-    "playbooks": "AGENTIC_REDLINE_ENABLED",
-    "redline": "AGENTIC_REDLINE_ENABLED",
-}
-
-
-def _flag(name: str) -> bool:
-    return os.environ.get(name, "false").strip().lower() in ("1", "true", "yes", "on")
-
-
-def enabled_groups(env_flag=_flag) -> set:
-    """Route groups whose flag is on. Every flag defaults to off."""
-    return {group for group, flag in ROUTE_GROUP_FLAGS.items() if env_flag(flag)}
+# Route groups (first path segment after /agentic) and their flags live in
+# utils/feature_flags.py, shared with the Celery worker. /agentic/health is in
+# no group: it is unauthenticated and calls Celery's blocking inspect().
+from utils.feature_flags import ROUTE_GROUP_FLAGS, enabled_groups  # noqa: E402,F401
 
 
 def build_router(groups=None) -> APIRouter:

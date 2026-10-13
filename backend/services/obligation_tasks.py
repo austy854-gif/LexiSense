@@ -27,8 +27,12 @@ def set_database(database):
 
 
 def get_db():
-    """Get the database reference for tasks."""
-    return _db
+    """Database for the current task (ContextVar set per task by
+    services.celery_app), falling back to an explicitly set module database."""
+    from services.task_db import current_db
+
+    db = current_db.get()
+    return db if db is not None else _db
 
 
 # Obligation extraction patterns
@@ -210,9 +214,9 @@ def extract_obligations_from_text(contract_text: str, contract_id: str, organiza
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
-def extract_obligations_from_contract(self, contract_id: str, force_refresh: bool = False):
+def extract_obligations_from_contract(self, contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None):
     """Extract obligations from a signed contract."""
-    if _db is None:
+    if get_db() is None:
         logger.error("Database not initialized for obligation extraction")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -221,7 +225,7 @@ def extract_obligations_from_contract(self, contract_id: str, force_refresh: boo
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_extract_obligations_from_contract_async(contract_id, force_refresh))
+        result = loop.run_until_complete(_extract_obligations_from_contract_async(contract_id, force_refresh, organization_id))
         loop.close()
         return result
     except Exception as e:
@@ -229,7 +233,7 @@ def extract_obligations_from_contract(self, contract_id: str, force_refresh: boo
         raise self.retry(exc=e)
 
 
-async def _extract_obligations_from_contract_async(contract_id: str, force_refresh: bool = False):
+async def _extract_obligations_from_contract_async(contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None):
     """Async implementation of obligation extraction."""
     from models.agentic import ExtractedObligation, ObligationExtractionJob
 
@@ -237,21 +241,26 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
     if db is None:
         return {"status": "error", "message": "Database not available"}
 
+    if not organization_id:
+        return {"status": "error", "message": "organization_id is required"}
+
     try:
-        contract = await db.contracts.find_one({"id": contract_id}, {"_id": 0})
+        contract = await db.contracts.find_one({"id": contract_id, "organizationId": organization_id}, {"_id": 0})
         if not contract:
             return {"status": "error", "message": "Contract not found"}
 
         # Check if already extracted
         if not force_refresh:
-            existing_count = await db.extracted_obligations.count_documents({"contractId": contract_id})
+            existing_count = await db.extracted_obligations.count_documents(
+                {"contractId": contract_id, "organizationId": organization_id}
+            )
             if existing_count > 0:
                 return {"status": "skipped", "message": f"Already has {existing_count} obligations", "count": existing_count}
 
         # Create extraction job record
         job = ObligationExtractionJob(
             contractId=contract_id,
-            organizationId=contract["organizationId"],
+            organizationId=organization_id,
             initiated_by="system",
             status="processing",
             started_at=datetime.now(timezone.utc).isoformat(),
@@ -268,13 +277,13 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
         
         if not contract_text:
             await db.obligation_extraction_jobs.update_one(
-                {"id": job.id},
+                {"id": job.id, "organizationId": organization_id},
                 {"$set": {"status": "failed", "errors": ["No contract text available"], "completed_at": datetime.now(timezone.utc).isoformat()}}
             )
             return {"status": "error", "message": "No contract text available"}
 
         # Extract obligations using pattern matching
-        extracted = extract_obligations_from_text(contract_text, contract_id, contract["organizationId"])
+        extracted = extract_obligations_from_text(contract_text, contract_id, organization_id)
         
         # Save obligations
         obligation_ids = []
@@ -286,7 +295,7 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
         # Update job
         duration_ms = int((datetime.now(timezone.utc) - datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))).total_seconds() * 1000)
         await db.obligation_extraction_jobs.update_one(
-            {"id": job.id},
+            {"id": job.id, "organizationId": organization_id},
             {
                 "$set": {
                     "status": "completed",
@@ -310,7 +319,7 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
         logger.error(f"Obligation extraction error: {e}")
         if 'job' in locals():
             await db.obligation_extraction_jobs.update_one(
-                {"id": job.id},
+                {"id": job.id, "organizationId": organization_id},
                 {"$set": {"status": "failed", "errors": [str(e)], "completed_at": datetime.now(timezone.utc).isoformat()}}
             )
         return {"status": "error", "message": str(e)}
@@ -319,7 +328,7 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
 @shared_task(bind=True, max_retries=1, default_retry_delay=300)
 def send_daily_obligation_alerts(self):
     """Send daily alerts for upcoming/overdue obligations."""
-    if _db is None:
+    if get_db() is None:
         logger.error("Database not initialized for obligation alerts")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -338,8 +347,6 @@ def send_daily_obligation_alerts(self):
 
 async def _send_daily_obligation_alerts_async():
     """Async implementation of daily obligation alerts."""
-    from services.audit_service import send_notification
-    from models.agentic import ObligationAlert, ObligationStatus
 
     db = get_db()
     if db is None:
@@ -350,54 +357,16 @@ async def _send_daily_obligation_alerts_async():
         today = now.date()
         alerts_sent = 0
 
-        # Find pending/in-progress obligations with due dates
-        obligations = await db.extracted_obligations.find({
-            "status": {"$in": ["pending", "in_progress"]},
-            "due_date": {"$ne": None}
-        }).to_list(1000)
+        from services.task_utils import iter_batches, organization_ids
 
-        for obl in obligations:
-            try:
-                due_date = datetime.fromisoformat(obl["due_date"]).date()
-                days_until = (due_date - today).days
-                
-                # Check if alert should be sent
-                alert_days = obl.get("alert_before_days", [30, 14, 7, 1])
-                
-                # Check for upcoming alerts
-                for alert_day in alert_days:
-                    if days_until == alert_day:
-                        # Check if already sent
-                        existing = await db.obligation_alerts.find_one({
-                            "obligationId": obl["id"],
-                            "alert_type": "upcoming",
-                            "days_until_due": alert_day
-                        })
-                        if existing:
-                            continue
-                        
-                        # Send alert
-                        await _send_obligation_alert(obl, "upcoming", alert_day, db)
-                        alerts_sent += 1
-                
-                # Check for overdue
-                if days_until < 0:
-                    existing = await db.obligation_alerts.find_one({
-                        "obligationId": obl["id"],
-                        "alert_type": "overdue"
-                    })
-                    if not existing:
-                        await _send_obligation_alert(obl, "overdue", days_until, db)
-                        alerts_sent += 1
-                        
-                        # Update obligation status
-                        await db.extracted_obligations.update_one(
-                            {"id": obl["id"]},
-                            {"$set": {"status": ObligationStatus.OVERDUE}}
-                        )
-
-            except Exception as e:
-                logger.error(f"Error processing obligation {obl.get('id')}: {e}")
+        # Per organisation, paginated: pending/in-progress obligations with due dates.
+        for org_id in await organization_ids(db):
+            async for obligations in iter_batches(
+                db.extracted_obligations,
+                {"organizationId": org_id, "status": {"$in": ["pending", "in_progress"]}, "due_date": {"$ne": None}},
+            ):
+                for obl in obligations:
+                    alerts_sent += await _process_obligation_alerts(obl, org_id, today, db)
 
         logger.info(f"Daily obligation alerts sent: {alerts_sent}")
         return {"status": "success", "alerts_sent": alerts_sent}
@@ -405,6 +374,59 @@ async def _send_daily_obligation_alerts_async():
     except Exception as e:
         logger.error(f"Daily obligation alerts error: {e}")
         return {"status": "error", "message": str(e)}
+
+
+
+async def _process_obligation_alerts(obl: Dict, org_id: str, today, db) -> int:
+    """Send due/overdue alerts for one obligation; all queries scoped to ``org_id``."""
+    from models.agentic import ObligationStatus
+
+    alerts_sent = 0
+    try:
+        due_date = datetime.fromisoformat(obl["due_date"]).date()
+        days_until = (due_date - today).days
+
+        # Check if alert should be sent
+        alert_days = obl.get("alert_before_days", [30, 14, 7, 1])
+
+        # Check for upcoming alerts
+        for alert_day in alert_days:
+            if days_until == alert_day:
+                # Check if already sent
+                existing = await db.obligation_alerts.find_one({
+                    "organizationId": org_id,
+                    "obligationId": obl["id"],
+                    "alert_type": "upcoming",
+                    "days_until_due": alert_day
+                })
+                if existing:
+                    continue
+
+                # Send alert
+                await _send_obligation_alert(obl, "upcoming", alert_day, db)
+                alerts_sent += 1
+
+        # Check for overdue
+        if days_until < 0:
+            existing = await db.obligation_alerts.find_one({
+                "organizationId": org_id,
+                "obligationId": obl["id"],
+                "alert_type": "overdue"
+            })
+            if not existing:
+                await _send_obligation_alert(obl, "overdue", days_until, db)
+                alerts_sent += 1
+
+                # Update obligation status
+                await db.extracted_obligations.update_one(
+                    {"id": obl["id"], "organizationId": org_id},
+                    {"$set": {"status": ObligationStatus.OVERDUE}}
+                )
+
+    except Exception as e:
+        logger.error(f"Error processing obligation {obl.get('id')}: {e}")
+
+    return alerts_sent
 
 
 async def _send_obligation_alert(obligation: Dict, alert_type: str, days_until: int, db):
@@ -474,7 +496,7 @@ async def _send_obligation_alert(obligation: Dict, alert_type: str, days_until: 
 @shared_task(bind=True, max_retries=1)
 def cleanup_completed_obligations(self):
     """Clean up old completed/waived obligations."""
-    if _db is None:
+    if get_db() is None:
         logger.error("Database not initialized for obligation cleanup")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -501,27 +523,29 @@ async def _cleanup_completed_obligations_async():
         # Archive obligations completed more than 1 year ago
         cutoff = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
         
-        result = await db.extracted_obligations.update_many(
-            {
-                "status": {"$in": ["completed", "waived"]},
-                "completed_at": {"$lt": cutoff}
-            },
-            {"$set": {"archived": True, "archived_at": datetime.now(timezone.utc).isoformat()}}
-        )
-        
-        # Also clean up old alerts
+        from services.task_utils import organization_ids
+
         alert_cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
-        alert_result = await db.obligation_alerts.delete_many({
-            "sent_at": {"$lt": alert_cutoff},
-            "acknowledged": True
-        })
-        
-        logger.info(f"Archived {result.modified_count} obligations, deleted {alert_result.deleted_count} old alerts")
-        return {
-            "status": "success",
-            "archived": result.modified_count,
-            "alerts_deleted": alert_result.deleted_count
-        }
+        archived = deleted = 0
+        # Per organisation so every write carries a tenant filter.
+        for org_id in await organization_ids(db):
+            result = await db.extracted_obligations.update_many(
+                {
+                    "organizationId": org_id,
+                    "status": {"$in": ["completed", "waived"]},
+                    "completed_at": {"$lt": cutoff},
+                },
+                {"$set": {"archived": True, "archived_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            # Only ACKNOWLEDGED alerts older than 90 days are deleted.
+            alert_result = await db.obligation_alerts.delete_many(
+                {"organizationId": org_id, "sent_at": {"$lt": alert_cutoff}, "acknowledged": True}
+            )
+            archived += result.modified_count
+            deleted += alert_result.deleted_count
+
+        logger.info(f"Archived {archived} obligations, deleted {deleted} old alerts")
+        return {"status": "success", "archived": archived, "alerts_deleted": deleted}
 
     except Exception as e:
         logger.error(f"Obligation cleanup error: {e}")
@@ -531,7 +555,7 @@ async def _cleanup_completed_obligations_async():
 @shared_task(bind=True, max_retries=1)
 def bulk_extract_obligations(self, organization_id: str):
     """Extract obligations for all signed contracts in an organization."""
-    if _db is None:
+    if get_db() is None:
         logger.error("Database not initialized for bulk obligation extraction")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -556,18 +580,22 @@ async def _bulk_extract_obligations_async(organization_id: str):
 
     try:
         # Find active/expired contracts without obligations
-        contracts = await db.contracts.find(
-            {"organizationId": organization_id, "status": {"$in": ["active", "expired"]}},
-            {"_id": 0, "id": 1}
-        ).to_list(200)
-        
+        from services.task_utils import iter_batches
+
         queued = 0
-        for contract in contracts:
-            # Check if already has obligations
-            existing = await db.extracted_obligations.count_documents({"contractId": contract["id"]})
-            if existing == 0:
-                extract_obligations_from_contract.delay(contract["id"], force_refresh=False)
-                queued += 1
+        async for contracts in iter_batches(
+            db.contracts,
+            {"organizationId": organization_id, "status": {"$in": ["active", "expired"]}},
+            {"_id": 0, "id": 1},
+        ):
+            for contract in contracts:
+                # Check if already has obligations
+                existing = await db.extracted_obligations.count_documents(
+                    {"contractId": contract["id"], "organizationId": organization_id}
+                )
+                if existing == 0:
+                    extract_obligations_from_contract.delay(contract["id"], False, organization_id)
+                    queued += 1
 
         logger.info(f"Queued {queued} contracts for obligation extraction")
         return {"status": "success", "queued": queued}

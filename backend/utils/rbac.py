@@ -189,24 +189,75 @@ INVITE_RATE_LIMITER = SlidingWindowRateLimiter(
 # ---------------------------------------------------------------------------
 # Per-organisation limits for expensive/background-work endpoints
 # ---------------------------------------------------------------------------
+class RateLimiterUnavailable(Exception):
+    """Raised by a fail-closed limiter when its shared store is unreachable."""
+
+
 class RedisRateLimiter:
     """Fixed-window limiter shared across replicas via Redis (INCR + EXPIRE).
 
-    Falls back to an in-process :class:`SlidingWindowRateLimiter` with the same
-    budget if Redis is unreachable, so a Redis outage degrades to per-process
-    limiting instead of either failing open or blocking every request.
+    Window semantics: counts reset at fixed wall-clock boundaries
+    (``floor(now / window)``). A caller can therefore spend the full budget at
+    the end of one window and again at the start of the next, i.e. up to
+    **2x the budget within a short span straddling a boundary**. That is an
+    accepted trade-off for a single INCR per request; budgets are sized with it
+    in mind.
+
+    Redis failure handling:
+
+    * connect and socket timeouts are below one second, so a dead Redis cannot
+      stall a request for long;
+    * a circuit breaker: after any Redis error the limiter skips Redis for
+      ``breaker_seconds`` (default 30s) instead of paying the timeout on
+      every request;
+    * while Redis is skipped/unreachable, ``fail_closed=False`` limiters fall
+      back to an in-process sliding window with the same budget, while
+      ``fail_closed=True`` limiters (bulk jobs) raise
+      :class:`RateLimiterUnavailable`, which the dependency maps to 503.
     """
 
-    def __init__(self, redis_url: str, max_requests: int, window_seconds: float = 60.0, prefix: str = "rl") -> None:
+    def __init__(
+        self,
+        redis_url: str,
+        max_requests: int,
+        window_seconds: float = 60.0,
+        prefix: str = "rl",
+        *,
+        fail_closed: bool = False,
+        breaker_seconds: float = 30.0,
+        socket_timeout: float = 0.5,
+        connect_timeout: float = 0.5,
+        clock=time.monotonic,
+    ) -> None:
         import redis.asyncio as aioredis
 
         self.max_requests = max_requests
         self.window_seconds = float(window_seconds)
         self.prefix = prefix
-        self._redis = aioredis.from_url(redis_url, socket_timeout=2, socket_connect_timeout=2)
+        self.fail_closed = fail_closed
+        self.breaker_seconds = float(breaker_seconds)
+        self._clock = clock
+        self._open_until = 0.0
+        self._redis = aioredis.from_url(
+            redis_url,
+            socket_timeout=socket_timeout,
+            socket_connect_timeout=connect_timeout,
+            retry_on_timeout=False,
+        )
         self._fallback = SlidingWindowRateLimiter(max_requests, window_seconds)
 
+    @property
+    def breaker_open(self) -> bool:
+        return self._clock() < self._open_until
+
+    def _degraded(self, key: str) -> Tuple[bool, float]:
+        if self.fail_closed:
+            raise RateLimiterUnavailable("rate limiter store unavailable")
+        return self._fallback.check(key)
+
     async def acheck(self, key: str) -> Tuple[bool, float]:
+        if self.breaker_open:
+            return self._degraded(key)
         window = int(self.window_seconds)
         bucket = int(time.time() // window)
         rkey = f"{self.prefix}:{key}:{bucket}"
@@ -215,15 +266,20 @@ class RedisRateLimiter:
             pipe.incr(rkey)
             pipe.expire(rkey, window + 1)
             count, _ = await pipe.execute()
-        except Exception as exc:  # pragma: no cover - exercised only with a broken Redis
-            logger.warning("Redis rate limiter unavailable, using in-process fallback: %s", exc)
-            return self._fallback.check(key)
+        except Exception as exc:
+            self._open_until = self._clock() + self.breaker_seconds
+            logger.warning(
+                "Redis rate limiter unavailable; skipping Redis for %ss (%s): %s",
+                self.breaker_seconds, "fail closed" if self.fail_closed else "in-process fallback", exc,
+            )
+            return self._degraded(key)
         if count > self.max_requests:
             return False, float(window - (time.time() % window))
         return True, 0.0
 
     def reset(self) -> None:
         self._fallback.reset()
+        self._open_until = 0.0
 
 
 class _InMemoryAsyncLimiter:
@@ -239,13 +295,17 @@ class _InMemoryAsyncLimiter:
         self._inner.reset()
 
 
-def make_org_limiter(max_requests: int, window_seconds: float, prefix: str):
-    """Redis-backed when REDIS_URL/CELERY_BROKER_URL points at Redis, else in-memory."""
+def make_org_limiter(max_requests: int, window_seconds: float, prefix: str, *, fail_closed: bool = False):
+    """Redis-backed when RATE_LIMIT_REDIS_URL/REDIS_URL points at Redis, else in-memory.
+
+    ``fail_closed`` only applies when Redis is configured: with no Redis URL
+    the limiter is per-process by design and never fails closed.
+    """
     import os
 
     url = os.environ.get("RATE_LIMIT_REDIS_URL") or os.environ.get("REDIS_URL")
     if url and url.startswith(("redis://", "rediss://")):
-        return RedisRateLimiter(url, max_requests, window_seconds, prefix=prefix)
+        return RedisRateLimiter(url, max_requests, window_seconds, prefix=prefix, fail_closed=fail_closed)
     return _InMemoryAsyncLimiter(max_requests, window_seconds)
 
 
@@ -260,7 +320,14 @@ def org_rate_limit(limiter, scope: str, user_dependency=None):
     # Resolve auth/role FIRST so unauthorised callers cannot burn the org budget.
     async def _dependency(current_user: dict = Depends(user_dependency or get_current_user)):
         org = current_user.get("organizationId") or "unknown"
-        allowed, retry_after = await limiter.acheck(f"{scope}:{org}")
+        try:
+            allowed, retry_after = await limiter.acheck(f"{scope}:{org}")
+        except RateLimiterUnavailable:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Rate limiting is temporarily unavailable. Please try again shortly.",
+                headers={"Retry-After": "30"},
+            )
         if not allowed:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,

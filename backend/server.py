@@ -223,7 +223,6 @@ init_analytics_db(db)
 init_audit_db(db)
 init_notifications_db(db)
 init_workflow_db(db)
-init_agentic_db(db)
 init_billing_db(db)
 init_audit_service_db(db)
 
@@ -243,7 +242,9 @@ api_router.include_router(workflow_router)
 #   AGENTIC_PHASE1_ENABLED  -> risk + obligations
 #   AGENTIC_AGENTS_ENABLED / AGENTIC_INTAKE_ENABLED / AGENTIC_REDLINE_ENABLED
 AGENTIC_GROUPS = agentic_enabled_groups()
+# Only wire the agentic routes to the database when at least one group is enabled.
 if AGENTIC_GROUPS:
+    init_agentic_db(db)
     api_router.include_router(build_agentic_router(AGENTIC_GROUPS))
     logger.info("Agentic routes enabled", extra={"groups": sorted(AGENTIC_GROUPS)})
 api_router.include_router(billing_router)

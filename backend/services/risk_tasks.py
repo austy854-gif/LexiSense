@@ -22,8 +22,12 @@ def set_database(database):
 
 
 def get_db():
-    """Get the database reference for tasks."""
-    return _db
+    """Database for the current task (ContextVar set per task by
+    services.celery_app), falling back to an explicitly set module database."""
+    from services.task_db import current_db
+
+    db = current_db.get()
+    return db if db is not None else _db
 
 
 # Risk scoring weights by category
@@ -257,9 +261,9 @@ def generate_recommendations(factors: List[Dict[str, Any]]) -> tuple:
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
-def assess_contract_risk(self, contract_id: str, force_refresh: bool = False):
+def assess_contract_risk(self, contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None):
     """Assess risk for a single contract."""
-    if _db is None:
+    if get_db() is None:
         logger.error("Database not initialized for risk assessment")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -268,7 +272,7 @@ def assess_contract_risk(self, contract_id: str, force_refresh: bool = False):
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_assess_contract_risk_async(contract_id, force_refresh))
+        result = loop.run_until_complete(_assess_contract_risk_async(contract_id, force_refresh, organization_id))
         loop.close()
         return result
     except Exception as e:
@@ -276,23 +280,26 @@ def assess_contract_risk(self, contract_id: str, force_refresh: bool = False):
         raise self.retry(exc=e)
 
 
-async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = False):
-    """Async implementation of risk assessment."""
+async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None):
+    """Async implementation of risk assessment. Every query is tenant-scoped."""
     from models.agentic import RiskAssessment, RiskFactor, RiskScoreBreakdown
 
     db = get_db()
     if db is None:
         return {"status": "error", "message": "Database not available"}
 
+    if not organization_id:
+        return {"status": "error", "message": "organization_id is required"}
+
     try:
-        contract = await db.contracts.find_one({"id": contract_id}, {"_id": 0})
+        contract = await db.contracts.find_one({"id": contract_id, "organizationId": organization_id}, {"_id": 0})
         if not contract:
             return {"status": "error", "message": "Contract not found"}
 
         # Check if assessment already exists and is recent
         if not force_refresh:
             existing = await db.risk_assessments.find_one(
-                {"contractId": contract_id},
+                {"contractId": contract_id, "organizationId": organization_id},
                 sort=[("assessed_at", -1)]
             )
             if existing:
@@ -327,7 +334,7 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
         
         # Get previous score for trending
         previous = await db.risk_assessments.find_one(
-            {"contractId": contract_id},
+            {"contractId": contract_id, "organizationId": organization_id},
             sort=[("assessed_at", -1)],
             skip=1
         )
@@ -346,7 +353,7 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
         # Create assessment
         assessment = RiskAssessment(
             contractId=contract_id,
-            organizationId=contract["organizationId"],
+            organizationId=organization_id,
             overall_score=overall_score,
             risk_level=risk_level,
             breakdown=breakdown,
@@ -362,7 +369,7 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
         
         # Update contract with risk level
         await db.contracts.update_one(
-            {"id": contract_id},
+            {"id": contract_id, "organizationId": organization_id},
             {"$set": {"riskLevel": risk_level, "updatedAt": datetime.now(timezone.utc).isoformat()}}
         )
 
@@ -383,7 +390,7 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
 @shared_task(bind=True, max_retries=1, default_retry_delay=300)
 def refresh_stale_risk_assessments(self):
     """Refresh risk assessments older than 7 days for active contracts."""
-    if _db is None:
+    if get_db() is None:
         logger.error("Database not initialized for risk refresh")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -406,28 +413,41 @@ async def _refresh_stale_risk_assessments_async():
     if db is None:
         return {"status": "error", "message": "Database not available"}
 
+    from services.task_utils import BATCH_SIZE, organization_ids
+
     try:
-        # Find contracts with assessments older than 7 days
+        # Per organisation: contracts whose latest assessment is older than 7 days.
         cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        
-        # Get contracts that have old assessments
-        pipeline = [
-            {"$match": {"assessed_at": {"$lt": cutoff}}},
-            {"$sort": {"contractId": 1, "assessed_at": -1}},
-            {"$group": {"_id": "$contractId", "latest": {"$first": "$$ROOT"}}},
-            {"$project": {"contractId": "$_id", "assessed_at": "$latest.assessed_at"}}
-        ]
-        
-        stale_assessments = await db.risk_assessments.aggregate(pipeline).to_list(200)
-        
         refreshed = 0
-        for item in stale_assessments:
-            contract_id = item["contractId"]
-            # Check if contract is still active
-            contract = await db.contracts.find_one({"id": contract_id, "status": {"$ne": "expired"}})
-            if contract:
-                assess_contract_risk.delay(contract_id, force_refresh=True)
-                refreshed += 1
+        for org_id in await organization_ids(db):
+            last_contract_id = None
+            while True:
+                match = {"organizationId": org_id}
+                if last_contract_id is not None:
+                    match["contractId"] = {"$gt": last_contract_id}
+                pipeline = [
+                    {"$match": match},
+                    {"$sort": {"contractId": 1, "assessed_at": -1}},
+                    {"$group": {"_id": "$contractId", "latest": {"$first": "$assessed_at"}}},
+                    {"$sort": {"_id": 1}},
+                    {"$limit": BATCH_SIZE},
+                ]
+                page = await db.risk_assessments.aggregate(pipeline).to_list(BATCH_SIZE)
+                if not page:
+                    break
+                for item in page:
+                    if item["latest"] >= cutoff:
+                        continue
+                    contract = await db.contracts.find_one(
+                        {"id": item["_id"], "organizationId": org_id, "status": {"$ne": "expired"}},
+                        {"_id": 0, "id": 1},
+                    )
+                    if contract:
+                        assess_contract_risk.delay(item["_id"], True, org_id)
+                        refreshed += 1
+                if len(page) < BATCH_SIZE:
+                    break
+                last_contract_id = page[-1]["_id"]
 
         logger.info(f"Queued {refreshed} stale risk assessments for refresh")
         return {"status": "success", "refreshed": refreshed}
@@ -440,7 +460,7 @@ async def _refresh_stale_risk_assessments_async():
 @shared_task(bind=True, max_retries=1)
 def bulk_assess_organization_contracts(self, organization_id: str):
     """Assess risk for all contracts in an organization."""
-    if _db is None:
+    if get_db() is None:
         logger.error("Database not initialized for bulk risk assessment")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -464,15 +484,17 @@ async def _bulk_assess_organization_contracts_async(organization_id: str):
         return {"status": "error", "message": "Database not available"}
 
     try:
-        contracts = await db.contracts.find(
-            {"organizationId": organization_id, "status": {"$ne": "expired"}},
-            {"_id": 0, "id": 1}
-        ).to_list(500)
-        
+        from services.task_utils import iter_batches
+
         queued = 0
-        for contract in contracts:
-            assess_contract_risk.delay(contract["id"], force_refresh=False)
-            queued += 1
+        async for batch in iter_batches(
+            db.contracts,
+            {"organizationId": organization_id, "status": {"$ne": "expired"}},
+            {"_id": 0, "id": 1},
+        ):
+            for contract in batch:
+                assess_contract_risk.delay(contract["id"], False, organization_id)
+                queued += 1
 
         logger.info(f"Queued {queued} contracts for risk assessment")
         return {"status": "success", "queued": queued}
