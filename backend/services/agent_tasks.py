@@ -55,7 +55,7 @@ def cron_to_next_run(cron_expr: str, from_time: datetime = None) -> Optional[dat
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def check_due_agents(self):
     """Check for agents that are due to run and queue their execution."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for agent task")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -75,7 +75,7 @@ def check_due_agents(self):
 async def _check_due_agents_async():
     """Async implementation of due agent check."""
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     now = datetime.now(timezone.utc)
@@ -117,7 +117,7 @@ async def _check_due_agents_async():
 @shared_task(bind=True, max_retries=2, default_retry_delay=120)
 def execute_contract_agent(self, agent_id: str):
     """Execute a single contract agent."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for agent execution")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -141,7 +141,7 @@ async def _execute_contract_agent_async(agent_id: str):
     from models.agentic import AgentStatus, AgentExecutionLog
 
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     start_time = datetime.now(timezone.utc)

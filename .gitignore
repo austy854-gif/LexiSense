@@ -91,3 +91,4 @@ credentials.json
 *.pem
 *.key
 .credentials
+celerybeat-schedule*

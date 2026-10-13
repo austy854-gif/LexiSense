@@ -259,7 +259,7 @@ def generate_recommendations(factors: List[Dict[str, Any]]) -> tuple:
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def assess_contract_risk(self, contract_id: str, force_refresh: bool = False):
     """Assess risk for a single contract."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for risk assessment")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -281,7 +281,7 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
     from models.agentic import RiskAssessment, RiskFactor, RiskScoreBreakdown
 
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:
@@ -383,7 +383,7 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
 @shared_task(bind=True, max_retries=1, default_retry_delay=300)
 def refresh_stale_risk_assessments(self):
     """Refresh risk assessments older than 7 days for active contracts."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for risk refresh")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -403,7 +403,7 @@ def refresh_stale_risk_assessments(self):
 async def _refresh_stale_risk_assessments_async():
     """Async implementation of stale risk refresh."""
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:
@@ -440,7 +440,7 @@ async def _refresh_stale_risk_assessments_async():
 @shared_task(bind=True, max_retries=1)
 def bulk_assess_organization_contracts(self, organization_id: str):
     """Assess risk for all contracts in an organization."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for bulk risk assessment")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -460,7 +460,7 @@ def bulk_assess_organization_contracts(self, organization_id: str):
 async def _bulk_assess_organization_contracts_async(organization_id: str):
     """Async implementation of bulk risk assessment."""
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:

@@ -203,7 +203,7 @@ def match_clause_to_rule(clause_text: str, rule) -> Optional[Dict[str, Any]]:
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def analyze_contract_with_playbook(self, contract_id: str, playbook_id: str, auto_apply: bool = False):
     """Analyze a contract against a legal playbook."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for playbook analysis")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -225,7 +225,7 @@ async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: s
     from models.agentic import RedlineSession, RedlineSuggestion, PlaybookClauseRule
 
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:
@@ -335,7 +335,7 @@ async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: s
 @shared_task(bind=True, max_retries=1, default_retry_delay=60)
 def apply_redlines(self, session_id: str, suggestion_ids: List[str]):
     """Apply accepted redlines to generate redlined document."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for redline application")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -355,7 +355,7 @@ def apply_redlines(self, session_id: str, suggestion_ids: List[str]):
 async def _apply_redlines_async(session_id: str, suggestion_ids: List[str]):
     """Async implementation of redline application."""
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:
@@ -409,7 +409,7 @@ async def _apply_redlines_async(session_id: str, suggestion_ids: List[str]):
 @shared_task(bind=True, max_retries=1)
 def bulk_analyze_with_playbook(self, organization_id: str, playbook_id: str):
     """Analyze all contracts in org against a playbook."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for bulk playbook analysis")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -429,7 +429,7 @@ def bulk_analyze_with_playbook(self, organization_id: str, playbook_id: str):
 async def _bulk_analyze_with_playbook_async(organization_id: str, playbook_id: str):
     """Async implementation of bulk playbook analysis."""
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:

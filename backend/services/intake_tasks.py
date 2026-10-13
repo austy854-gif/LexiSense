@@ -81,7 +81,7 @@ def extract_text_from_docx(docx_content: bytes) -> str:
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def process_resend_webhook(self, payload: Dict[str, Any]):
     """Process incoming Resend webhook for contract intake."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for intake processing")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -105,7 +105,7 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
     from services.storage_service import upload_file_to_s3
 
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:
@@ -458,7 +458,7 @@ async def _create_contract_from_intake(intake: ContractIntake, classification: D
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def retry_failed_intakes(self):
     """Retry failed intake processing."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for intake retry")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -478,7 +478,7 @@ def retry_failed_intakes(self):
 async def _retry_failed_intakes_async():
     """Async implementation of failed intake retry."""
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:

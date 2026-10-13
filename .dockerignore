@@ -19,3 +19,4 @@ backend/static
 frontend/coverage
 *.md
 docker-compose*.yml
+**/celerybeat-schedule*

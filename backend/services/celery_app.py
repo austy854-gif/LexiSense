@@ -4,7 +4,9 @@ Distributed task queue for background AI processing.
 """
 import logging
 import os
+import ssl
 from celery import Celery, Task
+from celery.signals import task_prerun, task_postrun
 from celery.schedules import crontab
 from kombu import Queue
 
@@ -136,6 +138,67 @@ celery_app.conf.update(
     task_retry_backoff_max=600,
     task_retry_jitter=True,
 )
+
+# Managed Redis (e.g. Upstash) uses rediss:// URLs. Celery refuses those
+# unless ssl_cert_reqs is set, so default to verified TLS when the URL does
+# not carry the parameter itself.
+_REDIS_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+if CELERY_BROKER_URL and CELERY_BROKER_URL.startswith("rediss://") and "ssl_cert_reqs" not in CELERY_BROKER_URL:
+    celery_app.conf.broker_use_ssl = _REDIS_SSL
+if CELERY_RESULT_BACKEND and CELERY_RESULT_BACKEND.startswith("rediss://") and "ssl_cert_reqs" not in CELERY_RESULT_BACKEND:
+    celery_app.conf.redis_backend_use_ssl = _REDIS_SSL
+
+
+# ---------------------------------------------------------------------------
+# Worker-side database wiring. The task modules keep a module-level ``_db``
+# that was only ever set by the (stripped) API router, so in a standalone
+# worker every task returned "Database not initialized". Each task runs its
+# own fresh asyncio loop, and a Motor client binds to the loop it is first
+# used on, so a short-lived client is created per task and closed afterwards.
+# ---------------------------------------------------------------------------
+_TASK_MODULES = (
+    "services.agent_tasks",
+    "services.risk_tasks",
+    "services.playbook_tasks",
+    "services.obligation_tasks",
+    "services.intake_tasks",
+)
+_task_mongo_clients = {}
+
+
+def _db_name_from(url: str) -> str:
+    name = os.environ.get("DB_NAME")
+    if name:
+        return name
+    try:
+        from pymongo.uri_parser import parse_uri
+        return parse_uri(url).get("database") or "lexisense"
+    except Exception:
+        return "lexisense"
+
+
+@task_prerun.connect
+def _wire_task_database(task_id=None, **_):
+    url = os.environ.get("DATABASE_URL") or os.environ.get("MONGO_URL")
+    if not url:
+        logger.error("DATABASE_URL/MONGO_URL not set - tasks cannot reach the database")
+        return
+    import importlib
+    from motor.motor_asyncio import AsyncIOMotorClient
+
+    client = AsyncIOMotorClient(url, connect=False, serverSelectionTimeoutMS=5_000, appname="lexisense-worker")
+    db = client[_db_name_from(url)]
+    for mod in _TASK_MODULES:
+        importlib.import_module(mod).set_database(db)
+    _task_mongo_clients[task_id] = client
+
+
+@task_postrun.connect
+def _close_task_database(task_id=None, **_):
+    client = _task_mongo_clients.pop(task_id, None)
+    if client is not None:
+        client.close()
+
 
 # Auto-discover tasks
 celery_app.autodiscover_tasks([
