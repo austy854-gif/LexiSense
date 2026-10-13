@@ -18,11 +18,14 @@ Roles (ordered least -> most privileged)::
 """
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict, deque
 from typing import Deque, Dict, Optional, Tuple
 
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
+
+logger = logging.getLogger(__name__)
 
 ROLE_VIEWER = "viewer"
 ROLE_USER = "user"
@@ -181,3 +184,89 @@ AUTH_RATE_LIMITER = SlidingWindowRateLimiter(
 INVITE_RATE_LIMITER = SlidingWindowRateLimiter(
     max_requests=10, window_seconds=60.0, max_keys=5_000
 )
+
+
+# ---------------------------------------------------------------------------
+# Per-organisation limits for expensive/background-work endpoints
+# ---------------------------------------------------------------------------
+class RedisRateLimiter:
+    """Fixed-window limiter shared across replicas via Redis (INCR + EXPIRE).
+
+    Falls back to an in-process :class:`SlidingWindowRateLimiter` with the same
+    budget if Redis is unreachable, so a Redis outage degrades to per-process
+    limiting instead of either failing open or blocking every request.
+    """
+
+    def __init__(self, redis_url: str, max_requests: int, window_seconds: float = 60.0, prefix: str = "rl") -> None:
+        import redis.asyncio as aioredis
+
+        self.max_requests = max_requests
+        self.window_seconds = float(window_seconds)
+        self.prefix = prefix
+        self._redis = aioredis.from_url(redis_url, socket_timeout=2, socket_connect_timeout=2)
+        self._fallback = SlidingWindowRateLimiter(max_requests, window_seconds)
+
+    async def acheck(self, key: str) -> Tuple[bool, float]:
+        window = int(self.window_seconds)
+        bucket = int(time.time() // window)
+        rkey = f"{self.prefix}:{key}:{bucket}"
+        try:
+            pipe = self._redis.pipeline()
+            pipe.incr(rkey)
+            pipe.expire(rkey, window + 1)
+            count, _ = await pipe.execute()
+        except Exception as exc:  # pragma: no cover - exercised only with a broken Redis
+            logger.warning("Redis rate limiter unavailable, using in-process fallback: %s", exc)
+            return self._fallback.check(key)
+        if count > self.max_requests:
+            return False, float(window - (time.time() % window))
+        return True, 0.0
+
+    def reset(self) -> None:
+        self._fallback.reset()
+
+
+class _InMemoryAsyncLimiter:
+    """Async facade over :class:`SlidingWindowRateLimiter`."""
+
+    def __init__(self, max_requests: int, window_seconds: float = 60.0) -> None:
+        self._inner = SlidingWindowRateLimiter(max_requests, window_seconds)
+
+    async def acheck(self, key: str) -> Tuple[bool, float]:
+        return self._inner.check(key)
+
+    def reset(self) -> None:
+        self._inner.reset()
+
+
+def make_org_limiter(max_requests: int, window_seconds: float, prefix: str):
+    """Redis-backed when REDIS_URL/CELERY_BROKER_URL points at Redis, else in-memory."""
+    import os
+
+    url = os.environ.get("RATE_LIMIT_REDIS_URL") or os.environ.get("REDIS_URL")
+    if url and url.startswith(("redis://", "rediss://")):
+        return RedisRateLimiter(url, max_requests, window_seconds, prefix=prefix)
+    return _InMemoryAsyncLimiter(max_requests, window_seconds)
+
+
+def org_rate_limit(limiter, scope: str, user_dependency=None):
+    """FastAPI dependency limiting ``scope`` per *organisation* (not per IP).
+
+    Must run after authentication; it reads ``organizationId`` from the
+    resolved current user.
+    """
+    from utils.auth import get_current_user  # local import: avoid a cycle
+
+    # Resolve auth/role FIRST so unauthorised callers cannot burn the org budget.
+    async def _dependency(current_user: dict = Depends(user_dependency or get_current_user)):
+        org = current_user.get("organizationId") or "unknown"
+        allowed, retry_after = await limiter.acheck(f"{scope}:{org}")
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for your organization. Please try again later.",
+                headers={"Retry-After": str(int(retry_after) + 1)},
+            )
+        return current_user
+
+    return _dependency

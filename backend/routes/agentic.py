@@ -19,10 +19,59 @@ from models.agentic import (
     COLLECTIONS, RECOMMENDED_INDEXES,
 )
 from utils.auth import get_current_user, require_role
+from utils.rbac import make_org_limiter, org_rate_limit
+from fastapi.concurrency import run_in_threadpool
+# Importing the Celery app makes it the current app, so @shared_task .delay()
+# uses the configured Redis broker instead of Celery's amqp://localhost default.
+import services.celery_app  # noqa: F401,E402
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agentic", tags=["Agentic AI"])
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+#: Single-contract task endpoints (assess / extract): per organisation.
+AGENTIC_TASK_LIMITER = make_org_limiter(
+    _env_int("AGENTIC_TASK_RATE_LIMIT_PER_MINUTE", 30), 60.0, prefix="rl"
+)
+#: Org-wide bulk endpoints: much stricter, per organisation.
+AGENTIC_BULK_LIMITER = make_org_limiter(
+    _env_int("AGENTIC_BULK_RATE_LIMIT_PER_HOUR", 3), 3600.0, prefix="rl"
+)
+
+_ADMIN_OR_MANAGER = require_role("admin", "manager")
+_task_user = org_rate_limit(AGENTIC_TASK_LIMITER, "agentic:task")
+_bulk_user = org_rate_limit(AGENTIC_BULK_LIMITER, "agentic:bulk", user_dependency=_ADMIN_OR_MANAGER)
+
+
+async def _enqueue(task, *args, **kwargs):
+    """Queue a Celery task without blocking the event loop.
+
+    Returns a clean 503 when no broker is configured or the broker is down,
+    instead of an unhandled 500 (or a hang on Celery's amqp://localhost default).
+    """
+    from services.celery_app import CELERY_BROKER_URL
+
+    if not CELERY_BROKER_URL:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Background processing is not configured (set REDIS_URL or CELERY_BROKER_URL).",
+        )
+    try:
+        return await run_in_threadpool(task.apply_async, args=args, kwargs=kwargs or None, retry=False)
+    except Exception as exc:
+        logger.exception("Failed to enqueue %s", getattr(task, "name", task))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Background processing is temporarily unavailable. Please retry later.",
+        ) from exc
 
 db = None
 
@@ -32,14 +81,8 @@ def init_db(database):
     global db
     db = database
     
-    # Create indexes for new collections
-    import asyncio
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        # Schedule index creation
-        asyncio.create_task(_create_indexes())
-    else:
-        loop.run_until_complete(_create_indexes())
+    # Index creation runs from the app lifespan bootstrap (server.py); running
+    # an event loop here at import time bound Motor to the wrong loop.
 
 
 async def _create_indexes():
@@ -162,7 +205,7 @@ async def trigger_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     
     # Queue execution
-    task = execute_contract_agent.delay(agent_id)
+    task = await _enqueue(execute_contract_agent, agent_id)
     
     return AgentRunResponse(
         agentId=agent_id,
@@ -195,7 +238,7 @@ async def delete_agent(
 @router.post("/risk/assess", response_model=RiskAssessmentResponse)
 async def assess_risk(
     request: TriggerRiskAssessmentRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(_task_user)
 ):
     """Trigger risk assessment for a contract."""
     from services.risk_tasks import assess_contract_risk
@@ -209,7 +252,7 @@ async def assess_risk(
         raise HTTPException(status_code=404, detail="Contract not found")
     
     # Queue assessment
-    task = assess_contract_risk.delay(request.contractId, request.force_refresh)
+    task = await _enqueue(assess_contract_risk, request.contractId, request.force_refresh)
     
     # Return latest assessment if exists
     existing = await db.risk_assessments.find_one(
@@ -304,12 +347,12 @@ async def get_organization_risk_summary(
 
 @router.post("/risk/bulk-assess")
 async def bulk_assess_organization(
-    current_user: dict = Depends(require_role("admin", "manager"))
+    current_user: dict = Depends(_bulk_user)
 ):
     """Trigger risk assessment for all active contracts in organization."""
     from services.risk_tasks import bulk_assess_organization_contracts
     
-    task = bulk_assess_organization_contracts.delay(current_user["organizationId"])
+    task = await _enqueue(bulk_assess_organization_contracts, current_user["organizationId"])
     return {"task_id": task.id, "status": "queued"}
 
 
@@ -464,7 +507,7 @@ async def analyze_with_playbook(
         raise HTTPException(status_code=404, detail="Playbook not found")
     
     # Queue analysis
-    task = analyze_contract_with_playbook.delay(
+    task = await _enqueue(analyze_contract_with_playbook,
         request.contractId, 
         request.playbookId, 
         request.auto_apply
@@ -504,7 +547,7 @@ async def apply_redlines(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    task = apply_redlines.delay(session_id, request.suggestionIds)
+    task = await _enqueue(apply_redlines, session_id, request.suggestionIds)
     return {"task_id": task.id, "status": "queued"}
 
 
@@ -556,7 +599,7 @@ async def resend_webhook(request: Request):
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
     
     # Queue processing
-    task = process_resend_webhook.delay(payload)
+    task = await _enqueue(process_resend_webhook, payload)
     
     return {"task_id": task.id, "status": "queued"}
 
@@ -628,7 +671,7 @@ async def process_intake(
 @router.post("/obligations/extract", response_model=Dict[str, Any])
 async def extract_obligations(
     request: ExtractObligationsRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(_task_user)
 ):
     """Extract obligations from a signed contract."""
     from services.obligation_tasks import extract_obligations_from_contract
@@ -641,7 +684,7 @@ async def extract_obligations(
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
     
-    task = extract_obligations_from_contract.delay(request.contractId, request.force_refresh)
+    task = await _enqueue(extract_obligations_from_contract, request.contractId, request.force_refresh)
     return {"task_id": task.id, "status": "queued"}
 
 
@@ -722,7 +765,7 @@ async def update_obligation_status(
         update_data["completed_at"] = datetime.now(timezone.utc).isoformat()
     
     await db.extracted_obligations.update_one(
-        {"id": obligation_id},
+        {"id": obligation_id, "organizationId": current_user["organizationId"]},
         {"$set": update_data}
     )
     
@@ -762,7 +805,7 @@ async def acknowledge_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
     
     await db.obligation_alerts.update_one(
-        {"id": alert_id},
+        {"id": alert_id, "organizationId": current_user["organizationId"]},
         {"$set": {
             "acknowledged": True,
             "acknowledged_by": current_user["sub"],
@@ -775,12 +818,12 @@ async def acknowledge_alert(
 
 @router.post("/obligations/bulk-extract")
 async def bulk_extract_obligations(
-    current_user: dict = Depends(require_role("admin", "manager"))
+    current_user: dict = Depends(_bulk_user)
 ):
     """Extract obligations for all signed contracts in organization."""
     from services.obligation_tasks import bulk_extract_obligations
     
-    task = bulk_extract_obligations.delay(current_user["organizationId"])
+    task = await _enqueue(bulk_extract_obligations, current_user["organizationId"])
     return {"task_id": task.id, "status": "queued"}
 
 
@@ -815,3 +858,44 @@ async def agentic_health():
         "checks": checks,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
+
+# =============================================================================
+# FEATURE-FLAGGED MOUNTING
+# =============================================================================
+
+#: Route groups (first path segment after /agentic) and the flag gating each.
+#: ``/agentic/health`` is deliberately not in any group: it is unauthenticated
+#: and calls Celery's synchronous inspect() on the event loop.
+ROUTE_GROUP_FLAGS = {
+    "risk": "AGENTIC_PHASE1_ENABLED",
+    "obligations": "AGENTIC_PHASE1_ENABLED",
+    "agents": "AGENTIC_AGENTS_ENABLED",
+    "intake": "AGENTIC_INTAKE_ENABLED",
+    "playbooks": "AGENTIC_REDLINE_ENABLED",
+    "redline": "AGENTIC_REDLINE_ENABLED",
+}
+
+
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "false").strip().lower() in ("1", "true", "yes", "on")
+
+
+def enabled_groups(env_flag=_flag) -> set:
+    """Route groups whose flag is on. Every flag defaults to off."""
+    return {group for group, flag in ROUTE_GROUP_FLAGS.items() if env_flag(flag)}
+
+
+def build_router(groups=None) -> APIRouter:
+    """Return an /agentic router containing only the enabled route groups.
+
+    Routes outside the enabled groups are simply not mounted, so they 404.
+    """
+    groups = enabled_groups() if groups is None else set(groups)
+    gated = APIRouter()
+    for route in router.routes:
+        path = getattr(route, "path", "")
+        parts = path.split("/")
+        group = parts[2] if len(parts) > 2 else ""
+        if group in groups:
+            gated.routes.append(route)
+    return gated
