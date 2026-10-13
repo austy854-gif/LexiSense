@@ -361,7 +361,6 @@ jobs:
     # Secrets are surfaced as job-level env so step-level `if:` conditions can
     # test them: the `secrets` context is not available in `if:` expressions.
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -374,12 +373,10 @@ jobs:
       JWT_AUDIENCE: ${{ vars.JWT_AUDIENCE || 'lexisense-client' }}
     steps:
       - uses: actions/checkout@v7
-      - name: Deploy to Railway
-        uses: railwayapp/railway-deploy@v1
-        if: ${{ env.RAILWAY_TOKEN != '' }}
-        with:
-          token: ${{ env.RAILWAY_TOKEN }}
-          service: lexisense-backend
+      # Railway deploys the backend itself through its GitHub integration on
+      # every push to main, so CI does not deploy there. (The former step used
+      # railwayapp/railway-deploy@v1, which does not exist and failed the job
+      # at "Set up job" even when RAILWAY_TOKEN was unset.)
       - name: Deploy to Render
         if: ${{ env.RENDER_API_KEY != '' }}
         run: |
