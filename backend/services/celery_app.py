@@ -161,6 +161,16 @@ celery_app.conf.update(
         Queue("low_priority", routing_key="low_priority"),
     ),
     
+    # Broker connection timeouts: fail fast instead of hanging an API request
+    # (or the worker) when Redis is unreachable.
+    broker_connection_timeout=float(os.environ.get("CELERY_BROKER_CONNECTION_TIMEOUT", "3")),
+    broker_transport_options={
+        "socket_timeout": float(os.environ.get("CELERY_BROKER_SOCKET_TIMEOUT", "5")),
+        "socket_connect_timeout": float(os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")),
+    },
+    redis_socket_timeout=float(os.environ.get("CELERY_BROKER_SOCKET_TIMEOUT", "5")),
+    redis_socket_connect_timeout=float(os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")),
+
     # Monitoring
     worker_send_task_events=True,
     task_send_sent_event=True,
@@ -183,11 +193,11 @@ if CELERY_RESULT_BACKEND and CELERY_RESULT_BACKEND.startswith("rediss://") and "
 
 
 # ---------------------------------------------------------------------------
-# Worker-side database wiring. The task modules keep a module-level ``_db``
-# that was only ever set by the (stripped) API router, so in a standalone
-# worker every task returned "Database not initialized". Each task runs its
-# own fresh asyncio loop, and a Motor client binds to the loop it is first
-# used on, so a short-lived client is created per task and closed afterwards.
+# Worker-side database wiring. Each task gets a short-lived Motor client (a
+# Motor client binds to the event loop it is first used on, and every task runs
+# its own loop). The handle lives in services.task_db.current_db, a ContextVar
+# set here and reset on postrun, so it is safe under any pool (prefork,
+# threads, solo) -- unlike the old module global, which threads would share.
 # ---------------------------------------------------------------------------
 _task_mongo_clients = {}
 
@@ -209,20 +219,25 @@ def _wire_task_database(task_id=None, **_):
     if not url:
         logger.error("DATABASE_URL/MONGO_URL not set - tasks cannot reach the database")
         return
-    import importlib
     from motor.motor_asyncio import AsyncIOMotorClient
+    from services.task_db import current_db
 
     client = AsyncIOMotorClient(url, connect=False, serverSelectionTimeoutMS=5_000, appname="lexisense-worker")
-    db = client[_db_name_from(url)]
-    for mod in TASK_MODULES:
-        importlib.import_module(mod).set_database(db)
-    _task_mongo_clients[task_id] = client
+    token = current_db.set(client[_db_name_from(url)])
+    _task_mongo_clients[task_id] = (client, token)
 
 
 @task_postrun.connect
 def _close_task_database(task_id=None, **_):
-    client = _task_mongo_clients.pop(task_id, None)
-    if client is not None:
+    entry = _task_mongo_clients.pop(task_id, None)
+    if entry is not None:
+        client, token = entry
+        from services.task_db import current_db
+
+        try:
+            current_db.reset(token)
+        except ValueError:  # different context (should not happen); just clear it
+            current_db.set(None)
         client.close()
 
 

@@ -33,8 +33,12 @@ def set_database(database):
 
 
 def get_db():
-    """Get the database reference for tasks."""
-    return _db
+    """Database for the current task (ContextVar set per task by
+    services.celery_app), falling back to an explicitly set module database."""
+    from services.task_db import current_db
+
+    db = current_db.get()
+    return db if db is not None else _db
 
 
 def verify_resend_signature(payload: bytes, signature: str, secret: str) -> bool:
@@ -81,7 +85,7 @@ def extract_text_from_docx(docx_content: bytes) -> str:
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def process_resend_webhook(self, payload: Dict[str, Any]):
     """Process incoming Resend webhook for contract intake."""
-    if _db is None:
+    if get_db() is None:
         logger.error("Database not initialized for intake processing")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -458,7 +462,7 @@ async def _create_contract_from_intake(intake: ContractIntake, classification: D
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def retry_failed_intakes(self):
     """Retry failed intake processing."""
-    if _db is None:
+    if get_db() is None:
         logger.error("Database not initialized for intake retry")
         return {"status": "error", "message": "Database not initialized"}
 
