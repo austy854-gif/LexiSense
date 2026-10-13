@@ -5,7 +5,6 @@ import App from "@/App";
 
 // Initialize Sentry
 import * as Sentry from "@sentry/react";
-import { BrowserTracing } from "@sentry/browser";
 
 const sentryDsn = process.env.REACT_APP_SENTRY_DSN;
 if (sentryDsn && !sentryDsn.startsWith("your-")) {

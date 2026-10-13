@@ -61,7 +61,9 @@ jobs:
           pip install --upgrade pip
           # emergentintegrations is only published on the Emergent index,
           # so the default PyPI index alone cannot resolve requirements.txt.
-          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements.txt
+          pip install -r requirements.txt
+          # emergentintegrations pins old litellm/openai; install without deps (matches Dockerfile).
+          pip install --no-deps --require-hashes --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-emergent.txt
           pip install flake8 black mypy
       - name: Lint with flake8
         run: |
@@ -115,7 +117,9 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           # emergentintegrations is only published on the Emergent index.
-          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements.txt
+          pip install -r requirements.txt
+          # emergentintegrations pins old litellm/openai; install without deps (matches Dockerfile).
+          pip install --no-deps --require-hashes --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-emergent.txt
       - name: Run tests
         # These are live-API integration tests: they issue real HTTP requests
         # against a running service and need EMERGENT_LLM_KEY / S3 credentials.
@@ -181,7 +185,9 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           # emergentintegrations is only published on the Emergent index.
-          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements.txt
+          pip install -r requirements.txt
+          # emergentintegrations pins old litellm/openai; install without deps (matches Dockerfile).
+          pip install --no-deps --require-hashes --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-emergent.txt
           pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-test.txt
       - name: Run unit tests
         run: |
@@ -204,11 +210,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
+          # Node 22.18+: the pinned @babel/plugin-transform-modules-systemjs 8.x requires it.
           # Must be >= 20: react-router-dom (^7.5.1) declares engines.node
           # ">=20.0.0", and yarn 1 hard-fails the whole install on an
           # unsatisfied engine — which is what was failing this step, not the
           # lockfile.
-          node-version: '20'
+          node-version: '22'
           cache: 'yarn'
           # The lockfile lives in frontend/, not at the repo root: without this
           # setup-node looks for ./yarn.lock and fails with "Dependencies lock
@@ -245,8 +252,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          # See the frontend-lint job: react-router-dom 7 requires Node >= 20.
-          node-version: '20'
+          # See the frontend-lint job. Node 22.18+ is required by the pinned Babel 8 systemjs plugin.
+          node-version: '22'
           cache: 'yarn'
           # The lockfile lives in frontend/, not at the repo root.
           cache-dependency-path: frontend/yarn.lock
@@ -276,17 +283,43 @@ jobs:
         with:
           # TruffleHog diffs `base`..`head`, so it needs the full history.
           fetch-depth: 0
-      - name: Run Trivy vulnerability scanner
+      # 1) Visibility: scan the whole repo (incl. frontend dev lockfiles) and
+      #    upload everything to GitHub code scanning. Never fails the job.
+      - name: Run Trivy vulnerability scanner (full repo, report only)
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
+          exit-code: '0'
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'
+      # 2) Gate: fail only on FIXABLE CRITICAL/HIGH vulns in what actually runs
+      #    in production -- backend runtime requirements and the built image
+      #    (which contains no node_modules, only the compiled frontend).
+      - name: Trivy gate - backend runtime requirements
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'backend/requirements.txt'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Build production image for scanning
+        run: docker build -t lexisense:ci-scan .
+      - name: Trivy gate - production image
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'image'
+          image-ref: 'lexisense:ci-scan'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
       - name: Check for secrets with TruffleHog
         uses: trufflesecurity/trufflehog@main
         with:

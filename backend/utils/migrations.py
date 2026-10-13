@@ -84,7 +84,7 @@ async def run_migrations(db) -> None:
     """Apply any pending migrations. Idempotent and safe to run concurrently."""
     # Ensure the ledger collection has a unique index on version so parallel
     # workers cannot double-apply a migration.
-    await db.schema_migrations.create_index("version", unique=True)
+    await db.schema_migrations.create_index("version", unique=True, name="uq_migrations_version")
 
     applied_versions = set()
     async for doc in db.schema_migrations.find({}, {"version": 1, "_id": 0}):

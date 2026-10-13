@@ -4,10 +4,8 @@ import axios from 'axios';
 // literal string "undefined/api/v1" and every request failed with a confusing
 // 404 instead of a clear configuration error.
 const BACKEND_URL = (process.env.REACT_APP_BACKEND_URL || '').replace(/\/+$/, '');
-if (!BACKEND_URL) {
-  // eslint-disable-next-line no-console
-  console.error('REACT_APP_BACKEND_URL is not set - API requests will fail.');
-}
+// When unset, use a relative URL so the bundle talks to the same origin
+// that served it (single-container deploy where the backend serves the SPA).
 const API_URL = `${BACKEND_URL}/api/v1`;
 
 const api = axios.create({

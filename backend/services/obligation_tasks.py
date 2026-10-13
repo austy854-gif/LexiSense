@@ -212,7 +212,7 @@ def extract_obligations_from_text(contract_text: str, contract_id: str, organiza
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def extract_obligations_from_contract(self, contract_id: str, force_refresh: bool = False):
     """Extract obligations from a signed contract."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for obligation extraction")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -234,7 +234,7 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
     from models.agentic import ExtractedObligation, ObligationExtractionJob
 
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:
@@ -319,7 +319,7 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
 @shared_task(bind=True, max_retries=1, default_retry_delay=300)
 def send_daily_obligation_alerts(self):
     """Send daily alerts for upcoming/overdue obligations."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for obligation alerts")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -342,7 +342,7 @@ async def _send_daily_obligation_alerts_async():
     from models.agentic import ObligationAlert, ObligationStatus
 
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:
@@ -474,7 +474,7 @@ async def _send_obligation_alert(obligation: Dict, alert_type: str, days_until: 
 @shared_task(bind=True, max_retries=1)
 def cleanup_completed_obligations(self):
     """Clean up old completed/waived obligations."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for obligation cleanup")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -494,7 +494,7 @@ def cleanup_completed_obligations(self):
 async def _cleanup_completed_obligations_async():
     """Async implementation of obligation cleanup."""
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:
@@ -531,7 +531,7 @@ async def _cleanup_completed_obligations_async():
 @shared_task(bind=True, max_retries=1)
 def bulk_extract_obligations(self, organization_id: str):
     """Extract obligations for all signed contracts in an organization."""
-    if not _db:
+    if _db is None:
         logger.error("Database not initialized for bulk obligation extraction")
         return {"status": "error", "message": "Database not initialized"}
 
@@ -551,7 +551,7 @@ def bulk_extract_obligations(self, organization_id: str):
 async def _bulk_extract_obligations_async(organization_id: str):
     """Async implementation of bulk obligation extraction."""
     db = get_db()
-    if not db:
+    if db is None:
         return {"status": "error", "message": "Database not available"}
 
     try:

@@ -1,0 +1,6 @@
+# Installed separately with: pip install --no-deps --require-hashes \
+#   --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-emergent.txt
+# emergentintegrations 0.2.2 hard-pins litellm==1.80.0 / openai==1.99.9, which
+# conflict with requirements.txt, so its deps are intentionally skipped.
+emergentintegrations==0.2.2 \
+    --hash=sha256:7c703b4a8112c59d61ed4bf5502b64d916594265ce48201dc0d05408fedf05dd
