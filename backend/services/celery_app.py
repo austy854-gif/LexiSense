@@ -16,6 +16,69 @@ CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND") or os.environ.ge
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Feature-flag gating (see utils/feature_flags.py; every flag defaults to OFF).
+# Only task modules and beat jobs for enabled groups are registered, so a
+# worker started with -B runs NO agentic beat jobs unless a flag is turned on.
+# ---------------------------------------------------------------------------
+from utils.feature_flags import enabled_groups  # noqa: E402
+
+#: feature group -> task module
+GROUP_TASK_MODULES = {
+    "risk": "services.risk_tasks",
+    "obligations": "services.obligation_tasks",
+    "agents": "services.agent_tasks",
+    "intake": "services.intake_tasks",
+    "redline": "services.playbook_tasks",
+}
+
+#: beat job name -> feature group that must be enabled for it to be scheduled.
+#: weekly-cleanup archives completed obligations (>1y) and deletes acknowledged
+#: obligation alerts (>90d); it is retention housekeeping for the obligations
+#: feature, so it rides on the obligations flag.
+BEAT_JOB_GROUPS = {
+    "check-due-agents": "agents",
+    "daily-risk-refresh": "risk",
+    "daily-obligation-alerts": "obligations",
+    "retry-failed-intakes": "intake",
+    "weekly-cleanup": "obligations",
+}
+
+ENABLED_GROUPS = enabled_groups()
+TASK_MODULES = tuple(m for g, m in GROUP_TASK_MODULES.items() if g in ENABLED_GROUPS)
+
+_ALL_BEAT_JOBS = {
+    # Contract agents - check every hour for due agents
+    "check-due-agents": {
+        "task": "services.agent_tasks.check_due_agents",
+        "schedule": crontab(minute=0),  # Every hour at minute 0
+    },
+    # Daily risk assessment refresh for active contracts
+    "daily-risk-refresh": {
+        "task": "services.risk_tasks.refresh_stale_risk_assessments",
+        "schedule": crontab(hour=3, minute=0),  # 3 AM daily
+    },
+    # Daily obligation alert check
+    "daily-obligation-alerts": {
+        "task": "services.obligation_tasks.send_daily_obligation_alerts",
+        "schedule": crontab(hour=8, minute=0),  # 8 AM daily
+    },
+    # Retry failed intakes every 30 minutes
+    "retry-failed-intakes": {
+        "task": "services.intake_tasks.retry_failed_intakes",
+        "schedule": crontab(minute="*/30"),  # Every 30 minutes
+    },
+    # Weekly cleanup
+    "weekly-cleanup": {
+        "task": "services.obligation_tasks.cleanup_completed_obligations",
+        "schedule": crontab(hour=2, minute=0, day_of_week=0),  # Sunday 2 AM
+    },
+}
+
+BEAT_SCHEDULE = {
+    name: job for name, job in _ALL_BEAT_JOBS.items() if BEAT_JOB_GROUPS.get(name) in ENABLED_GROUPS
+}
+
 if not CELERY_BROKER_URL:
     logger.warning(
         "CELERY_BROKER_URL/REDIS_URL not set - background tasks are disabled; "
@@ -45,13 +108,7 @@ celery_app = Celery(
     task_cls=GuardedTask,
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=[
-        "services.agent_tasks",
-        "services.risk_tasks",
-        "services.playbook_tasks",
-        "services.obligation_tasks",
-        "services.intake_tasks",
-    ]
+    include=list(TASK_MODULES),
 )
 
 # Celery configuration
@@ -82,34 +139,10 @@ celery_app.conf.update(
     result_extended=True,
     
     # Beat schedule (periodic tasks)
-    beat_schedule={
-        # Contract agents - check every hour for due agents
-        "check-due-agents": {
-            "task": "services.agent_tasks.check_due_agents",
-            "schedule": crontab(minute=0),  # Every hour at minute 0
-        },
-        # Daily risk assessment refresh for active contracts
-        "daily-risk-refresh": {
-            "task": "services.risk_tasks.refresh_stale_risk_assessments",
-            "schedule": crontab(hour=3, minute=0),  # 3 AM daily
-        },
-        # Daily obligation alert check
-        "daily-obligation-alerts": {
-            "task": "services.obligation_tasks.send_daily_obligation_alerts",
-            "schedule": crontab(hour=8, minute=0),  # 8 AM daily
-        },
-        # Retry failed intakes every 30 minutes
-        "retry-failed-intakes": {
-            "task": "services.intake_tasks.retry_failed_intakes",
-            "schedule": crontab(minute="*/30"),  # Every 30 minutes
-        },
-        # Weekly cleanup
-        "weekly-cleanup": {
-            "task": "services.obligation_tasks.cleanup_completed_obligations",
-            "schedule": crontab(hour=2, minute=0, day_of_week=0),  # Sunday 2 AM
-        },
-    },
     
+    # Beat schedule (periodic tasks) -- filtered by feature flags above.
+    beat_schedule=BEAT_SCHEDULE,
+
     # Task routing
     task_routes={
         "services.agent_tasks.*": {"queue": "scheduled"},
@@ -156,13 +189,6 @@ if CELERY_RESULT_BACKEND and CELERY_RESULT_BACKEND.startswith("rediss://") and "
 # own fresh asyncio loop, and a Motor client binds to the loop it is first
 # used on, so a short-lived client is created per task and closed afterwards.
 # ---------------------------------------------------------------------------
-_TASK_MODULES = (
-    "services.agent_tasks",
-    "services.risk_tasks",
-    "services.playbook_tasks",
-    "services.obligation_tasks",
-    "services.intake_tasks",
-)
 _task_mongo_clients = {}
 
 
@@ -188,7 +214,7 @@ def _wire_task_database(task_id=None, **_):
 
     client = AsyncIOMotorClient(url, connect=False, serverSelectionTimeoutMS=5_000, appname="lexisense-worker")
     db = client[_db_name_from(url)]
-    for mod in _TASK_MODULES:
+    for mod in TASK_MODULES:
         importlib.import_module(mod).set_database(db)
     _task_mongo_clients[task_id] = client
 
@@ -201,13 +227,7 @@ def _close_task_database(task_id=None, **_):
 
 
 # Auto-discover tasks
-celery_app.autodiscover_tasks([
-    "services.agent_tasks",
-    "services.risk_tasks", 
-    "services.playbook_tasks",
-    "services.obligation_tasks",
-    "services.intake_tasks",
-])
+celery_app.autodiscover_tasks(list(TASK_MODULES))
 
 
 @celery_app.task(bind=True, ignore_result=True)
