@@ -39,9 +39,11 @@ USER appuser
 
 ENV FRONTEND_BUILD_DIR=/app/backend/static
 EXPOSE 8080
-# FORWARDED_ALLOW_IPS defaults to "*", which assumes the container is only
-# reachable through the platform's trusted reverse proxy. Narrow it (e.g. to the
-# proxy's CIDR) if the container port is exposed directly.
-ENV FORWARDED_ALLOW_IPS="*"
+# FORWARDED_ALLOW_IPS defaults to 127.0.0.1 (uvicorn's own default), so uvicorn
+# does NOT rewrite request.client from X-Forwarded-For. With "*" it would take
+# the spoofable left-most entry. Client identity for rate limits is derived from
+# X-Forwarded-For by the app itself using TRUSTED_PROXY_COUNT (utils/rbac.py).
+# Set this to the proxy's CIDR only if you need uvicorn-level proxy handling.
+ENV FORWARDED_ALLOW_IPS="127.0.0.1"
 # exec => uvicorn becomes PID 1 and receives SIGTERM directly.
 CMD ["sh", "-c", "exec uvicorn server:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips \"$FORWARDED_ALLOW_IPS\""]

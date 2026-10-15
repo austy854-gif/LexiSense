@@ -468,8 +468,8 @@ async def test_contract_changes_between_verify_and_update(http, seeded, sent, db
     await _submit(http, seeded)
     real_verify = approval_service.verify_action_token
 
-    async def verify_then_race(db_, token, now=None):
-        out = await real_verify(db_, token, now)
+    async def verify_then_race(db_, token, now=None, enforce=False):
+        out = await real_verify(db_, token, now, enforce)
         await db.contracts.update_one({"id": "c-1"}, {"$set": {"status": "draft"}})
         return out
     monkeypatch.setattr(approval_service, "verify_action_token", verify_then_race)
@@ -557,7 +557,7 @@ def test_token_carries_kid_and_rotation_works(monkeypatch):
     ("1", "6.6.6.6, 203.0.113.9", "203.0.113.9"),     # spoofed left entry ignored
     ("2", "6.6.6.6, 203.0.113.9, 10.0.0.2", "203.0.113.9"),
     ("0", "6.6.6.6", "peer"),
-    ("3", "203.0.113.9", "203.0.113.9"),
+    ("3", "203.0.113.9", "peer"),  # fewer entries than hops -> socket peer
 ])
 def test_client_key_trusted_proxies(monkeypatch, hops, xff, expected):
     from types import SimpleNamespace
@@ -591,3 +591,117 @@ async def test_late_sent_does_not_overwrite_delivered(http, db):
 def test_svix_secret_strict_base64():
     with pytest.raises(svix.WebhookVerificationError):
         svix.sign("whsec_not*valid*base64!!", "m", "1", b"x")
+
+
+# =========================================================================== re-review nits (29fd082)
+# 1: post-commit side effects never raise; un-claim only when rolled back
+async def test_side_effect_failures_do_not_fail_decision(http, seeded, sent, db, monkeypatch):
+    await _submit(http, seeded)
+
+    async def boom(*a, **k):
+        raise RuntimeError("audit down")
+    monkeypatch.setattr(audit_service, "log_action", boom)
+    monkeypatch.setattr(audit_service, "send_notification", boom)
+    token = _token_from(sent[0]["html"], 0)
+    r = await http.post(f"{API_PREFIX}/approvals/email-action", json={"token": token})
+    assert r.status_code == 200 and r.json()["status"] == "approved"
+    assert (await db.contracts.find_one({"id": "c-1"}))["status"] == "approved"
+    doc = await db.approval_tokens.find_one({"tokenHash": approval_service.hash_token(token)})
+    assert doc["usedAt"] is not None  # stays consumed
+
+
+async def test_token_stays_consumed_when_decision_committed_then_error(http, seeded, sent, db, monkeypatch):
+    """An error after the approval committed (and wasn't rolled back) must not
+    release the token."""
+    await _submit(http, seeded)
+    token = _token_from(sent[0]["html"], 0)
+
+    async def explode(*a, **k):
+        raise RuntimeError("late failure")
+    monkeypatch.setattr(approval_service, "_post_commit", explode)
+    with pytest.raises(RuntimeError):
+        await approval_service.consume_token_and_decide(db, token, "1.1.1.1")
+    assert (await db.approvals.find_one({}))["status"] == "approved"
+    doc = await db.approval_tokens.find_one({"tokenHash": approval_service.hash_token(token)})
+    assert doc["usedAt"] is not None
+
+
+# 2: ambiguous contract write that actually applied keeps the decision
+async def test_ambiguous_contract_error_keeps_decision_if_applied(http, seeded, sent, db, monkeypatch):
+    await _submit(http, seeded)
+    token = _token_from(sent[0]["html"], 0)
+    coll_cls = type(db.contracts)
+    real = coll_cls.update_one
+
+    async def applied_then_error(self, *a, **k):
+        res = await real(self, *a, **k)
+        if self.name == "contracts":
+            raise TimeoutError("network error after commit")
+        return res
+    monkeypatch.setattr(coll_cls, "update_one", applied_then_error)
+    out = await approval_service.consume_token_and_decide(db, token, "1.1.1.1")
+    monkeypatch.setattr(coll_cls, "update_one", real)
+    assert out["status"] == "approved"
+    assert (await db.approvals.find_one({}))["status"] == "approved"
+    assert (await db.contracts.find_one({"id": "c-1"}))["status"] == "approved"
+    doc = await db.approval_tokens.find_one({"tokenHash": approval_service.hash_token(token)})
+    assert doc["usedAt"] is not None
+
+
+# 3: XFF hardening
+def test_client_key_repeated_xff_headers(monkeypatch):
+    from starlette.datastructures import Headers
+    from types import SimpleNamespace
+    from utils.rbac import client_key
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "2")
+    headers = Headers(raw=[(b"x-forwarded-for", b"6.6.6.6"), (b"x-forwarded-for", b"203.0.113.9, 10.0.0.2")])
+    req = SimpleNamespace(headers=headers, client=SimpleNamespace(host="peer"))
+    assert client_key(req) == "203.0.113.9"
+
+
+def test_client_key_no_xff_uses_peer(monkeypatch):
+    from starlette.datastructures import Headers
+    from types import SimpleNamespace
+    from utils.rbac import client_key
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "1")
+    assert client_key(SimpleNamespace(headers=Headers(raw=[]), client=SimpleNamespace(host="peer"))) == "peer"
+
+
+def test_dockerfile_does_not_trust_all_proxies():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[3] / "Dockerfile").read_text()
+    assert 'FORWARDED_ALLOW_IPS="*"' not in text and 'FORWARDED_ALLOW_IPS="127.0.0.1"' in text
+
+
+# 4: preview is read-only
+async def test_preview_ineligible_approver_has_no_side_effects(http, seeded, sent, db):
+    await _submit(http, seeded)
+    await db.users.update_one({"id": "u-mgr"}, {"$set": {"isActive": False}})
+    token = _token_from(sent[0]["html"], 0)
+    r = await http.post(f"{API_PREFIX}/approvals/email-action/preview", json={"token": token})
+    assert r.status_code == 403
+    assert await db.approval_tokens.count_documents({"revokedAt": None}) == 2
+    r = await http.post(f"{API_PREFIX}/approvals/email-action", json={"token": token})
+    assert r.status_code == 403
+    assert await db.approval_tokens.count_documents({"revokedAt": None}) == 0
+
+
+async def test_preview_stale_contract_has_no_side_effects(http, seeded, sent, db):
+    await _submit(http, seeded)
+    await db.contracts.update_one({"id": "c-1"}, {"$set": {"status": "draft"}})
+    token = _token_from(sent[0]["html"], 0)
+    r = await http.post(f"{API_PREFIX}/approvals/email-action/preview", json={"token": token})
+    assert r.status_code == 409 and r.json()["code"] == "stale"
+    assert (await db.approvals.find_one({}))["status"] == "pending"
+    assert await db.approval_tokens.count_documents({"revokedAt": None}) == 2
+
+
+# 5: switching to APPROVAL_TOKEN_SECRET keeps JWT-derived links valid
+def test_switch_to_explicit_secret_keeps_derived_links(monkeypatch):
+    monkeypatch.delenv("APPROVAL_TOKEN_SECRET", raising=False)
+    monkeypatch.delenv("APPROVAL_TOKEN_SECRET_PREVIOUS", raising=False)
+    token, _ = approval_service.create_action_token("a1", "u1", "org1", "approve")
+    monkeypatch.setenv("APPROVAL_TOKEN_SECRET", "brand-new-secret")
+    assert approval_service.decode_action_token(token).approval_id == "a1"
+    new_token, doc = approval_service.create_action_token("a1", "u1", "org1", "approve")
+    assert doc["kid"] == approval_service._kid(b"brand-new-secret")

@@ -55,10 +55,10 @@ def _current_key() -> bytes:
     explicit = os.environ.get("APPROVAL_TOKEN_SECRET")
     if explicit:
         return explicit.encode("utf-8")
-    jwt_secret = os.environ.get("JWT_SECRET")
-    if not jwt_secret:
+    derived = _jwt_derived_key()
+    if derived is None:
         raise RuntimeError("APPROVAL_TOKEN_SECRET or JWT_SECRET must be set")
-    return hmac.new(jwt_secret.encode("utf-8"), b"approval-token-v1", hashlib.sha256).digest()
+    return derived
 
 
 def _kid(key: bytes) -> str:
@@ -73,7 +73,19 @@ def _verification_keys() -> Dict[str, bytes]:
     previous = os.environ.get("APPROVAL_TOKEN_SECRET_PREVIOUS")
     if previous:
         keys.setdefault(_kid(previous.encode("utf-8")), previous.encode("utf-8"))
+    # Links minted before APPROVAL_TOKEN_SECRET was introduced were signed with
+    # the JWT-derived key; keep accepting it so switching doesn't kill them.
+    derived = _jwt_derived_key()
+    if derived is not None:
+        keys.setdefault(_kid(derived), derived)
     return keys
+
+
+def _jwt_derived_key() -> Optional[bytes]:
+    jwt_secret = os.environ.get("JWT_SECRET")
+    if not jwt_secret:
+        return None
+    return hmac.new(jwt_secret.encode("utf-8"), b"approval-token-v1", hashlib.sha256).digest()
 
 
 def _b64e(raw: bytes) -> str:
@@ -191,10 +203,14 @@ def decode_action_token(token: str, now: Optional[datetime] = None) -> TokenClai
 
 
 async def verify_action_token(
-    db, token: str, now: Optional[datetime] = None
+    db, token: str, now: Optional[datetime] = None, enforce: bool = False
 ) -> tuple[TokenClaims, Dict[str, Any], Dict[str, Any]]:
     """Full verification (signature, expiry, stored binding, single use,
-    tenant). Returns ``(claims, token_doc, approval)``; no state change."""
+    tenant, approver eligibility, contract still in review). Returns
+    ``(claims, token_doc, approval)``. Read-only unless ``enforce`` is True
+    (POST confirm only), in which case an ineligible approver revokes the
+    links and a stale contract supersedes the approval. The preview never
+    mutates anything."""
     claims = decode_action_token(token, now=now)
     doc = await db.approval_tokens.find_one({"tokenHash": hash_token(token)}, {"_id": 0})
     if not doc:
@@ -212,13 +228,15 @@ async def verify_action_token(
     if approval.get("status") != "pending":
         raise ApprovalTokenError("decided", f"This request has already been {approval.get('status')}.", 409)
     if not await _approver_still_eligible(db, approval):
-        await revoke_tokens(db, approval["id"], approval["organizationId"])
+        if enforce:
+            await revoke_tokens(db, approval["id"], approval["organizationId"])
         raise ApprovalTokenError("forbidden", "You are no longer allowed to decide this request.", 403)
     contract = await db.contracts.find_one(
         {"id": approval["contractId"], "organizationId": approval["organizationId"]}, {"_id": 0, "status": 1}
     )
     if not contract or contract.get("status") != "review":
-        await supersede(db, approval, "contract_not_in_review")
+        if enforce:
+            await supersede(db, approval, "contract_not_in_review")
         raise ApprovalTokenError("stale", "This contract is no longer awaiting review; nothing was changed.", 409)
     return claims, doc, approval
 
@@ -394,14 +412,21 @@ async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_e
             )
             changed = result.modified_count == 1
         except Exception:
-            # Put the approval back so the (un-claimed) link can be retried.
-            await db.approvals.update_one(
-                {"id": approval["id"], "organizationId": org_id, "status": DECISION_STATUS[action]},
-                {"$set": {"status": "pending", "decidedAt": None, "decidedBy": None, "decidedIp": None,
-                          "decidedVia": None, "updatedAt": now},
-                 "$pull": {"auditTrail": {"at": now, "event": DECISION_STATUS[action]}}},
-            )
-            raise
+            # Ambiguous: the write may or may not have been applied (e.g. a
+            # network error after the server committed). Re-read and keep the
+            # decision if the contract already reached the target status.
+            changed = await _contract_reached(db, approval, org_id, new_status)
+            if not changed:
+                # Put the approval back so the (un-claimed) link can be retried.
+                await db.approvals.update_one(
+                    {"id": approval["id"], "organizationId": org_id, "status": DECISION_STATUS[action]},
+                    {"$set": {"status": "pending", "decidedAt": None, "decidedBy": None, "decidedIp": None,
+                              "decidedVia": None, "updatedAt": now},
+                     "$pull": {"auditTrail": {"at": now, "event": DECISION_STATUS[action]}}},
+                )
+                raise
+            logger.warning("Contract update for approval %s errored but was applied; keeping decision",
+                           approval["id"])
         if not changed:
             await db.approvals.update_one(
                 {"id": approval["id"], "organizationId": org_id},
@@ -410,29 +435,59 @@ async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_e
             )
             await revoke_tokens(db, approval["id"], org_id)
             raise ApprovalTokenError("stale", "This contract is no longer awaiting review; nothing was changed.", 409)
-    await revoke_tokens(db, approval["id"], org_id)
+    await _post_commit(db, approval, action, actor_id, actor_email, ip, via, comment)
+    return updated
+
+
+async def _contract_reached(db, approval: dict, org_id: str, new_status: str) -> bool:
+    try:
+        current = await db.contracts.find_one(
+            {"id": approval["contractId"], "organizationId": org_id}, {"_id": 0, "status": 1, "workflowHistory": 1}
+        )
+    except Exception:
+        logger.exception("Could not re-read contract %s after an ambiguous update", approval["contractId"])
+        return False
+    if not current or current.get("status") != new_status:
+        return False
+    history = current.get("workflowHistory") or []
+    return any(h.get("approvalId") == approval["id"] for h in history)
+
+
+async def _post_commit(db, approval, action, actor_id, actor_email, ip, via, comment) -> None:
+    """Side effects after the decision is committed. They must never raise:
+    a failure here can't undo the decision, so it is logged and swallowed."""
+    org_id = approval["organizationId"]
+    try:
+        await revoke_tokens(db, approval["id"], org_id)
+    except Exception:
+        logger.exception("Failed to revoke tokens for approval %s", approval["id"])
 
     from services.audit_service import log_action, send_notification
 
-    await log_action(organization_id=org_id, user_id=actor_id, user_email=actor_email,
+    try:
+        await log_action(organization_id=org_id, user_id=actor_id, user_email=actor_email,
                      action=f"contract_{action}", resource_type="contract", resource_id=approval["contractId"],
                      resource_title=approval.get("contractTitle"),
                      details={"approvalId": approval["id"], "via": via, "ip": ip, "comment": comment})
+    except Exception:
+        logger.exception("Audit log failed for approval %s", approval["id"])
     if approval.get("requesterId") and approval["requesterId"] != actor_id:
-        await send_notification(
-            organization_id=org_id, user_id=approval["requesterId"], notification_type=f"workflow_{action}",
-            title=f"Contract {DECISION_STATUS[action]}",
-            message=f'"{approval.get("contractTitle")}" was {DECISION_STATUS[action]} by {actor_email}',
-            resource_type="contract", resource_id=approval["contractId"],
-        )
-    return updated
+        try:
+            await send_notification(
+                organization_id=org_id, user_id=approval["requesterId"], notification_type=f"workflow_{action}",
+                title=f"Contract {DECISION_STATUS[action]}",
+                message=f'"{approval.get("contractTitle")}" was {DECISION_STATUS[action]} by {actor_email}',
+                resource_type="contract", resource_id=approval["contractId"],
+            )
+        except Exception:
+            logger.exception("Requester notification failed for approval %s", approval["id"])
 
 
 async def consume_token_and_decide(db, token: str, ip: Optional[str], comment: Optional[str] = None) -> dict:
     """Verify, claim the token (single use), decide. MongoDB transactions need
     a replica set and aren't guaranteed in every deployment, so instead of a
     transaction the claim is released if the decision raises unexpectedly."""
-    claims, doc, approval = await verify_action_token(db, token)
+    claims, doc, approval = await verify_action_token(db, token, enforce=True)
     claimed = await db.approval_tokens.update_one(
         {"tokenHash": doc["tokenHash"], "usedAt": None, "revokedAt": None},
         {"$set": {"usedAt": _now().isoformat(), "usedIp": ip}},
@@ -449,9 +504,19 @@ async def consume_token_and_decide(db, token: str, ip: Optional[str], comment: O
     except ApprovalTokenError:
         raise  # deliberate outcome (e.g. stale): token stays consumed/revoked
     except Exception:
-        await db.approval_tokens.update_one(
-            {"tokenHash": doc["tokenHash"], "revokedAt": None}, {"$set": {"usedAt": None, "usedIp": None}}
-        )
+        # Release the claim only if the approval is (back to) pending, i.e. the
+        # decision was not committed or was rolled back. If its state is
+        # unknown or decided, the token stays consumed.
+        try:
+            current = await db.approvals.find_one(
+                {"id": approval["id"], "organizationId": approval["organizationId"]}, {"_id": 0, "status": 1}
+            )
+            if current and current.get("status") == "pending":
+                await db.approval_tokens.update_one(
+                    {"tokenHash": doc["tokenHash"], "revokedAt": None}, {"$set": {"usedAt": None, "usedIp": None}}
+                )
+        except Exception:
+            logger.exception("Could not release token claim for approval %s", approval["id"])
         raise
     if not updated:
         raise ApprovalTokenError("decided", "This request has already been decided.", 409)

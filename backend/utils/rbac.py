@@ -155,16 +155,25 @@ def client_key(request) -> str:
     real client is the entry ``TRUSTED_PROXY_COUNT`` hops from the right
     (default 1: one platform proxy in front of the app). ``0`` ignores the
     header entirely and uses the socket peer. If the header is shorter than
-    the configured hop count, the left-most entry is used.
+    the configured hop count, the header can't be trusted and the socket peer
+    is used. Repeated ``X-Forwarded-For`` headers are joined in order.
+
+    ``request.client`` must be the raw socket peer for this to be sound, so
+    uvicorn must NOT be told to trust every proxy (``--forwarded-allow-ips *``
+    makes it rewrite the peer from the spoofable left-most entry). The
+    Dockerfile defaults FORWARDED_ALLOW_IPS to 127.0.0.1.
     """
     hops = _trusted_proxy_count()
-    forwarded = request.headers.get("x-forwarded-for") if hops else None
-    if forwarded:
-        parts = [p.strip() for p in forwarded.split(",") if p.strip()]
-        if parts:
-            return parts[-hops] if len(parts) >= hops else parts[0]
     client = getattr(request, "client", None)
-    return getattr(client, "host", None) or "unknown"
+    peer = getattr(client, "host", None) or "unknown"
+    if not hops:
+        return peer
+    headers = request.headers
+    values = headers.getlist("x-forwarded-for") if hasattr(headers, "getlist") else [headers.get("x-forwarded-for")]
+    parts = [p.strip() for v in values if v for p in v.split(",") if p.strip()]
+    if len(parts) >= hops:
+        return parts[-hops]
+    return peer
 
 
 def rate_limit(limiter: SlidingWindowRateLimiter, scope: str):
