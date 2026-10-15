@@ -7,8 +7,6 @@ import logging
 import base64
 import hmac
 import hashlib
-import json
-import os
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from celery import shared_task
@@ -42,7 +40,8 @@ def get_db():
 
 
 def verify_resend_signature(payload: bytes, signature: str, secret: str) -> bool:
-    """Verify Resend webhook signature using HMAC-SHA256."""
+    """DEPRECATED: plain hex HMAC, not Resend's (Svix) scheme. Unused; kept only
+    for import compatibility. Use :func:`utils.svix.verify` instead."""
     if not secret or not signature:
         return False
     
@@ -113,15 +112,9 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
         return {"status": "error", "message": "Database not available"}
 
     try:
-        # Verify webhook signature
-        webhook_secret = os.environ.get("RESEND_WEBHOOK_SECRET")
-        if webhook_secret:
-            # Get raw payload bytes for verification
-            raw_payload = json.dumps(payload, separators=(',', ':')).encode('utf-8')
-            signature = payload.get("signature", "")
-            if not verify_resend_signature(raw_payload, signature, webhook_secret):
-                logger.warning("Invalid Resend webhook signature")
-                return {"status": "error", "message": "Invalid signature"}
+        # The Svix signature is verified on the raw request body by the
+        # /agentic/intake/webhook route before this task is queued; the
+        # re-serialised payload here could never match the original bytes.
 
         # Extract email data from Resend webhook
         # Resend webhook format: https://resend.com/docs/webhooks

@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, BackgroundTasks, 
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
+import json
 import os
 
 from models.agentic import (
@@ -586,26 +587,31 @@ async def get_contract_redline_sessions(
 
 @router.post("/intake/webhook")
 async def resend_webhook(request: Request):
-    """Resend webhook endpoint for email-based contract intake."""
-    from services.intake_tasks import process_resend_webhook, verify_resend_signature
-    
-    # Get raw body for signature verification
+    """Resend webhook endpoint for email-based contract intake.
+
+    Svix-signed (the scheme Resend uses); fails closed when no secret is
+    configured. The signature is checked over the raw request body.
+    """
+    from services.intake_tasks import process_resend_webhook
+    from utils import svix
+    from utils.webhook_secrets import get_intake_webhook_secret
+
+    webhook_secret = get_intake_webhook_secret()
+    if not webhook_secret:
+        logger.error("Intake webhook secret not configured; rejecting Resend intake webhook")
+        raise HTTPException(status_code=503, detail="Webhook not configured")
+
     body = await request.body()
-    payload = await request.json()
-    
-    # Verify webhook signature if secret configured
-    webhook_secret = os.environ.get("RESEND_WEBHOOK_SECRET")
-    if webhook_secret:
-        # Resend sends signature in 'resend-signature' header
-        signature = request.headers.get("resend-signature") or request.headers.get("Resend-Signature")
-        if not signature:
-            logger.warning("Resend webhook received without signature header")
-            raise HTTPException(status_code=401, detail="Missing webhook signature")
-        
-        if not verify_resend_signature(body, signature, webhook_secret):
-            logger.warning("Resend webhook signature verification failed")
-            raise HTTPException(status_code=401, detail="Invalid webhook signature")
-    
+    try:
+        svix.verify(webhook_secret, request.headers, body)
+    except svix.WebhookVerificationError as exc:
+        logger.warning("Resend intake webhook rejected: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
     # Queue processing
     task = await _enqueue(process_resend_webhook, payload)
     

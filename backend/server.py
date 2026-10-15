@@ -266,16 +266,17 @@ async def _probe_storage() -> dict:
     unresponsive S3 endpoint could hang the health check indefinitely.
     """
     try:
-        from services.storage_service import get_s3_client
+        from services.storage_service import get_bucket_name, get_s3_client
 
+        bucket = get_bucket_name()
+        if not bucket:
+            return {"status": "degraded", "details": "S3 bucket not configured"}
         s3_client = get_s3_client()
         if not s3_client:
             return {"status": "degraded", "details": "Using mock storage"}
 
         await asyncio.wait_for(
-            asyncio.to_thread(
-                s3_client.head_bucket, Bucket=os.environ.get("AWS_S3_BUCKET", "")
-            ),
+            asyncio.to_thread(s3_client.head_bucket, Bucket=bucket),
             timeout=HEALTH_PROBE_TIMEOUT_SECONDS,
         )
         return {"status": "healthy", "details": "S3 accessible"}
