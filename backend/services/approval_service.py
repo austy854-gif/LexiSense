@@ -466,9 +466,9 @@ async def _post_commit(db, approval, action, actor_id, actor_email, ip, via, com
 
     try:
         await log_action(organization_id=org_id, user_id=actor_id, user_email=actor_email,
-                     action=f"contract_{action}", resource_type="contract", resource_id=approval["contractId"],
-                     resource_title=approval.get("contractTitle"),
-                     details={"approvalId": approval["id"], "via": via, "ip": ip, "comment": comment})
+                         action=f"contract_{action}", resource_type="contract", resource_id=approval["contractId"],
+                         resource_title=approval.get("contractTitle"),
+                         details={"approvalId": approval["id"], "via": via, "ip": ip, "comment": comment})
     except Exception:
         logger.exception("Audit log failed for approval %s", approval["id"])
     if approval.get("requesterId") and approval["requesterId"] != actor_id:
