@@ -11,18 +11,25 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from services import approval_service
 from services.approval_service import ApprovalTokenError
-from services.approval_tasks import dispatch_email
+from services.approval_tasks import dispatch_notification
 from utils import svix
 from utils.rbac import SlidingWindowRateLimiter, client_key, rate_limit
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["Approvals"])
+
+
+async def _no_referrer(response: Response):
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+
+
+router = APIRouter(tags=["Approvals"], dependencies=[Depends(_no_referrer)])
 
 db = None
 
@@ -30,6 +37,9 @@ db = None
 #: this just caps abuse).
 APPROVAL_LINK_LIMITER = SlidingWindowRateLimiter(max_requests=30, window_seconds=60.0)
 _link_rate_limit = rate_limit(APPROVAL_LINK_LIMITER, "approval_link")
+#: Basic per-source cap on the webhook (Resend bursts are well below this).
+RESEND_WEBHOOK_LIMITER = SlidingWindowRateLimiter(max_requests=300, window_seconds=60.0)
+_webhook_rate_limit = rate_limit(RESEND_WEBHOOK_LIMITER, "resend_webhook")
 
 #: Resend event type -> notification status
 RESEND_EVENT_STATUS = {
@@ -40,13 +50,21 @@ RESEND_EVENT_STATUS = {
     "email.complained": "complained",
     "email.failed": "failed",
 }
-#: terminal/negative statuses are never overwritten by a late "delivered"/"sent"
-_STICKY = {"bounced", "complained", "failed"}
+#: Status order: an event only moves the status forward, so a late "sent"
+#: never overwrites "delivered", and bounced/complained/failed are terminal.
+STATUS_RANK = {
+    "queued": 0, "retrying": 0, "logged": 1, "sent": 1, "delivery_delayed": 2, "delivered": 3,
+    "failed": 4, "bounced": 4, "complained": 4,
+}
 
 
 def init_db(database):
     global db
     db = database
+
+
+class TokenRequest(BaseModel):
+    token: str = Field(..., min_length=10, max_length=2048)
 
 
 class EmailActionRequest(BaseModel):
@@ -55,14 +73,16 @@ class EmailActionRequest(BaseModel):
 
 
 def _error(exc: ApprovalTokenError) -> JSONResponse:
-    return JSONResponse(status_code=exc.http_status, content={"detail": exc.message, "code": exc.code})
+    return JSONResponse(status_code=exc.http_status, content={"detail": exc.message, "code": exc.code},
+                        headers={"Referrer-Policy": "no-referrer", "Cache-Control": "no-store"})
 
 
-@router.get("/approvals/email-action", dependencies=[Depends(_link_rate_limit)])
-async def preview_email_action(token: str):
-    """Show what the link will do. Never changes state."""
+@router.post("/approvals/email-action/preview", dependencies=[Depends(_link_rate_limit)])
+async def preview_email_action(body: TokenRequest):
+    """Show what the link will do. Never changes the decision. The token is in
+    the body (never a query string) so it can't end up in access logs."""
     try:
-        claims, _doc, approval = await approval_service.verify_action_token(db, token)
+        claims, _doc, approval = await approval_service.verify_action_token(db, body.token)
     except ApprovalTokenError as exc:
         return _error(exc)
     return {
@@ -89,10 +109,8 @@ async def perform_email_action(body: EmailActionRequest, request: Request, backg
     # Email the requester too (in-app notification is already created). Runs
     # after the response; failures are logged, never surfaced.
     if approval.get("requesterEmail"):
-        subject, html = approval_service.render_decision_email(approval)
         notification = await _new_notification(approval, "approval_decision", approval["requesterEmail"])
-        background.add_task(dispatch_email, db, notification["id"], approval["organizationId"],
-                            approval["requesterEmail"], subject, html)
+        background.add_task(dispatch_notification, db, notification["id"], approval["organizationId"])
     return {"status": approval["status"], "approvalId": approval["id"], "contractId": approval["contractId"],
             "message": f"Contract {approval['status']}."}
 
@@ -109,7 +127,7 @@ async def _new_notification(approval: dict, kind: str, to: str) -> dict:
     return doc
 
 
-@router.post("/webhooks/resend")
+@router.post("/webhooks/resend", dependencies=[Depends(_webhook_rate_limit)])
 async def resend_status_webhook(request: Request):
     """Record Resend delivery events (delivered/bounced/complained/...) on the
     matching ``email_notifications`` record. Svix-signed; fails closed."""
@@ -142,7 +160,7 @@ async def resend_status_webhook(request: Request):
     if event_type == "email.bounced":
         record["bounce"] = data.get("bounce")
     update = {"$push": {"events": record}, "$set": {"lastEventAt": event.get("created_at")}}
-    if notification.get("status") not in _STICKY:
+    if STATUS_RANK.get(status, 0) > STATUS_RANK.get(notification.get("status"), 0):
         update["$set"]["status"] = status
     # scoped by the record's own tenant
     # Scoped by the record's own tenant; the svixId guard makes Svix retries

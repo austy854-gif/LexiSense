@@ -24,7 +24,7 @@ def sent(monkeypatch):
     """Capture outbound email instead of calling Resend."""
     calls = []
 
-    async def fake_send(to, subject, html, tags=None):
+    async def fake_send(to, subject, html, tags=None, idempotency_key=None):
         calls.append({"to": to, "subject": subject, "html": html})
         return {"status": "sent", "email_id": f"re_{len(calls)}"}
 
@@ -69,7 +69,7 @@ async def seeded(db, org_id, other_org_id):
 
 def _token_from(html, action_index):
     import re
-    links = re.findall(r"/approvals/respond\?token=([A-Za-z0-9_\-\.]+)", html)
+    links = re.findall(r"/approvals/respond#token=([A-Za-z0-9_\-\.]+)", html)
     return links[action_index]
 
 
@@ -163,7 +163,7 @@ async def test_submit_sends_email_with_links(http, seeded, sent, db):
     assert len(sent) == 1 and sent[0]["to"] == "mgr@example.com"
     html = sent[0]["html"]
     assert "https://app.example.com/contracts/c-1" in html
-    assert html.count("/approvals/respond?token=") == 2
+    assert html.count("/approvals/respond#token=") == 2 and "?token=" not in html
     notif = await db.email_notifications.find_one({"approvalId": body["approval"]["id"]})
     assert notif["status"] == "sent" and notif["resendEmailId"] == "re_1"
     assert await db.approval_tokens.count_documents({}) == 2
@@ -173,7 +173,7 @@ async def test_preview_does_not_change_state(http, seeded, sent, db):
     await _submit(http, seeded)
     token = _token_from(sent[0]["html"], 0)
     for _ in range(3):
-        r = await http.get(f"{API_PREFIX}/approvals/email-action", params={"token": token})
+        r = await http.post(f"{API_PREFIX}/approvals/email-action/preview", json={"token": token})
         assert r.status_code == 200 and r.json()["action"] == "approve"
     assert (await db.approvals.find_one({}))["status"] == "pending"
     assert (await db.contracts.find_one({"id": "c-1"}))["status"] == "review"
@@ -276,23 +276,23 @@ async def test_flag_off_no_email(http, seeded, sent, monkeypatch, db):
     assert await db.approvals.count_documents({}) == 0
 
 
-async def test_dispatch_uses_celery_when_configured(db, monkeypatch, sent):
+async def test_dispatch_uses_celery_with_ids_only(db, monkeypatch, sent):
     queued = []
     monkeypatch.setattr("services.celery_app.CELERY_BROKER_URL", "redis://x", raising=False)
     monkeypatch.setattr(approval_tasks.send_approval_email_task, "apply_async",
                         lambda *a, **k: queued.append(k), raising=False)
-    status = await approval_tasks.dispatch_email(db, "n1", "org1", "a@b.c", "s", "h")
-    assert status == "queued" and queued and sent == []
+    status = await approval_tasks.dispatch_notification(db, "n1", "org1")
+    assert status == "queued" and sent == []
+    assert queued[0]["args"] == ("n1", "org1")  # no token / html in the broker
 
 
-async def test_dispatch_falls_back_inline_when_enqueue_fails(db, monkeypatch, sent):
+async def test_dispatch_falls_back_inline_when_enqueue_fails(http, seeded, db, monkeypatch, sent):
     def fail(*a, **k):
         raise ConnectionError("redis down")
     monkeypatch.setattr("services.celery_app.CELERY_BROKER_URL", "redis://x", raising=False)
     monkeypatch.setattr(approval_tasks.send_approval_email_task, "apply_async", fail, raising=False)
-    await db.email_notifications.insert_one({"id": "n1", "organizationId": "org1", "status": "queued"})
-    assert await approval_tasks.dispatch_email(db, "n1", "org1", "a@b.c", "s", "h") == "sent"
-    assert len(sent) == 1
+    await _submit(http, seeded)
+    assert len(sent) == 1 and (await db.email_notifications.find_one({}))["status"] == "sent"
 
 
 # --------------------------------------------------------------------------- webhook
@@ -347,3 +347,247 @@ def test_flag_default_off(monkeypatch):
     from utils.feature_flags import approval_emails_enabled
     monkeypatch.delenv("APPROVAL_EMAILS_ENABLED", raising=False)
     assert approval_emails_enabled() is False
+
+
+# =========================================================================== review fixes (PR #42)
+# P0-1 self-approval bypass
+async def test_self_approval_via_approver_id_blocked(http, db, org_id, sent):
+    me = make_user(org_id, role="manager", user_id="u-me", email="me@example.com")
+    other = make_user(org_id, role="manager", user_id="u-other", email="other@example.com")
+    for u in (me, other):
+        await db.users.insert_one(dict(u))
+    await db.contracts.insert_one(make_contract(org_id, "u-me", contract_id="c-1", status="draft"))
+    r = await http.post(f"{API_PREFIX}/contracts/c-1/workflow/submit_for_review",
+                        params={"approver_id": "u-me"}, headers=auth_headers(me))
+    assert r.json()["approval"]["approverId"] == "u-other"
+    assert sent[0]["to"] == "other@example.com"
+
+
+async def test_self_approval_via_assigned_manager_blocked(db, org_id):
+    me = make_user(org_id, role="manager", user_id="u-me")
+    await db.users.insert_one(dict(me))
+    picked = await approval_service.choose_approver(db, org_id, "u-me", None, {"assignedManagerId": "u-me"})
+    assert picked is None  # the only manager is the requester
+    other = make_user(org_id, role="admin", user_id="u-adm")
+    await db.users.insert_one(dict(other))
+    picked = await approval_service.choose_approver(db, org_id, "u-me", "u-me", {"assignedManagerId": "u-me"})
+    assert picked["id"] == "u-adm"
+
+
+async def test_assigned_manager_used_when_eligible(db, org_id):
+    for uid in ("u-m1", "u-m2"):
+        await db.users.insert_one(make_user(org_id, role="manager", user_id=uid))
+    picked = await approval_service.choose_approver(db, org_id, "u-req", None, {"assignedManagerId": "u-m2"})
+    assert picked["id"] == "u-m2"
+
+
+# P1-2 approver re-checked at POST time
+@pytest.mark.parametrize("change", [
+    {"isActive": False}, {"role": "user"}, {"organizationId": "org-beta"},
+])
+async def test_ineligible_approver_gets_403_and_token_revoked(http, seeded, sent, db, change):
+    await _submit(http, seeded)
+    await db.users.update_one({"id": "u-mgr"}, {"$set": change})
+    token = _token_from(sent[0]["html"], 0)
+    r = await http.post(f"{API_PREFIX}/approvals/email-action", json={"token": token})
+    assert r.status_code == 403 and r.json()["code"] == "forbidden"
+    assert await db.approval_tokens.count_documents({"revokedAt": None}) == 0
+    assert (await db.contracts.find_one({"id": "c-1"}))["status"] == "review"
+
+
+async def test_deleted_approver_gets_403(http, seeded, sent, db):
+    await _submit(http, seeded)
+    await db.users.delete_one({"id": "u-mgr"})
+    r = await http.post(f"{API_PREFIX}/approvals/email-action", json={"token": _token_from(sent[0]["html"], 0)})
+    assert r.status_code == 403
+
+
+# P1-3 token never in logs / referrer
+async def test_responses_carry_no_referrer(http, seeded, sent):
+    await _submit(http, seeded)
+    token = _token_from(sent[0]["html"], 0)
+    ok = await http.post(f"{API_PREFIX}/approvals/email-action/preview", json={"token": token})
+    bad = await http.post(f"{API_PREFIX}/approvals/email-action/preview", json={"token": "x" * 20})
+    for r in (ok, bad):
+        assert r.headers["referrer-policy"] == "no-referrer"
+
+
+async def test_get_with_token_query_not_supported(http):
+    r = await http.get(f"{API_PREFIX}/approvals/email-action", params={"token": "abc.def"})
+    assert r.status_code == 405
+
+
+def test_request_log_query_redacted():
+    from utils.logging_config import redact_query
+    out = redact_query("token=secret.value&page=2")
+    assert "secret" not in out and "page=2" in out and "token=" in out
+
+
+def test_uvicorn_access_log_redacted():
+    import logging
+    from utils.logging_config import AccessLogRedactionFilter
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                            ("1.2.3.4", "GET", "/x?token=abc.def&a=1", "1.1", 200), None)
+    AccessLogRedactionFilter().filter(rec)
+    assert "abc.def" not in rec.getMessage() and "a=1" in rec.getMessage()
+
+
+async def test_request_logging_middleware_redacts(caplog):
+    from utils.logging_config import RequestLoggingMiddleware
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive():
+        return {"type": "http.request"}
+
+    async def send(_):
+        pass
+
+    mw = RequestLoggingMiddleware(app)
+    with caplog.at_level("INFO", logger="lexisense.request"):
+        await mw({"type": "http", "method": "GET", "path": "/p", "query_string": b"token=topsecret",
+                  "client": ("1.1.1.1", 1), "headers": []}, receive, send)
+    assert all("topsecret" not in str(getattr(r, "query", "")) for r in caplog.records)
+    assert any(getattr(r, "query", None) for r in caplog.records)
+
+
+# P1-4 approval/contract consistency
+async def test_contract_moved_out_of_review_supersedes(http, seeded, sent, db):
+    await _submit(http, seeded)
+    await db.contracts.update_one({"id": "c-1"}, {"$set": {"status": "draft"}})
+    r = await http.post(f"{API_PREFIX}/approvals/email-action", json={"token": _token_from(sent[0]["html"], 0)})
+    assert r.status_code == 409 and r.json()["code"] == "stale"
+    assert (await db.approvals.find_one({}))["status"] == "superseded"
+    assert (await db.contracts.find_one({"id": "c-1"}))["status"] == "draft"
+
+
+async def test_contract_changes_between_verify_and_update(http, seeded, sent, db, monkeypatch):
+    """Race: contract leaves review after verification -> modified_count 0."""
+    await _submit(http, seeded)
+    real_verify = approval_service.verify_action_token
+
+    async def verify_then_race(db_, token, now=None):
+        out = await real_verify(db_, token, now)
+        await db.contracts.update_one({"id": "c-1"}, {"$set": {"status": "draft"}})
+        return out
+    monkeypatch.setattr(approval_service, "verify_action_token", verify_then_race)
+    r = await http.post(f"{API_PREFIX}/approvals/email-action", json={"token": _token_from(sent[0]["html"], 0)})
+    assert r.status_code == 409 and r.json()["code"] == "stale"
+    assert (await db.approvals.find_one({}))["status"] == "superseded"
+    assert (await db.contracts.find_one({"id": "c-1"}))["status"] == "draft"
+
+
+# P2-5 token un-claimed when the decision fails
+async def test_token_unclaimed_on_unexpected_error(http, seeded, sent, db, monkeypatch):
+    await _submit(http, seeded)
+    token = _token_from(sent[0]["html"], 0)
+    coll_cls = type(db.contracts)
+    real = coll_cls.update_one
+    calls = {"n": 0}
+
+    async def flaky(self, *a, **k):
+        if self.name == "contracts":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("mongo blip")
+        return await real(self, *a, **k)
+    monkeypatch.setattr(coll_cls, "update_one", flaky)
+    with pytest.raises(RuntimeError):
+        await approval_service.consume_token_and_decide(db, token, "1.1.1.1")
+    doc = await db.approval_tokens.find_one({"tokenHash": approval_service.hash_token(token)})
+    assert doc["usedAt"] is None and (await db.approvals.find_one({}))["status"] == "pending"
+    # retry now succeeds
+    out = await approval_service.consume_token_and_decide(db, token, "1.1.1.1")
+    assert out["status"] == "approved"
+
+
+# P2-6 tokens minted at send time, retries idempotent
+async def test_tokens_minted_at_send_time(http, seeded, db, monkeypatch):
+    monkeypatch.setattr("services.celery_app.CELERY_BROKER_URL", "redis://x", raising=False)
+    monkeypatch.setattr(approval_tasks.send_approval_email_task, "apply_async", lambda *a, **k: None, raising=False)
+    await _submit(http, seeded)
+    assert await db.approval_tokens.count_documents({}) == 0  # nothing minted at request time
+
+
+async def test_retry_reuses_same_tokens_and_skips_after_success(http, seeded, db, monkeypatch):
+    attempts = []
+
+    async def flaky_send(to, subject, html, tags=None, idempotency_key=None):
+        attempts.append((html, idempotency_key))
+        if len(attempts) == 1:
+            raise RuntimeError("timeout")
+        return {"status": "sent", "email_id": "re_x"}
+    monkeypatch.setattr(email_service, "send_raw_email", flaky_send)
+    await _submit(http, seeded)  # inline attempt 1 fails
+    notif = await db.email_notifications.find_one({})
+    await approval_tasks.deliver_notification(db, notif["id"], notif["organizationId"])  # retry
+    assert attempts[0][0] == attempts[1][0]  # identical links
+    assert attempts[0][1] == attempts[1][1] == f"lexisense-notification-{notif['id']}"
+    assert await db.approval_tokens.count_documents({}) == 2
+    again = await approval_tasks.deliver_notification(db, notif["id"], notif["organizationId"])
+    assert again["status"] == "duplicate_skipped" and len(attempts) == 2
+
+
+# P2-7 key derivation, kid, rotation
+def test_default_key_is_domain_separated(monkeypatch):
+    import hashlib
+    import hmac as _hmac
+    monkeypatch.delenv("APPROVAL_TOKEN_SECRET", raising=False)
+    key = approval_service._current_key()
+    assert key != __import__("os").environ["JWT_SECRET"].encode()
+    assert key == _hmac.new(__import__("os").environ["JWT_SECRET"].encode(), b"approval-token-v1",
+                            hashlib.sha256).digest()
+
+
+def test_token_carries_kid_and_rotation_works(monkeypatch):
+    monkeypatch.setenv("APPROVAL_TOKEN_SECRET", "old-secret")
+    token, doc = approval_service.create_action_token("a1", "u1", "org1", "approve")
+    assert doc["kid"]
+    monkeypatch.setenv("APPROVAL_TOKEN_SECRET", "new-secret")
+    with pytest.raises(ApprovalTokenError):
+        approval_service.decode_action_token(token)
+    monkeypatch.setenv("APPROVAL_TOKEN_SECRET_PREVIOUS", "old-secret")
+    assert approval_service.decode_action_token(token).approval_id == "a1"
+
+
+# P2-8 forwarded-for handling + webhook rate limit
+@pytest.mark.parametrize("hops,xff,expected", [
+    ("1", "6.6.6.6, 203.0.113.9", "203.0.113.9"),     # spoofed left entry ignored
+    ("2", "6.6.6.6, 203.0.113.9, 10.0.0.2", "203.0.113.9"),
+    ("0", "6.6.6.6", "peer"),
+    ("3", "203.0.113.9", "203.0.113.9"),
+])
+def test_client_key_trusted_proxies(monkeypatch, hops, xff, expected):
+    from types import SimpleNamespace
+    from utils.rbac import client_key
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", hops)
+    req = SimpleNamespace(headers={"x-forwarded-for": xff}, client=SimpleNamespace(host="peer"))
+    assert client_key(req) == expected
+
+
+async def test_webhook_rate_limited(http, monkeypatch):
+    from utils.rbac import SlidingWindowRateLimiter
+    monkeypatch.setattr(approvals_route.RESEND_WEBHOOK_LIMITER, "max_requests", 2, raising=False)
+    approvals_route.RESEND_WEBHOOK_LIMITER.reset()
+    codes = [(await http.post(f"{API_PREFIX}/webhooks/resend", content=b"{}")).status_code for _ in range(3)]
+    approvals_route.RESEND_WEBHOOK_LIMITER.reset()
+    assert codes[-1] == 429 and SlidingWindowRateLimiter
+
+
+# P2-9 status order + strict base64
+async def test_late_sent_does_not_overwrite_delivered(http, db):
+    approvals_route.RESEND_WEBHOOK_LIMITER.reset()
+    await db.email_notifications.insert_one(
+        {"id": "n1", "organizationId": "org-alpha", "resendEmailId": "re_9", "status": "sent", "events": []})
+    for i, etype in enumerate(["email.delivered", "email.sent"]):
+        body = json.dumps({"type": etype, "data": {"email_id": "re_9"}}).encode()
+        assert (await http.post(f"{API_PREFIX}/webhooks/resend", content=body,
+                                headers=_signed(body, msg_id=f"s{i}"))).status_code == 200
+    assert (await db.email_notifications.find_one({"id": "n1"}))["status"] == "delivered"
+
+
+def test_svix_secret_strict_base64():
+    with pytest.raises(svix.WebhookVerificationError):
+        svix.sign("whsec_not*valid*base64!!", "m", "1", b"x")

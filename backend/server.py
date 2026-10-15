@@ -28,6 +28,8 @@ setup_logging(
     json_format=os.environ.get("LOG_JSON", "true").lower() == "true"
 )
 logger = get_logger("main")
+from utils.logging_config import install_access_log_redaction  # noqa: E402
+install_access_log_redaction()
 
 # MongoDB connection.
 #

@@ -24,7 +24,7 @@ def _key(secret: str) -> bytes:
     if secret.startswith("whsec_"):
         secret = secret[len("whsec_"):]
     try:
-        return base64.b64decode(secret)
+        return base64.b64decode(secret, validate=True)
     except Exception as exc:
         raise WebhookVerificationError("invalid webhook secret") from exc
 

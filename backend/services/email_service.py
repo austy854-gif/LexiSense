@@ -238,7 +238,8 @@ async def send_expiration_alert(
     )
 
 
-async def send_raw_email(to_email: str, subject: str, html: str, tags: Optional[list] = None) -> dict:
+async def send_raw_email(to_email: str, subject: str, html: str, tags: Optional[list] = None,
+                         idempotency_key: Optional[str] = None) -> dict:
     """Send a pre-rendered email. Unlike :func:`send_email` this RAISES on a
     provider error so callers (e.g. a Celery task) can retry; it returns
     ``{"status": "logged"}`` without sending when RESEND_API_KEY is unset."""
@@ -248,5 +249,6 @@ async def send_raw_email(to_email: str, subject: str, html: str, tags: Optional[
     params = {"from": SENDER_EMAIL, "to": [to_email], "subject": subject, "html": html}
     if tags:
         params["tags"] = tags
-    email = await asyncio.to_thread(resend.Emails.send, params)
+    options = {"idempotency_key": idempotency_key} if idempotency_key else None
+    email = await asyncio.to_thread(resend.Emails.send, params, options)
     return {"status": "sent", "email_id": (email or {}).get("id")}

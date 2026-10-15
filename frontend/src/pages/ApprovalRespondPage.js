@@ -1,15 +1,21 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import api from '../api';
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 
 // Landing page for the one-click Approve/Reject links in approval emails.
-// The GET preview never changes state (so email link scanners cannot approve
-// anything); the decision is only made when the user clicks Confirm (POST).
+// The token arrives in the URL fragment (#token=...), which browsers never
+// send to a server, and is stripped from the address bar immediately. Both
+// the preview and the confirm calls send it in a POST body. Opening the link
+// never changes state; the decision is only made when the user clicks Confirm.
+function readTokenFromFragment() {
+  const hash = window.location.hash.replace(/^#/, '');
+  return new URLSearchParams(hash).get('token') || '';
+}
+
 export default function ApprovalRespondPage() {
-  const [params] = useSearchParams();
-  const token = params.get('token') || '';
+  const [token] = useState(readTokenFromFragment);
   const [preview, setPreview] = useState(null);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
@@ -17,12 +23,24 @@ export default function ApprovalRespondPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    // Keep the token out of history, the address bar and any Referer header.
+    const meta = document.createElement('meta');
+    meta.name = 'referrer';
+    meta.content = 'no-referrer';
+    document.head.appendChild(meta);
+    if (window.location.hash) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    return () => meta.remove();
+  }, []);
+
+  useEffect(() => {
     if (!token) {
       setError('This approval link is missing its token.');
       return;
     }
     api
-      .get('/approvals/email-action', { params: { token } })
+      .post('/approvals/email-action/preview', { token })
       .then((res) => setPreview(res.data))
       .catch((err) => setError(err.response?.data?.detail || 'This approval link could not be verified.'));
   }, [token]);

@@ -49,11 +49,31 @@ def _ttl_hours() -> int:
         return 72
 
 
-def _secret() -> bytes:
-    secret = os.environ.get("APPROVAL_TOKEN_SECRET") or os.environ.get("JWT_SECRET")
-    if not secret:
+def _current_key() -> bytes:
+    """Signing key. APPROVAL_TOKEN_SECRET if set, else a domain-separated key
+    derived from JWT_SECRET (so an approval token can never collide with a JWT)."""
+    explicit = os.environ.get("APPROVAL_TOKEN_SECRET")
+    if explicit:
+        return explicit.encode("utf-8")
+    jwt_secret = os.environ.get("JWT_SECRET")
+    if not jwt_secret:
         raise RuntimeError("APPROVAL_TOKEN_SECRET or JWT_SECRET must be set")
-    return secret.encode("utf-8")
+    return hmac.new(jwt_secret.encode("utf-8"), b"approval-token-v1", hashlib.sha256).digest()
+
+
+def _kid(key: bytes) -> str:
+    return hashlib.sha256(b"kid:" + key).hexdigest()[:12]
+
+
+def _verification_keys() -> Dict[str, bytes]:
+    """kid -> key for the current key and APPROVAL_TOKEN_SECRET_PREVIOUS (rotation)."""
+    keys = {}
+    current = _current_key()
+    keys[_kid(current)] = current
+    previous = os.environ.get("APPROVAL_TOKEN_SECRET_PREVIOUS")
+    if previous:
+        keys.setdefault(_kid(previous.encode("utf-8")), previous.encode("utf-8"))
+    return keys
 
 
 def _b64e(raw: bytes) -> str:
@@ -97,14 +117,26 @@ class TokenClaims:
 # Token create / verify
 # ---------------------------------------------------------------------------
 def create_action_token(approval_id: str, approver_id: str, organization_id: str, action: str,
-                        ttl_hours: Optional[int] = None, now: Optional[datetime] = None) -> tuple[str, Dict[str, Any]]:
-    """Return ``(raw_token, token_doc)``. Persist ``token_doc``, never the raw token."""
+                        ttl_hours: Optional[int] = None, now: Optional[datetime] = None,
+                        expires_at: Optional[datetime] = None, seed: Optional[str] = None
+                        ) -> tuple[str, Dict[str, Any]]:
+    """Return ``(raw_token, token_doc)``. Persist ``token_doc``, never the raw token.
+
+    With ``seed`` (the notification id) and a fixed ``expires_at`` the token is
+    deterministic, so a retried send re-renders the *same* links instead of
+    minting new ones (idempotent retries, no duplicate valid links)."""
     if action not in ACTIONS:
         raise ValueError(f"invalid action {action!r}")
     now = now or _now()
-    expires_at = now + timedelta(hours=ttl_hours or _ttl_hours())
+    expires_at = expires_at or (now + timedelta(hours=ttl_hours or _ttl_hours()))
+    key = _current_key()
+    if seed:
+        jti = _b64e(hmac.new(key, f"jti:{seed}:{approval_id}:{action}".encode(), hashlib.sha256).digest()[:16])
+    else:
+        jti = secrets.token_urlsafe(16)
     payload = {
-        "jti": secrets.token_urlsafe(16),
+        "kid": _kid(key),
+        "jti": jti,
         "aid": approval_id,
         "sub": approver_id,
         "org": organization_id,
@@ -112,11 +144,12 @@ def create_action_token(approval_id: str, approver_id: str, organization_id: str
         "exp": int(expires_at.timestamp()),
     }
     body = _b64e(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-    sig = _b64e(hmac.new(_secret(), body.encode("ascii"), hashlib.sha256).digest())
+    sig = _b64e(hmac.new(key, body.encode("ascii"), hashlib.sha256).digest())
     token = f"{body}.{sig}"
     doc = {
         "tokenHash": hash_token(token),
-        "jti": payload["jti"],
+        "jti": jti,
+        "kid": payload["kid"],
         "approvalId": approval_id,
         "approverId": approver_id,
         "organizationId": organization_id,
@@ -133,10 +166,13 @@ def decode_action_token(token: str, now: Optional[datetime] = None) -> TokenClai
     """Check signature, shape and expiry. Does NOT touch the database."""
     try:
         body, sig = token.split(".")
-        expected = _b64e(hmac.new(_secret(), body.encode("ascii"), hashlib.sha256).digest())
+        payload = json.loads(_b64d(body))
+        key = _verification_keys().get(str(payload.get("kid")))
+        if key is None:
+            raise ValueError("unknown kid")
+        expected = _b64e(hmac.new(key, body.encode("ascii"), hashlib.sha256).digest())
         if not hmac.compare_digest(expected, sig):
             raise ValueError("bad signature")
-        payload = json.loads(_b64d(body))
         claims = TokenClaims(
             jti=str(payload["jti"]),
             approval_id=str(payload["aid"]),
@@ -175,7 +211,36 @@ async def verify_action_token(
         raise ApprovalTokenError("mismatch", "This approval link is invalid or has been tampered with.", 400)
     if approval.get("status") != "pending":
         raise ApprovalTokenError("decided", f"This request has already been {approval.get('status')}.", 409)
+    if not await _approver_still_eligible(db, approval):
+        await revoke_tokens(db, approval["id"], approval["organizationId"])
+        raise ApprovalTokenError("forbidden", "You are no longer allowed to decide this request.", 403)
+    contract = await db.contracts.find_one(
+        {"id": approval["contractId"], "organizationId": approval["organizationId"]}, {"_id": 0, "status": 1}
+    )
+    if not contract or contract.get("status") != "review":
+        await supersede(db, approval, "contract_not_in_review")
+        raise ApprovalTokenError("stale", "This contract is no longer awaiting review; nothing was changed.", 409)
     return claims, doc, approval
+
+
+async def _approver_still_eligible(db, approval: dict) -> bool:
+    if approval.get("approverId") == approval.get("requesterId"):
+        return False
+    user = await db.users.find_one(
+        {"id": approval["approverId"], "organizationId": approval["organizationId"]},
+        {"_id": 0, "role": 1, "isActive": 1},
+    )
+    return bool(user) and user.get("isActive", True) is not False and user.get("role") in APPROVER_ROLES
+
+
+async def supersede(db, approval: dict, reason: str) -> None:
+    now = _now().isoformat()
+    await db.approvals.update_one(
+        {"id": approval["id"], "organizationId": approval["organizationId"], "status": "pending"},
+        {"$set": {"status": "superseded", "supersededReason": reason, "updatedAt": now},
+         "$push": {"auditTrail": {"event": "superseded", "reason": reason, "at": now}}},
+    )
+    await revoke_tokens(db, approval["id"], approval["organizationId"])
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +255,10 @@ async def choose_approver(db, organization_id: str, requester_id: str, preferred
             "isActive": {"$ne": False}, "id": {"$ne": requester_id}}
     proj = {"_id": 0, "id": 1, "email": 1, "firstName": 1, "lastName": 1, "role": 1}
     for candidate in (preferred_id, (contract or {}).get("assignedManagerId")):
-        if candidate:
-            user = await db.users.find_one({**base, "id": candidate}, proj)
+        if candidate and candidate != requester_id:
+            # $and keeps the "not the requester" clause; merging {"id": ...}
+            # into ``base`` would overwrite it (self-approval bypass).
+            user = await db.users.find_one({"$and": [base, {"id": candidate}]}, proj)
             if user:
                 return user
     for role in APPROVER_ROLES:
@@ -203,9 +270,10 @@ async def choose_approver(db, organization_id: str, requester_id: str, preferred
 
 async def request_approval(db, contract: dict, requester: dict, approver_id: Optional[str] = None,
                            comment: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Create the approval + tokens + notification record. Returns a dict with
-    ``approval``, ``notification`` and raw ``tokens`` (for the email only) or
-    ``None`` when no approver exists. Supersedes any older pending request."""
+    """Create the approval + notification record. Tokens are minted (and the
+    email rendered) at send time by :func:`mint_tokens_for_notification`, so no
+    raw token ever passes through the task queue. Returns ``None`` when no
+    approver exists. Supersedes any older pending request."""
     org_id = requester["organizationId"]
     approver = await choose_approver(db, org_id, requester["sub"], approver_id, contract)
     if not approver:
@@ -240,11 +308,8 @@ async def request_approval(db, contract: dict, requester: dict, approver_id: Opt
     }
     await db.approvals.insert_one(dict(approval))
 
-    tokens = {}
-    for action in ACTIONS:
-        raw, doc = create_action_token(approval["id"], approver["id"], org_id, action, now=now)
-        await db.approval_tokens.insert_one(doc)
-        tokens[action] = raw
+    approval["expiresAt"] = (now + timedelta(hours=_ttl_hours())).isoformat()
+    await db.approvals.update_one({"id": approval["id"]}, {"$set": {"expiresAt": approval["expiresAt"]}})
 
     notification = {
         "id": str(uuid.uuid4()),
@@ -261,7 +326,20 @@ async def request_approval(db, contract: dict, requester: dict, approver_id: Opt
     }
     await db.email_notifications.insert_one(dict(notification))
     approval.pop("_id", None)
-    return {"approval": approval, "notification": notification, "tokens": tokens, "approver": approver}
+    return {"approval": approval, "notification": notification, "approver": approver}
+
+
+async def mint_tokens_for_notification(db, approval: dict, notification_id: str) -> Dict[str, str]:
+    """Deterministically (re)mint this notification's two tokens and upsert
+    their hashes. Calling it again (a retry) yields the identical tokens."""
+    expires_at = datetime.fromisoformat(approval["expiresAt"])
+    tokens = {}
+    for action in ACTIONS:
+        raw, doc = create_action_token(approval["id"], approval["approverId"], approval["organizationId"], action,
+                                       expires_at=expires_at, seed=notification_id)
+        await db.approval_tokens.update_one({"tokenHash": doc["tokenHash"]}, {"$setOnInsert": doc}, upsert=True)
+        tokens[action] = raw
+    return tokens
 
 
 async def revoke_tokens(db, approval_id: str, organization_id: str) -> None:
@@ -277,7 +355,10 @@ async def revoke_tokens(db, approval_id: str, organization_id: str) -> None:
 async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_email: Optional[str],
                          ip: Optional[str], via: str, comment: Optional[str] = None) -> Optional[dict]:
     """Move a *pending* approval to approved/rejected (conditional update, so
-    concurrent or repeated calls are no-ops) and sync the contract status.
+    concurrent or repeated calls are no-ops). For email-link decisions the
+    contract must still be in ``review``: if the contract update matches
+    nothing, the approval is moved to ``superseded`` and :class:`ApprovalTokenError`
+    (``stale``) is raised, so approval and contract can never disagree.
     Returns the updated approval, or ``None`` if it was no longer pending."""
     now = _now().isoformat()
     org_id = approval["organizationId"]
@@ -295,7 +376,6 @@ async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_e
     if not updated:
         return None
     updated.pop("_id", None)
-    await revoke_tokens(db, approval["id"], org_id)
 
     if via == "email_link":
         # The in-app workflow route updates the contract itself.
@@ -308,9 +388,29 @@ async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_e
         }
         if action == "approve":
             contract_update["$set"].update({"approvedBy": actor_id, "approvedAt": now})
-        await db.contracts.update_one(
-            {"id": approval["contractId"], "organizationId": org_id, "status": "review"}, contract_update
-        )
+        try:
+            result = await db.contracts.update_one(
+                {"id": approval["contractId"], "organizationId": org_id, "status": "review"}, contract_update
+            )
+            changed = result.modified_count == 1
+        except Exception:
+            # Put the approval back so the (un-claimed) link can be retried.
+            await db.approvals.update_one(
+                {"id": approval["id"], "organizationId": org_id, "status": DECISION_STATUS[action]},
+                {"$set": {"status": "pending", "decidedAt": None, "decidedBy": None, "decidedIp": None,
+                          "decidedVia": None, "updatedAt": now},
+                 "$pull": {"auditTrail": {"at": now, "event": DECISION_STATUS[action]}}},
+            )
+            raise
+        if not changed:
+            await db.approvals.update_one(
+                {"id": approval["id"], "organizationId": org_id},
+                {"$set": {"status": "superseded", "supersededReason": "contract_not_in_review", "updatedAt": now},
+                 "$push": {"auditTrail": {"event": "superseded", "reason": "contract_not_in_review", "at": now}}},
+            )
+            await revoke_tokens(db, approval["id"], org_id)
+            raise ApprovalTokenError("stale", "This contract is no longer awaiting review; nothing was changed.", 409)
+    await revoke_tokens(db, approval["id"], org_id)
 
     from services.audit_service import log_action, send_notification
 
@@ -329,19 +429,30 @@ async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_e
 
 
 async def consume_token_and_decide(db, token: str, ip: Optional[str], comment: Optional[str] = None) -> dict:
+    """Verify, claim the token (single use), decide. MongoDB transactions need
+    a replica set and aren't guaranteed in every deployment, so instead of a
+    transaction the claim is released if the decision raises unexpectedly."""
     claims, doc, approval = await verify_action_token(db, token)
-    # Atomic single-use claim: only one request can flip usedAt from None.
     claimed = await db.approval_tokens.update_one(
         {"tokenHash": doc["tokenHash"], "usedAt": None, "revokedAt": None},
         {"$set": {"usedAt": _now().isoformat(), "usedIp": ip}},
     )
     if claimed.modified_count != 1:
         raise ApprovalTokenError("used", "This approval link has already been used.", 409)
-    approver = await db.users.find_one(
-        {"id": claims.approver_id, "organizationId": claims.organization_id}, {"_id": 0, "email": 1}
-    ) or {}
-    updated = await apply_decision(db, approval, claims.action, claims.approver_id,
-                                   approver.get("email") or approval.get("approverEmail"), ip, "email_link", comment)
+    try:
+        approver = await db.users.find_one(
+            {"id": claims.approver_id, "organizationId": claims.organization_id}, {"_id": 0, "email": 1}
+        ) or {}
+        updated = await apply_decision(db, approval, claims.action, claims.approver_id,
+                                       approver.get("email") or approval.get("approverEmail"), ip,
+                                       "email_link", comment)
+    except ApprovalTokenError:
+        raise  # deliberate outcome (e.g. stale): token stays consumed/revoked
+    except Exception:
+        await db.approval_tokens.update_one(
+            {"tokenHash": doc["tokenHash"], "revokedAt": None}, {"$set": {"usedAt": None, "usedIp": None}}
+        )
+        raise
     if not updated:
         raise ApprovalTokenError("decided", "This request has already been decided.", 409)
     return updated
@@ -375,10 +486,12 @@ def _app_url() -> str:
 
 
 def action_link(token: str) -> str:
-    return f"{_app_url()}/approvals/respond?token={token}"
+    # Fragment, not query: never sent to any server, so it can't reach access
+    # logs, proxies or Referer headers. The SPA strips it immediately.
+    return f"{_app_url()}/approvals/respond#token={token}"
 
 
-def render_request_email(approval: dict, approver: dict, tokens: Dict[str, str]) -> tuple[str, str]:
+def render_request_email(approval: dict, approver: Optional[dict], tokens: Dict[str, str]) -> tuple[str, str]:
     title = escape(approval.get("contractTitle") or "Untitled contract")
     requester = escape(approval.get("requesterEmail") or "A teammate")
     comment = escape(approval.get("comment") or "")

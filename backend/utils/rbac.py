@@ -18,6 +18,7 @@ Roles (ordered least -> most privileged)::
 """
 from __future__ import annotations
 
+import os
 import logging
 import time
 from collections import defaultdict, deque
@@ -139,20 +140,29 @@ class SlidingWindowRateLimiter:
         self._hits.clear()
 
 
+def _trusted_proxy_count() -> int:
+    try:
+        return max(0, int(os.environ.get("TRUSTED_PROXY_COUNT", "1")))
+    except ValueError:
+        return 1
+
+
 def client_key(request) -> str:
     """Best-effort client identity for rate-limit keys.
 
-    ``X-Forwarded-For`` is honoured because the app is deployed behind a
-    reverse proxy (nginx) that overwrites it; the left-most entry is the
-    originating client. Behind a proxy that does **not** sanitise the header,
-    this is spoofable -- that is precisely why the limiter is a defence in
-    depth layer and not the only control.
+    ``X-Forwarded-For`` is a list the client can pre-fill, so the *left-most*
+    entry is spoofable. Each trusted proxy appends the address it saw, so the
+    real client is the entry ``TRUSTED_PROXY_COUNT`` hops from the right
+    (default 1: one platform proxy in front of the app). ``0`` ignores the
+    header entirely and uses the socket peer. If the header is shorter than
+    the configured hop count, the left-most entry is used.
     """
-    forwarded = request.headers.get("x-forwarded-for")
+    hops = _trusted_proxy_count()
+    forwarded = request.headers.get("x-forwarded-for") if hops else None
     if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
+        parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+        if parts:
+            return parts[-hops] if len(parts) >= hops else parts[0]
     client = getattr(request, "client", None)
     return getattr(client, "host", None) or "unknown"
 

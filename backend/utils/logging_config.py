@@ -111,6 +111,38 @@ def clear_request_id() -> None:
     request_id_var.set('')
 
 
+_SENSITIVE_QUERY_KEYS = {"token", "access_token", "refresh_token", "code", "password"}
+
+
+def redact_query(query: str) -> str:
+    """Replace values of sensitive query parameters (e.g. ``token``) with [REDACTED]."""
+    if not query:
+        return query
+    from urllib.parse import parse_qsl, urlencode
+
+    pairs = parse_qsl(query, keep_blank_values=True)
+    return urlencode([(k, "[REDACTED]" if k.lower() in _SENSITIVE_QUERY_KEYS else v) for k, v in pairs], safe="[]")
+
+
+class AccessLogRedactionFilter(logging.Filter):
+    """Redact sensitive query params in uvicorn access-log records
+    (args = client, method, path?query, http_version, status)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "?" in args[2]:
+            path, _, query = args[2].partition("?")
+            record.args = args[:2] + (f"{path}?{redact_query(query)}",) + args[3:]
+        return True
+
+
+def install_access_log_redaction() -> None:
+    for name in ("uvicorn.access", "gunicorn.access"):
+        lg = logging.getLogger(name)
+        if not any(isinstance(f, AccessLogRedactionFilter) for f in lg.filters):
+            lg.addFilter(AccessLogRedactionFilter())
+
+
 class RequestLoggingMiddleware:
     """ASGI middleware for request/response logging with correlation IDs."""
     
@@ -128,7 +160,7 @@ class RequestLoggingMiddleware:
         # Extract request info
         method = scope.get("method", "")
         path = scope.get("path", "")
-        query_string = scope.get("query_string", b"").decode()
+        query_string = redact_query(scope.get("query_string", b"").decode())
         client = scope.get("client", ("unknown", 0))[0]
         
         logger = logging.getLogger("lexisense.request")

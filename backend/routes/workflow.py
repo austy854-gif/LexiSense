@@ -194,7 +194,7 @@ async def workflow_action(
 async def _handle_approval_emails(contract, action, comment, approver_id, current_user, background):
     """Best effort: never fails the workflow request."""
     from services import approval_service
-    from services.approval_tasks import dispatch_email
+    from services.approval_tasks import dispatch_notification
 
     try:
         if action == "submit_for_review":
@@ -202,9 +202,7 @@ async def _handle_approval_emails(contract, action, comment, approver_id, curren
             if not created:
                 return {"status": "no_approver"}
             approval = created["approval"]
-            subject, html = approval_service.render_request_email(approval, created["approver"], created["tokens"])
-            background.add_task(dispatch_email, db, created["notification"]["id"], approval["organizationId"],
-                                created["approver"].get("email"), subject, html)
+            background.add_task(dispatch_notification, db, created["notification"]["id"], approval["organizationId"])
             return {"id": approval["id"], "approverId": approval["approverId"], "status": "pending"}
         if action in ("approve", "reject"):
             await approval_service.sync_in_app_decision(
