@@ -7,7 +7,11 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "LexiSense <onboarding@resend.dev>")
+SENDER_EMAIL = (
+    os.environ.get("SENDER_EMAIL")
+    or os.environ.get("RESEND_FROM_EMAIL")  # legacy name
+    or "LexiSense <onboarding@resend.dev>"
+)
 APP_URL = os.environ.get("APP_URL", "")
 if not APP_URL:
     logger.warning("APP_URL is not set - links in outgoing emails will be relative/broken")
@@ -232,3 +236,17 @@ async def send_expiration_alert(
             "days_remaining": days_remaining
         }
     )
+
+
+async def send_raw_email(to_email: str, subject: str, html: str, tags: Optional[list] = None) -> dict:
+    """Send a pre-rendered email. Unlike :func:`send_email` this RAISES on a
+    provider error so callers (e.g. a Celery task) can retry; it returns
+    ``{"status": "logged"}`` without sending when RESEND_API_KEY is unset."""
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not configured. Email '%s' to %s logged but not sent.", subject, to_email)
+        return {"status": "logged", "email_id": None}
+    params = {"from": SENDER_EMAIL, "to": [to_email], "subject": subject, "html": html}
+    if tags:
+        params["tags"] = tags
+    email = await asyncio.to_thread(resend.Emails.send, params)
+    return {"status": "sent", "email_id": (email or {}).get("id")}
