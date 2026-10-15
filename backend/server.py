@@ -190,6 +190,9 @@ app.state.db_name = DB_NAME
 
 # Add request logging middleware
 app.add_middleware(RequestLoggingMiddleware)
+# Trust X-Forwarded-Proto from the proxy hop only (uvicorn no longer does, see Dockerfile).
+from utils.proxy import ForwardedProtoMiddleware  # noqa: E402
+app.add_middleware(ForwardedProtoMiddleware)
 
 # Create a router with the /api/v1 prefix
 api_router = APIRouter(prefix="/api/v1")

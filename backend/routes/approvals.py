@@ -109,8 +109,12 @@ async def perform_email_action(body: EmailActionRequest, request: Request, backg
     # Email the requester too (in-app notification is already created). Runs
     # after the response; failures are logged, never surfaced.
     if approval.get("requesterEmail"):
-        notification = await _new_notification(approval, "approval_decision", approval["requesterEmail"])
-        background.add_task(dispatch_notification, db, notification["id"], approval["organizationId"])
+        try:
+            notification = await _new_notification(approval, "approval_decision", approval["requesterEmail"])
+            background.add_task(dispatch_notification, db, notification["id"], approval["organizationId"])
+        except Exception:
+            # The decision is already committed; never turn that into an error.
+            logger.exception("Could not queue decision email for approval %s", approval["id"])
     return {"status": approval["status"], "approvalId": approval["id"], "contractId": approval["contractId"],
             "message": f"Contract {approval['status']}."}
 
@@ -162,7 +166,6 @@ async def resend_status_webhook(request: Request):
     update = {"$push": {"events": record}, "$set": {"lastEventAt": event.get("created_at")}}
     if STATUS_RANK.get(status, 0) > STATUS_RANK.get(notification.get("status"), 0):
         update["$set"]["status"] = status
-    # scoped by the record's own tenant
     # Scoped by the record's own tenant; the svixId guard makes Svix retries
     # (same svix-id) idempotent.
     await db.email_notifications.update_one(

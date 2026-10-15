@@ -161,7 +161,9 @@ class RequestLoggingMiddleware:
         method = scope.get("method", "")
         path = scope.get("path", "")
         query_string = redact_query(scope.get("query_string", b"").decode())
-        client = scope.get("client", ("unknown", 0))[0]
+        from starlette.requests import Request as _Request
+        from utils.rbac import client_key
+        client = client_key(_Request(scope))
         
         logger = logging.getLogger("lexisense.request")
         

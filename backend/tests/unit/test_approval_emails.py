@@ -705,3 +705,59 @@ def test_switch_to_explicit_secret_keeps_derived_links(monkeypatch):
     assert approval_service.decode_action_token(token).approval_id == "a1"
     new_token, doc = approval_service.create_action_token("a1", "u1", "org1", "approve")
     assert doc["kid"] == approval_service._kid(b"brand-new-secret")
+
+
+# =========================================================================== final nits (c1174f1)
+async def test_decision_email_queue_failure_still_200(http, seeded, sent, db, monkeypatch):
+    await _submit(http, seeded)
+
+    async def boom(*a, **k):
+        raise RuntimeError("insert failed")
+    monkeypatch.setattr(approvals_route, "_new_notification", boom)
+    r = await http.post(f"{API_PREFIX}/approvals/email-action", json={"token": _token_from(sent[0]["html"], 0)})
+    assert r.status_code == 200 and r.json()["status"] == "approved"
+    assert (await db.contracts.find_one({"id": "c-1"}))["status"] == "approved"
+
+
+@pytest.mark.parametrize("hops,xfp,expected", [
+    ("1", "https", "https"),
+    ("1", "http, https", "https"),        # rightmost (proxy-added) wins
+    ("1", "javascript", "http"),          # only http/https accepted
+    ("2", "https", "http"),               # too few entries -> untrusted
+    ("0", "https", "http"),               # XFF/XFP trust disabled
+])
+async def test_forwarded_proto_redirect(monkeypatch, hops, xfp, expected):
+    from utils.proxy import ForwardedProtoMiddleware
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", hops)
+    app = FastAPI()
+
+    @app.get("/items/")
+    async def items():
+        return {}
+    app.add_middleware(ForwardedProtoMiddleware)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as c:
+        r = await c.get("/items", headers={"x-forwarded-proto": xfp})
+    assert r.status_code == 307
+    assert r.headers["location"].startswith(f"{expected}://")
+
+
+async def test_request_log_uses_client_key(caplog, monkeypatch):
+    from utils.logging_config import RequestLoggingMiddleware
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "1")
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive():
+        return {"type": "http.request"}
+
+    async def send(_):
+        pass
+
+    with caplog.at_level("INFO", logger="lexisense.request"):
+        await RequestLoggingMiddleware(app)(
+            {"type": "http", "method": "GET", "path": "/p", "query_string": b"", "client": ("10.0.0.1", 1),
+             "headers": [(b"x-forwarded-for", b"6.6.6.6, 203.0.113.9")]}, receive, send)
+    ips = {getattr(r, "client_ip", None) for r in caplog.records} - {None}
+    assert ips == {"203.0.113.9"}
