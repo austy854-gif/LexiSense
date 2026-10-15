@@ -75,7 +75,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: lexisense-celery-worker
-    command: celery -A services.celery_app worker --loglevel=info --concurrency=4 -Q high_priority,default,scheduled,low_priority
+    command: celery -A services.celery_app worker --loglevel=info --concurrency=4 -Q high_priority,default,scheduled,low_priority --without-gossip --without-mingle --without-heartbeat
     environment:
       - MONGO_URL=mongodb://mongodb:27017
       - DB_NAME=lexisense

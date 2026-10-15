@@ -167,6 +167,10 @@ celery_app.conf.update(
     broker_transport_options={
         "socket_timeout": float(os.environ.get("CELERY_BROKER_SOCKET_TIMEOUT", "5")),
         "socket_connect_timeout": float(os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")),
+        # Seconds an idle worker blocks per BRPOP before re-polling. The kombu
+        # default (1s) costs ~86k Redis commands/day per queue on metered
+        # Redis such as Upstash; 10s cuts that ~10x. Requires kombu>=5.6.
+        "polling_interval": 10,
     },
     redis_socket_timeout=float(os.environ.get("CELERY_BROKER_SOCKET_TIMEOUT", "5")),
     redis_socket_connect_timeout=float(os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")),
