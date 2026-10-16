@@ -364,14 +364,56 @@ async def readiness_check():
     except Exception:
         db_ok = False
     bootstrap_ok = bool(getattr(app.state, "bootstrap_ok", False))
-    ready = db_ok and bootstrap_ok
+    redis_status = await _probe_redis()
+    ready = db_ok and bootstrap_ok and redis_status != "unhealthy"
     return JSONResponse(
         status_code=200 if ready else 503,
         content={
             "status": "ready" if ready else "not_ready",
-            "checks": {"database": db_ok, "bootstrap": bootstrap_ok},
+            "checks": {"database": db_ok, "bootstrap": bootstrap_ok, "redis": redis_status},
         },
     )
+
+
+REDIS_PROBE_TIMEOUT_SECONDS = 1.0
+
+
+def _redis_url():
+    """The broker URL Celery actually uses (see services/celery_app.py)."""
+    return os.environ.get("CELERY_BROKER_URL") or os.environ.get("REDIS_URL")
+
+
+async def _probe_redis() -> str:
+    """"skipped" when no Redis is configured, else "healthy"/"unhealthy".
+
+    Uses the asyncio client with ~1s timeouts so the event loop never blocks.
+    The URL is never logged (it carries credentials).
+    """
+    url = _redis_url()
+    if not url:
+        return "skipped"
+    if not url.startswith(("redis://", "rediss://")):
+        return "skipped"  # non-Redis broker: nothing to ping here
+    client = None
+    try:
+        import redis.asyncio as aioredis
+
+        client = aioredis.from_url(
+            url,
+            socket_timeout=REDIS_PROBE_TIMEOUT_SECONDS,
+            socket_connect_timeout=REDIS_PROBE_TIMEOUT_SECONDS,
+        )
+        await asyncio.wait_for(client.ping(), timeout=REDIS_PROBE_TIMEOUT_SECONDS + 0.5)
+        return "healthy"
+    except Exception as exc:
+        logger.warning("Readiness Redis ping failed: %s", type(exc).__name__)
+        return "unhealthy"
+    finally:
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
 
 
 # Include the router in the main app
