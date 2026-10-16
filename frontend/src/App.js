@@ -17,6 +17,7 @@ import AuditLogPage from './pages/AuditLogPage';
 // Agentic subsystem is stripped for launch. Backend code kept, UI removed.
 // import AgenticDashboardPage from './pages/AgenticDashboardPage';
 import BillingPage from './pages/BillingPage';
+import ApprovalRespondPage from './pages/ApprovalRespondPage';
 
 import './App.css';
 
@@ -30,6 +31,8 @@ function App() {
             {/* Public routes */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
+            {/* Approval email links (token is the credential; no login needed) */}
+            <Route path="/approvals/respond" element={<ApprovalRespondPage />} />
 
             {/* Protected routes */}
             <Route

@@ -89,6 +89,19 @@ INDEX_SPECIFICATION: Dict[str, List[Dict[str, Any]]] = {
         {"keys": [("organizationId", 1)], "unique": True, "name": "uq_billing_org"},
         {"keys": [("stripeCustomerId", 1)], "sparse": True, "name": "ix_billing_customer"},
     ],
+    "approvals": [
+        {"keys": [("id", 1)], "unique": True, "name": "uq_approvals_id"},
+        {"keys": [("organizationId", 1), ("contractId", 1), ("status", 1)], "name": "ix_approvals_org_contract_status"},
+    ],
+    "approval_tokens": [
+        {"keys": [("tokenHash", 1)], "unique": True, "name": "uq_approval_tokens_hash"},
+        {"keys": [("approvalId", 1)], "name": "ix_approval_tokens_approval"},
+    ],
+    "email_notifications": [
+        {"keys": [("id", 1)], "unique": True, "name": "uq_email_notifications_id"},
+        {"keys": [("resendEmailId", 1)], "sparse": True, "name": "ix_email_notifications_resend_id"},
+        {"keys": [("organizationId", 1), ("approvalId", 1)], "name": "ix_email_notifications_org_approval"},
+    ],
     "schema_migrations": [
         {"keys": [("version", 1)], "unique": True, "name": "uq_migrations_version"},
     ],

@@ -28,6 +28,8 @@ setup_logging(
     json_format=os.environ.get("LOG_JSON", "true").lower() == "true"
 )
 logger = get_logger("main")
+from utils.logging_config import install_access_log_redaction  # noqa: E402
+install_access_log_redaction()
 
 # MongoDB connection.
 #
@@ -188,6 +190,9 @@ app.state.db_name = DB_NAME
 
 # Add request logging middleware
 app.add_middleware(RequestLoggingMiddleware)
+# Trust X-Forwarded-Proto from the proxy hop only (uvicorn no longer does, see Dockerfile).
+from utils.proxy import ForwardedProtoMiddleware  # noqa: E402
+app.add_middleware(ForwardedProtoMiddleware)
 
 # Create a router with the /api/v1 prefix
 api_router = APIRouter(prefix="/api/v1")
@@ -210,6 +215,7 @@ from routes.workflow import router as workflow_router, init_db as init_workflow_
 from routes.agentic import build_router as build_agentic_router, enabled_groups as agentic_enabled_groups, init_db as init_agentic_db
 from routes.billing import router as billing_router, init_db as init_billing_db
 from services.audit_service import init_db as init_audit_service_db
+from utils.feature_flags import approval_emails_enabled
 
 # Initialize database for all route modules
 init_auth_db(db)
@@ -248,6 +254,13 @@ if AGENTIC_GROUPS:
     api_router.include_router(build_agentic_router(AGENTIC_GROUPS))
     logger.info("Agentic routes enabled", extra={"groups": sorted(AGENTIC_GROUPS)})
 api_router.include_router(billing_router)
+
+# Approval email links + Resend delivery webhook (APPROVAL_EMAILS_ENABLED, default off).
+if approval_emails_enabled():
+    from routes.approvals import router as approvals_router, init_db as init_approvals_db
+    init_approvals_db(db)
+    api_router.include_router(approvals_router)
+    logger.info("Approval email routes enabled")
 
 @api_router.get("/")
 async def root():

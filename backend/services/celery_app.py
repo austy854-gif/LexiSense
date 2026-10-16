@@ -47,6 +47,12 @@ BEAT_JOB_GROUPS = {
 ENABLED_GROUPS = enabled_groups()
 TASK_MODULES = tuple(m for g, m in GROUP_TASK_MODULES.items() if g in ENABLED_GROUPS)
 
+# Approval emails are not an agentic group; they have their own flag.
+from utils.feature_flags import approval_emails_enabled  # noqa: E402
+
+if approval_emails_enabled():
+    TASK_MODULES = TASK_MODULES + ("services.approval_tasks",)
+
 _ALL_BEAT_JOBS = {
     # Contract agents - check every hour for due agents
     "check-due-agents": {
@@ -150,6 +156,7 @@ celery_app.conf.update(
         "services.playbook_tasks.*": {"queue": "default"},
         "services.obligation_tasks.*": {"queue": "default"},
         "services.intake_tasks.*": {"queue": "high_priority"},
+        "services.approval_tasks.*": {"queue": "high_priority"},
     },
     
     # Queue definitions
