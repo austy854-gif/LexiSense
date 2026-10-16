@@ -17,7 +17,9 @@ This guide walks you through obtaining and configuring all required API keys and
 | `CORS_ORIGINS` | Local config | ✅ Yes | Allowed frontend origins |
 | `AWS_ACCESS_KEY_ID` | AWS IAM | ❌ No | S3 file storage |
 | `AWS_SECRET_ACCESS_KEY` | AWS IAM | ❌ No | S3 file storage |
-| `AWS_S3_BUCKET` | AWS S3 | ❌ No | S3 bucket name |
+| `AWS_S3_BUCKET` | AWS S3 | ❌ No | S3 bucket name (legacy alias `S3_BUCKET_NAME`; used by storage and `/health`) |
+| `RESEND_WEBHOOK_SECRET` | Resend.com | ❌ No | Signing secret of the delivery-status webhook |
+| `RESEND_INTAKE_WEBHOOK_SECRET` | Resend.com | ❌ No | Signing secret of the intake (inbound email) webhook; falls back to `RESEND_WEBHOOK_SECRET` (deprecated) |
 | `AWS_REGION` | AWS | ❌ No | AWS region |
 | `SENTRY_DSN` | Sentry.io | ❌ No | Error tracking |
 | `OPENROUTER_API_KEY` | OpenRouter.ai | ❌ No | Alternative LLM (OpenCode) |
@@ -129,6 +131,16 @@ APP_URL=http://localhost:3000  # Update for production
 
 ```bash
 RESEND_WEBHOOK_SECRET=whsec_your-webhook-secret
+```
+
+**Intake webhook (inbound email contracts):** create a *separate* Resend webhook
+pointing at `https://<api-domain>/api/v1/agentic/intake/webhook` and put its own
+signing secret in `RESEND_INTAKE_WEBHOOK_SECRET`. Requests are verified with the
+Svix scheme (`svix-id` / `svix-timestamp` / `svix-signature`, ±5 min) and are
+rejected (503) when no secret is configured.
+
+```bash
+RESEND_INTAKE_WEBHOOK_SECRET=whsec_your-intake-webhook-secret
 ```
 
 ---
@@ -363,6 +375,7 @@ EMERGENT_LLM_KEY=emergent_your-actual-key
 RESEND_API_KEY=re_your-resend-api-key
 RESEND_FROM_EMAIL=LexiSense <onboarding@resend.dev>
 RESEND_WEBHOOK_SECRET=whsec_your-webhook-secret
+RESEND_INTAKE_WEBHOOK_SECRET=whsec_your-intake-webhook-secret
 APP_URL=http://localhost:3000
 
 # ===========================================
@@ -422,6 +435,7 @@ EMERGENT_LLM_KEY=emergent_your-actual-key
 RESEND_API_KEY=re_your-resend-api-key
 RESEND_FROM_EMAIL=LexiSense <onboarding@resend.dev>
 RESEND_WEBHOOK_SECRET=whsec_your-webhook-secret
+RESEND_INTAKE_WEBHOOK_SECRET=whsec_your-intake-webhook-secret
 APP_URL=http://localhost:3000
 
 # ===========================================

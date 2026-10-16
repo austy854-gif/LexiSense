@@ -668,7 +668,7 @@ const IntakeDashboardPage = () => {
           <li>Select your domain and click "Webhooks"</li>
           <li>Add new webhook with the URL above</li>
           <li>Select "email.received" event</li>
-          <li>Set webhook secret in environment variable: <code>RESEND_WEBHOOK_SECRET</code></li>
+          <li>Set webhook secret in environment variable: <code>RESEND_INTAKE_WEBHOOK_SECRET</code></li>
           <li>Configure intake email address (e.g., <code>contracts@yourcompany.lexisense.app</code>)</li>
         </ol>
         

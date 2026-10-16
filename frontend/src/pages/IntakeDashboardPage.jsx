@@ -727,7 +727,7 @@ export default function IntakeDashboardPage() {
                 <li>Select your domain and click "Webhooks"</li>
                 <li>Add new webhook with the URL above</li>
                 <li>Select "email.received" event</li>
-                <li>Set webhook secret in environment variable: <code className="bg-muted px-1 rounded">RESEND_WEBHOOK_SECRET</code></li>
+                <li>Set webhook secret in environment variable: <code className="bg-muted px-1 rounded">RESEND_INTAKE_WEBHOOK_SECRET</code></li>
                 <li>Configure intake email address (e.g., <code className="bg-muted px-1 rounded">contracts@yourcompany.lexisense.app</code>)</li>
               </ol>
             </CardContent>
