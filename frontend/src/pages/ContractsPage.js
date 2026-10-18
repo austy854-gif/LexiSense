@@ -38,7 +38,6 @@ import { Skeleton } from '../components/ui/skeleton';
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger,
 } from '../components/ui/collapsible';
 import {
   FileText,
@@ -505,17 +504,24 @@ export default function ContractsPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                  <CollapsibleTrigger asChild>
-                    <Button variant="outline" size="sm">
-                      <ChevronDown className={`h-4 w-4 mr-1 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
-                      Advanced
-                    </Button>
-                  </CollapsibleTrigger>
-                </Collapsible>
+                {/* The trigger and panel live in different parts of the layout, so the toggle points
+                    aria-controls at the always-mounted Collapsible root rather than using a second Root
+                    whose content never renders (that left aria-controls pointing at a missing id). */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-expanded={advancedOpen}
+                  aria-controls="advanced-filters"
+                  onClick={() => setAdvancedOpen((open) => !open)}
+                  data-testid="advanced-filters-toggle"
+                >
+                  <ChevronDown aria-hidden="true" className={`h-4 w-4 mr-1 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+                  Advanced
+                </Button>
               </div>
               
-              <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+              <Collapsible id="advanced-filters" open={advancedOpen} onOpenChange={setAdvancedOpen}>
                 <CollapsibleContent className="pt-4 border-t">
                   <div className="flex flex-col sm:flex-row gap-4">
                     <Select value={riskFilter} onValueChange={setRiskFilter}>
