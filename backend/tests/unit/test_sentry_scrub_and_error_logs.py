@@ -270,6 +270,51 @@ class TestApprovalTaskLogging:
         assert "provider rejected" not in text and "Traceback" not in text
 
 
+class TestStoredLastError:
+    async def test_resend_error_stores_type_and_status_only(self, failing_notification, monkeypatch):
+        from resend.exceptions import ValidationError
+
+        async def provider_reject(to, subject, html, **kwargs):
+            raise ValidationError(f"Invalid `to` field: {to}. Body: {html}", "validation_error", 422)
+
+        monkeypatch.setattr(email_service, "send_raw_email", provider_reject)
+        with pytest.raises(ValidationError):
+            await approval_tasks.deliver_notification(failing_notification, "n-1", "org-1", final_attempt=True)
+
+        doc = await failing_notification.email_notifications.find_one({"id": "n-1"}, {"_id": 0})
+        assert doc["status"] == "failed"
+        assert doc["lastError"] == "ValidationError (HTTP 422)"
+        # Only the intended ``to`` field may hold the address.
+        stored = {k: v for k, v in doc.items() if k != "to"}
+        text = _assert_clean(stored)
+        assert "Invalid" not in text and "validation_error" not in text and "client-corp" not in text
+
+    async def test_generic_error_stores_type_only(self, failing_notification):
+        with pytest.raises(RuntimeError):
+            await approval_tasks.deliver_notification(failing_notification, "n-1", "org-1", final_attempt=False)
+        doc = await failing_notification.email_notifications.find_one({"id": "n-1"}, {"_id": 0})
+        assert doc["status"] == "retrying" and doc["lastError"] == "RuntimeError"
+        stored = {k: v for k, v in doc.items() if k != "to"}
+        _assert_clean(stored)
+        assert "provider rejected" not in json.dumps(stored) and "client-corp" not in json.dumps(stored)
+
+    @pytest.mark.parametrize("attrs, expected", [
+        ({"code": 429}, "Boom (HTTP 429)"),
+        ({"code": "503"}, "Boom (HTTP 503)"),
+        ({"status_code": 500}, "Boom (HTTP 500)"),
+        ({"response": type("R", (), {"status_code": 401})()}, "Boom (HTTP 401)"),
+        ({"code": "ECONNRESET jane.doe@client-corp.example"}, "Boom"),
+        ({"code": True}, "Boom"),
+        ({"code": 42}, "Boom"),
+        ({}, "Boom"),
+    ])
+    def test_summary(self, attrs, expected):
+        exc = type("Boom", (Exception,), {})(f"text {EMAIL}")
+        for key, value in attrs.items():
+            setattr(exc, key, value)
+        assert approval_tasks.safe_error_summary(exc) == expected
+
+
 # ---------------------------------------------------------------------------
 # send_email return value
 # ---------------------------------------------------------------------------
