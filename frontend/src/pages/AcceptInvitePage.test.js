@@ -1,0 +1,170 @@
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import AcceptInvitePage from './AcceptInvitePage';
+import { AuthProvider } from '../contexts/AuthContext';
+import { teamAPI, authAPI } from '../api';
+
+jest.mock('../api', () => ({
+  __esModule: true,
+  default: {},
+  teamAPI: { previewInvite: jest.fn(), acceptInvite: jest.fn() },
+  authAPI: { login: jest.fn(), getMe: jest.fn() },
+}));
+jest.mock('sonner', () => ({ toast: { success: jest.fn(), error: jest.fn() } }));
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+const PREVIEW = {
+  email: 'new@example.com',
+  organizationName: 'Acme Studio',
+  inviterName: 'Ada Lovelace',
+  role: 'manager',
+  expiresAt: '2099-01-01T00:00:00+00:00',
+};
+const httpError = (status) => Object.assign(new Error('x'), { response: { status, data: { detail: 'x' } } });
+const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+let container;
+let root;
+
+async function renderAt(search) {
+  window.history.pushState(null, '', `/accept-invite${search}`);
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <AuthProvider>
+        <MemoryRouter initialEntries={[`/accept-invite${search}`]}>
+          <Routes>
+            <Route path="/accept-invite" element={<AcceptInvitePage />} />
+            <Route path="/" element={<div data-testid="dashboard">dashboard</div>} />
+            <Route path="/login" element={<div data-testid="login">login</div>} />
+          </Routes>
+        </MemoryRouter>
+      </AuthProvider>,
+    );
+  });
+  await flush();
+}
+
+const q = (id) => container.querySelector(`[data-testid="${id}"]`);
+
+function type(input, value) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  localStorage.clear();
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('missing token shows the incomplete-link state without calling the API', async () => {
+  await renderAt('');
+  expect(q('accept-invite-missing')).not.toBeNull();
+  expect(teamAPI.previewInvite).not.toHaveBeenCalled();
+});
+
+test.each([
+  [404, 'accept-invite-invalid'],
+  [400, 'accept-invite-expired'],
+  [409, 'accept-invite-used'],
+])('preview %s shows %s', async (status, testId) => {
+  teamAPI.previewInvite.mockRejectedValue(httpError(status));
+  await renderAt('?token=tok');
+  expect(q(testId)).not.toBeNull();
+});
+
+test('logged out: shows the form, strips the token from the URL, and the invite details', async () => {
+  teamAPI.previewInvite.mockResolvedValue({ data: PREVIEW });
+  await renderAt('?token=tok-123');
+  expect(teamAPI.previewInvite).toHaveBeenCalledWith('tok-123');
+  expect(window.location.search).toBe('');
+  expect(q('accept-invite-form-title').textContent).toBe("You're invited");
+  expect(q('accept-invite-email').value).toBe('new@example.com');
+  expect(container.textContent).toContain('Acme Studio');
+  expect(container.textContent).toContain('Manager');
+  expect(q('accept-invite-submit').textContent).toBe('Accept invite');
+});
+
+test('submitting accepts the invite, signs in and redirects to the dashboard', async () => {
+  teamAPI.previewInvite.mockResolvedValue({ data: PREVIEW });
+  teamAPI.acceptInvite.mockResolvedValue({ data: { message: 'ok', email: 'new@example.com' } });
+  authAPI.login.mockResolvedValue({
+    data: { access_token: 'jwt', user: { id: 'u1', email: 'new@example.com', role: 'manager' } },
+  });
+  await renderAt('?token=tok-123');
+
+  await act(async () => {
+    type(q('accept-invite-password'), 'Sup3rSecret!');
+    type(q('accept-invite-confirm-password'), 'Sup3rSecret!');
+  });
+  await act(async () => {
+    q('accept-invite-submit').closest('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+  await flush();
+
+  expect(teamAPI.acceptInvite).toHaveBeenCalledWith({ token: 'tok-123', password: 'Sup3rSecret!' });
+  expect(authAPI.login).toHaveBeenCalledWith('new@example.com', 'Sup3rSecret!');
+  expect(q('dashboard')).not.toBeNull();
+});
+
+test('mismatched passwords never reach the API', async () => {
+  teamAPI.previewInvite.mockResolvedValue({ data: PREVIEW });
+  await renderAt('?token=tok-123');
+  await act(async () => {
+    type(q('accept-invite-password'), 'Sup3rSecret!');
+    type(q('accept-invite-confirm-password'), 'different!!');
+  });
+  await act(async () => {
+    q('accept-invite-submit').closest('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+  expect(teamAPI.acceptInvite).not.toHaveBeenCalled();
+});
+
+test('an invite that expires between preview and submit switches to the expired state', async () => {
+  teamAPI.previewInvite.mockResolvedValue({ data: PREVIEW });
+  teamAPI.acceptInvite.mockRejectedValue(httpError(400));
+  await renderAt('?token=tok-123');
+  await act(async () => {
+    type(q('accept-invite-password'), 'Sup3rSecret!');
+    type(q('accept-invite-confirm-password'), 'Sup3rSecret!');
+  });
+  await act(async () => {
+    q('accept-invite-submit').closest('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+  await flush();
+  expect(q('accept-invite-expired')).not.toBeNull();
+  expect(authAPI.login).not.toHaveBeenCalled();
+});
+
+test('signed in as someone else: offers to sign out instead of showing the form', async () => {
+  localStorage.setItem('token', 'jwt');
+  localStorage.setItem('user', JSON.stringify({ id: 'a', email: 'boss@example.com', role: 'admin' }));
+  authAPI.getMe.mockResolvedValue({ data: { id: 'a', email: 'boss@example.com', role: 'admin' } });
+  teamAPI.previewInvite.mockResolvedValue({ data: PREVIEW });
+  await renderAt('?token=tok-123');
+  expect(q('accept-invite-signed_in_other')).not.toBeNull();
+  expect(q('accept-invite-password')).toBeNull();
+
+  await act(async () => { q('accept-invite-sign-out').click(); });
+  expect(q('accept-invite-password')).not.toBeNull();
+  expect(localStorage.getItem('token')).toBeNull();
+});
+
+test('signed in as the invitee: no form, link to the dashboard', async () => {
+  localStorage.setItem('token', 'jwt');
+  localStorage.setItem('user', JSON.stringify({ id: 'n', email: 'new@example.com', role: 'manager' }));
+  authAPI.getMe.mockResolvedValue({ data: { id: 'n', email: 'new@example.com', role: 'manager' } });
+  teamAPI.previewInvite.mockResolvedValue({ data: PREVIEW });
+  await renderAt('?token=tok-123');
+  expect(q('accept-invite-signed_in_same')).not.toBeNull();
+});

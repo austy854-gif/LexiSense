@@ -6,6 +6,7 @@ import logging
 from models.user import User, UserResponse
 from models.invitation import (
     AcceptInvitationRequest,
+    InvitationPreviewRequest,
     Invitation,
     InvitationCreate,
     InvitationResponse,
@@ -180,6 +181,65 @@ async def list_invitations(current_user: dict = Depends(get_current_user)):
     ]
 
 
+def _invitation_is_expired(invitation: dict) -> bool:
+    expires_at = datetime.fromisoformat(invitation["expiresAt"].replace("Z", "+00:00"))
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at < datetime.now(timezone.utc)
+
+
+@router.post(
+    "/accept-invite/preview",
+    dependencies=[Depends(rate_limit(INVITE_RATE_LIMITER, "team:accept-invite-preview"))],
+)
+async def preview_invitation(payload: InvitationPreviewRequest):
+    """Look up an invitation by token so the accept page can show who invited
+    whom, and to which team, before the invitee picks a password.
+
+    Read-only: nothing is claimed or written. The token arrives in a JSON body
+    (not the query string) so it stays out of API access logs. Status codes
+    mirror ``POST /team/accept-invite``:
+
+    * ``404`` unknown or cancelled token,
+    * ``400`` expired invitation,
+    * ``409`` invitation already accepted.
+    """
+    invitation = await find_invitation_by_token(db.invitations, payload.token)
+    if not invitation or invitation.get("status") not in ("pending", "accepted", "expired"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invalid or expired invitation",
+        )
+    if invitation["status"] == "accepted":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Invitation has already been accepted",
+        )
+    if invitation["status"] == "expired" or _invitation_is_expired(invitation):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invitation has expired",
+        )
+
+    org = await db.organizations.find_one(
+        {"id": invitation["organizationId"]}, {"_id": 0, "name": 1}
+    )
+    inviter = await db.users.find_one(
+        {"id": invitation.get("invitedBy")},
+        {"_id": 0, "firstName": 1, "lastName": 1},
+    ) or {}
+    inviter_name = f"{inviter.get('firstName') or ''} {inviter.get('lastName') or ''}".strip() or None
+    role = invitation["role"] if is_valid_role(invitation.get("role")) else DEFAULT_MEMBER_ROLE
+
+    return {
+        "email": invitation["email"],
+        "organizationName": (org or {}).get("name"),
+        "inviterName": inviter_name,
+        "role": role,
+        "expiresAt": invitation["expiresAt"],
+    }
+
+
 @router.post(
     "/accept-invite",
     dependencies=[Depends(rate_limit(INVITE_RATE_LIMITER, "team:accept-invite"))],
@@ -199,10 +259,7 @@ async def accept_invitation(payload: AcceptInvitationRequest):
             detail="Invalid or expired invitation"
         )
 
-    expires_at = datetime.fromisoformat(invitation["expiresAt"].replace("Z", "+00:00"))
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
+    if _invitation_is_expired(invitation):
         await db.invitations.update_one(
             {"id": invitation["id"]},
             {"$set": {"status": "expired"}}

@@ -94,10 +94,6 @@ export default function TeamPage() {
 
   const isAdmin = user?.role === 'admin';
 
-  useEffect(() => {
-    fetchTeamData();
-  }, [fetchTeamData]);
-
   const fetchTeamData = useCallback(async () => {
     try {
       const [membersRes, invitesRes] = await Promise.all([
@@ -112,6 +108,12 @@ export default function TeamPage() {
       setLoading(false);
     }
   }, [isAdmin]);
+
+  // Declared after the useCallback: reading a `const` in the deps array before
+  // its declaration throws (temporal dead zone) and crashes the page.
+  useEffect(() => {
+    fetchTeamData();
+  }, [fetchTeamData]);
 
   const handleInvite = async (e) => {
     e.preventDefault();

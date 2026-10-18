@@ -77,11 +77,11 @@ async def check_trial_access(org_id: str) -> tuple[bool, str]:
     if billing.trialEndDate:
         trial_end = datetime.fromisoformat(billing.trialEndDate.replace("Z", "+00:00"))
         if datetime.now(timezone.utc) > trial_end:
-            return False, "Your 7-day free trial has ended. Please upgrade to continue using LexiSense."
+            return False, "Your free trial has ended. Upgrade to keep adding contracts."
 
     # Check contract upload limit
     if billing.trialContractsUsed >= billing.trialContractsLimit:
-        return False, f"You've reached the trial limit of {TRIAL_CONTRACT_LIMIT} contract uploads. Please upgrade to continue."
+        return False, f"You've used all {TRIAL_CONTRACT_LIMIT} trial uploads. Upgrade to keep adding contracts."
 
     return True, ""
 
@@ -115,7 +115,7 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
     if trial_end_str:
         trial_end = datetime.fromisoformat(trial_end_str.replace("Z", "+00:00"))
         if datetime.now(timezone.utc) > trial_end:
-            return False, "Your 7-day free trial has ended. Please upgrade to continue using LexiSense."
+            return False, "Your free trial has ended. Upgrade to keep adding contracts."
 
     # Atomic conditional increment: only succeeds if we're strictly below the limit.
     result = await db.organization_billing.find_one_and_update(
@@ -129,7 +129,7 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
         },
     )
     if result is None:
-        return False, f"You've reached the trial limit of {TRIAL_CONTRACT_LIMIT} contract uploads. Please upgrade to continue."
+        return False, f"You've used all {TRIAL_CONTRACT_LIMIT} trial uploads. Upgrade to keep adding contracts."
     return True, ""
 
 
@@ -475,29 +475,26 @@ async def get_plans():
         "plans": [
             {
                 "id": "trial",
-                "name": "Free Trial",
+                "name": "Free trial",
                 "price": 0,
                 "interval": "month",
                 "features": [
-                    f"{TRIAL_DAYS}-day free trial",
-                    f"Up to {TRIAL_CONTRACT_LIMIT} contract uploads",
+                    "Limited contract uploads",
                     "AI contract analysis",
                     "Contract repository",
-                    "Renewal alerts",
                     "Basic dashboard"
                 ],
-                "cta": "Start Free Trial"
+                "cta": "Start free trial"
             },
             {
                 "id": "team",
-                "name": "Team Plan",
+                "name": "Team plan",
                 "price": 49,
                 "interval": "month",
                 "features": [
                     "Unlimited contract uploads",
                     "AI contract analysis",
                     "Contract repository",
-                    "Renewal alerts",
                     "Advanced dashboard & analytics",
                     "Team collaboration (up to 10 members)",
                     "Role-based access control",
@@ -507,7 +504,7 @@ async def get_plans():
                     "Audit logs",
                     "Priority support"
                 ],
-                "cta": "Upgrade to Team",
+                "cta": "Upgrade to Team plan",
                 "priceId": TEAM_PLAN_PRICE_ID
             }
         ]
