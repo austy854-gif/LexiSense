@@ -91,12 +91,6 @@ export default function ContractDetailPage() {
   const chatEndRef = useRef(null);
 
   useEffect(() => {
-    fetchContract();
-    fetchVersions();
-    fetchWorkflow();
-  }, [fetchContract, fetchVersions, fetchWorkflow]);
-
-  useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
@@ -132,6 +126,16 @@ export default function ContractDetailPage() {
       console.error('Failed to load workflow:', error);
     }
   }, [id]);
+
+  // Must come after the three useCallback fetchers above: the dependency array
+  // is evaluated during render, so referencing them earlier hits the const
+  // temporal dead zone ("Cannot access ... before initialization") and the
+  // whole page falls into the error boundary.
+  useEffect(() => {
+    fetchContract();
+    fetchVersions();
+    fetchWorkflow();
+  }, [fetchContract, fetchVersions, fetchWorkflow]);
 
   const handleWorkflowAction = async (action) => {
     setWorkflowLoading(true);
