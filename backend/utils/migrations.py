@@ -66,6 +66,23 @@ async def _m002_add_ai_analysis_status(db) -> None:
     )
 
 
+async def _m003_hash_invitation_tokens(db) -> None:
+    """Replace plaintext invitation tokens with their SHA-256 hash.
+
+    Also drops the legacy unique index on ``token``: once new invitations stop
+    carrying the field, a non-sparse unique index on it would reject every
+    invite after the first (duplicate ``null``).
+    """
+    from utils.invite_tokens import hash_legacy_invite_tokens
+
+    try:
+        await db.invitations.drop_index("uq_invitations_token")
+    except Exception:  # index absent (fresh DB / already dropped)
+        pass
+    migrated = await hash_legacy_invite_tokens(db.invitations)
+    logger.info("Hashed %d legacy invitation token(s)", migrated)
+
+
 # ---------------------------------------------------------------------------
 # Migration registry -- append-only, numbered.
 # ---------------------------------------------------------------------------
@@ -73,6 +90,7 @@ async def _m002_add_ai_analysis_status(db) -> None:
 MIGRATIONS: List[Migration] = [
     {"version": 1, "name": "backfill_billing_trial_limits", "run": _m001_backfill_billing_trial_limits},
     {"version": 2, "name": "add_ai_analysis_status", "run": _m002_add_ai_analysis_status},
+    {"version": 3, "name": "hash_invitation_tokens", "run": _m003_hash_invitation_tokens},
 ]
 
 
