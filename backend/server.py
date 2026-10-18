@@ -17,6 +17,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # Configure structured logging FIRST (before other imports that may log)
+from utils.env import get_database_url, get_env  # noqa: E402
 from utils.logging_config import (
     RequestLoggingMiddleware,
     get_logger,
@@ -24,13 +25,12 @@ from utils.logging_config import (
     setup_logging,
 )
 setup_logging(
-    level=os.environ.get("LOG_LEVEL", "INFO"),
-    json_format=os.environ.get("LOG_JSON", "true").lower() == "true"
+    level=get_env("LOG_LEVEL", "INFO"),
+    json_format=get_env("LOG_JSON", "true").lower() == "true"
 )
 logger = get_logger("main")
 from utils.logging_config import install_access_log_redaction  # noqa: E402
 install_access_log_redaction()
-from utils.env import get_database_url, get_env  # noqa: E402
 
 # MongoDB connection.
 #
@@ -97,10 +97,10 @@ if sentry_dsn and not sentry_dsn.startswith("your-"):
         ],
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
-        environment=os.environ.get("ENVIRONMENT", "development"),
+        environment=get_env("ENVIRONMENT", "development"),
         release=os.environ.get("RELEASE_VERSION", "2.0.0"),
     )
-    logger.info("Sentry initialized", extra={"environment": os.environ.get("ENVIRONMENT", "development")})
+    logger.info("Sentry initialized", extra={"environment": get_env("ENVIRONMENT", "development")})
 else:
     logger.info("Sentry not configured (SENTRY_DSN not set)")
 
@@ -477,7 +477,7 @@ register_exception_handlers(app)
 # ---------------------------------------------------------------------------
 from fastapi.responses import FileResponse  # noqa: E402
 
-FRONTEND_BUILD_DIR = Path(os.environ.get("FRONTEND_BUILD_DIR", str(ROOT_DIR / "static")))
+FRONTEND_BUILD_DIR = Path(get_env("FRONTEND_BUILD_DIR", str(ROOT_DIR / "static")))
 
 if (FRONTEND_BUILD_DIR / "index.html").is_file():
     _frontend_root = FRONTEND_BUILD_DIR.resolve()

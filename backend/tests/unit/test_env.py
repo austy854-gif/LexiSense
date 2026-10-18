@@ -9,6 +9,7 @@ import logging
 import pytest
 from pymongo.uri_parser import parse_uri
 
+import utils.env as env_module
 from utils.env import get_database_url, get_env
 
 VAR = "LEXISENSE_TEST_ENV_VAR"
@@ -16,6 +17,12 @@ URI = (
     "mongodb://user:pw@cluster0-a.example.net:27017,cluster0-b.example.net:27017/lexisense"
     "?replicaSet=rs0&retryWrites=true&w=majority"
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_whitespace_warnings(monkeypatch):
+    """The DATABASE_URL warning is once-per-process; isolate each test."""
+    monkeypatch.setattr(env_module, "_whitespace_warned", set())
 
 
 @pytest.mark.parametrize(
@@ -114,3 +121,63 @@ def test_server_uses_clean_database_url(tmp_path):
     result = json.loads(out.stdout.strip().splitlines()[-1])
     assert result == {"url": URI, "w": "majority", "db": "lexisense"}
     assert "DATABASE_URL contained leading/trailing whitespace" in out.stdout + out.stderr
+
+
+def test_database_url_warning_logged_once_per_process(monkeypatch, caplog):
+    """Celery calls get_database_url() for every task; warn only the first time."""
+    monkeypatch.setenv("DATABASE_URL", URI + "\n")
+    with caplog.at_level(logging.WARNING, logger="utils.env"):
+        for _ in range(5):
+            assert get_database_url() == URI
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n", "\r\n", " \t\r\n "])
+def test_whitespace_only_database_url_falls_back_to_mongo_url(monkeypatch, caplog, blank):
+    monkeypatch.setenv("DATABASE_URL", blank)
+    monkeypatch.setenv("MONGO_URL", "mongodb://mongo.internal:27017/lexisense")
+    with caplog.at_level(logging.WARNING, logger="utils.env"):
+        assert get_database_url() == "mongodb://mongo.internal:27017/lexisense"
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def _run_backend(probe, **overrides):
+    """Run ``python -c probe`` in backend/ with env overrides (None = unset)."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    env = dict(os.environ)
+    for key, value in overrides.items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
+    return subprocess.run([sys.executable, "-c", probe], cwd=Path(__file__).resolve().parents[2],
+                          env=env, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("environment", ["production\n", "production\r\n", "  PRODUCTION  ", "staging\n"])
+def test_environment_with_whitespace_is_treated_as_production(environment):
+    """A short JWT_SECRET must be refused when ENVIRONMENT is prod-like, even if
+    the value carries a trailing newline (previously 'production\\n' slipped
+    through as a non-production environment and only warned)."""
+    out = _run_backend("import utils.auth", ENVIRONMENT=environment, JWT_SECRET="too-short")
+    assert out.returncode != 0
+    assert "JWT_SECRET must be at least 32 characters in" in out.stderr
+    assert "too-short" not in out.stderr  # the secret is never echoed
+
+
+def test_environment_development_short_secret_only_warns():
+    out = _run_backend("import utils.auth; print('imported')", ENVIRONMENT="development\n", JWT_SECRET="too-short")
+    assert out.returncode == 0, out.stderr
+    assert "imported" in out.stdout
+
+
+def test_server_imports_with_whitespace_in_log_settings():
+    probe = "import logging, server; print('level=' + logging.getLevelName(logging.getLogger().level))"
+    out = _run_backend(probe, LOG_LEVEL="INFO\n", LOG_JSON=" false\r\n", ENVIRONMENT="test\n",
+                       FRONTEND_BUILD_DIR=None)
+    assert out.returncode == 0, out.stderr
+    assert "level=INFO" in out.stdout

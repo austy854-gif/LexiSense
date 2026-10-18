@@ -63,7 +63,7 @@ JWT_AUDIENCE = get_env("JWT_AUDIENCE", "lexisense-client")
 #: production. Development/test environments get a warning instead of a hard
 #: failure so the suite keeps running.
 _MIN_SECRET_LENGTH = 32
-_ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower()
+_ENVIRONMENT = get_env("ENVIRONMENT", "development").lower()
 if len(JWT_SECRET) < _MIN_SECRET_LENGTH:
     if _ENVIRONMENT in ("production", "prod", "staging"):
         raise RuntimeError(
