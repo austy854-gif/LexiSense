@@ -163,10 +163,19 @@ async def send_email(
     template_type: str,
     data: dict
 ) -> Optional[dict]:
-    """Send an email using Resend API."""
+    """Send an email using Resend API.
+
+    Logging is deliberately metadata-only (template name, recipient *domain*,
+    provider message id): ``data``, the subject, the HTML body and any links
+    can carry bearer secrets such as invitation tokens and must never be
+    logged -- including on the missing-key and error paths.
+    """
+    domain = _recipient_domain(to_email)
     if not RESEND_API_KEY:
-        logger.warning(f"RESEND_API_KEY not configured. Email to {to_email} logged but not sent.")
-        logger.info(f"Would send {template_type} email to {to_email} with data: {data}")
+        logger.warning(
+            "RESEND_API_KEY not configured; email not sent (template=%s recipient_domain=%s)",
+            template_type, domain,
+        )
         return {"status": "logged", "message": "Email logged (API key not configured)"}
     
     try:
@@ -182,7 +191,10 @@ async def send_email(
         # Run sync SDK in thread to keep FastAPI non-blocking
         email = await asyncio.to_thread(resend.Emails.send, params)
         
-        logger.info(f"Email sent successfully to {to_email}: {email.get('id')}")
+        logger.info(
+            "Email sent (template=%s recipient_domain=%s message_id=%s)",
+            template_type, domain, email.get("id"),
+        )
         return {
             "status": "success",
             "message": f"Email sent to {to_email}",
@@ -190,10 +202,15 @@ async def send_email(
         }
         
     except Exception as e:
-        logger.error(f"Failed to send email to {to_email}: {str(e)}")
+        # The provider/exception text can echo the request (recipient, links),
+        # so only the exception type is logged or returned.
+        logger.error(
+            "Failed to send email (template=%s recipient_domain=%s error_type=%s)",
+            template_type, domain, type(e).__name__,
+        )
         return {
             "status": "error",
-            "message": str(e)
+            "message": "Email delivery failed"
         }
 
 
@@ -245,7 +262,10 @@ async def send_raw_email(to_email: str, subject: str, html: str, tags: Optional[
     provider error so callers (e.g. a Celery task) can retry; it returns
     ``{"status": "logged"}`` without sending when RESEND_API_KEY is unset."""
     if not RESEND_API_KEY:
-        logger.warning("RESEND_API_KEY not configured. Email '%s' to %s logged but not sent.", subject, to_email)
+        logger.warning(
+            "RESEND_API_KEY not configured; email not sent (template=%s recipient_domain=%s)",
+            "raw", _recipient_domain(to_email),
+        )
         return {"status": "logged", "email_id": None}
     params = {"from": SENDER_EMAIL, "to": [to_email], "subject": subject, "html": html}
     if tags:
@@ -253,3 +273,9 @@ async def send_raw_email(to_email: str, subject: str, html: str, tags: Optional[
     options = {"idempotency_key": idempotency_key} if idempotency_key else None
     email = await asyncio.to_thread(resend.Emails.send, params, options)
     return {"status": "sent", "email_id": (email or {}).get("id")}
+
+
+def _recipient_domain(address) -> str:
+    """Return only the domain of an address (never the local part) for logs."""
+    _, sep, domain = str(address or "").rpartition("@")
+    return domain.strip().lower() if sep and domain.strip() else "unknown"
