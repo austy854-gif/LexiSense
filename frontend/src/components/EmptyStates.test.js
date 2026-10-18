@@ -48,6 +48,11 @@ describe('illustrations', () => {
     // Themed via inline styles / CSS variables: no page-wide <style> block.
     expect(container.querySelector('style')).toBeNull();
     expect(svg.innerHTML).toContain('var(--ls-illo-line');
+    // The page/paper shape is filled (solid), not transparent: Jackson's
+    // `.l:not(.p)` fix means stroke-and-paper shapes keep the paper fill.
+    const filled = [...svg.querySelectorAll('[style]')].filter((el) => el.style.fill.includes('--ls-illo-paper'));
+    expect(filled.length).toBeGreaterThan(0);
+    filled.forEach((el) => expect(el.style.stroke).toContain('--ls-illo-line'));
   });
 
   test('standalone use gets role="img" and a unique accessible name', () => {
@@ -87,7 +92,9 @@ describe('ContractsEmptyState', () => {
     const onClearFilters = jest.fn();
     renderState({ searchQuery: 'acme', onClearFilters });
     expect(container.textContent).toContain('No matching contracts');
-    expect(container.textContent).toContain('Nothing matches \u201cacme\u201d.');
+    expect(container.textContent).toContain(
+      'Nothing matches \u201cacme\u201d. Search looks at contract titles and counterparties, so try a different word or clear your filters.',
+    );
     act(() => container.querySelector('button').click());
     expect(onClearFilters).toHaveBeenCalled();
   });
@@ -96,6 +103,16 @@ describe('ContractsEmptyState', () => {
     renderState({ filters: { ...base, riskFilter: 'high' } });
     expect(container.querySelector('[data-testid="contracts-no-results"]')).not.toBeNull();
     expect(container.textContent).not.toContain('Nothing matches');
+  });
+
+  test('filters only (no search term): filter-specific body, no search advice', () => {
+    renderState({ filters: { ...base, statusFilter: 'active' } });
+    expect(container.querySelector('h3').textContent).toBe('No matching contracts');
+    expect(container.textContent).toContain(
+      'No contracts match these filters. Try changing them, or clear them to see all your contracts.',
+    );
+    expect(container.textContent).not.toContain('Search looks at');
+    expect(container.querySelector('button').textContent).toBe('Clear filters');
   });
 
   test('expiring-within filter with nothing in the window shows nothing-expiring', () => {

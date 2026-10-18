@@ -179,8 +179,9 @@ export function ContractsEmptyState({ searchQuery, filters, canWrite, onUpload, 
       }
     >
       <p>
-        {searchQuery ? `Nothing matches \u201c${searchQuery}\u201d. ` : ''}
-        Search looks at contract titles and counterparties, so try a different word or clear your filters.
+        {searchQuery
+          ? `Nothing matches \u201c${searchQuery}\u201d. Search looks at contract titles and counterparties, so try a different word or clear your filters.`
+          : 'No contracts match these filters. Try changing them, or clear them to see all your contracts.'}
       </p>
     </EmptyState>
   );
@@ -478,8 +479,8 @@ export default function ContractsPage() {
                   }
                 >
                   <p>
-                    LexiSense reads digital PDFs with selectable text (like ones exported from Word or Google Docs) and
-                    .txt files. Check the file and try again.
+                    LexiSense reads PDFs with selectable text, like ones exported from Word or Google Docs. Check the
+                    file and try again.
                   </p>
                   {uploadError.apiMessage && <p data-testid="upload-failed-detail">{uploadError.apiMessage}</p>}
                 </EmptyState>
