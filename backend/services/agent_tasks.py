@@ -22,8 +22,41 @@ def set_database(database):
 
 
 def get_db():
-    """Get the database reference."""
-    return _db
+    """Database for the current task (ContextVar set per task by
+    services.celery_app), falling back to an explicitly set module database."""
+    from services.task_db import current_db
+
+    db = current_db.get()
+    return db if db is not None else _db
+
+
+async def _record_skipped_run(db, agent: dict, reason: str, when: datetime) -> None:
+    """Record a run that was skipped (no AI entitlement) without executing it."""
+    from models.agentic import AgentExecutionLog, AgentRunStatus
+
+    log = AgentExecutionLog(executed_at=when.isoformat(), status=AgentRunStatus.SKIPPED)
+    entry = log.model_dump()
+    entry["skip_reason"] = reason
+    await db.contract_agents.update_one(
+        {"id": agent["id"], "organizationId": agent.get("organizationId")},
+        {"$push": {"executionHistory": entry},
+         "$set": {"lastSkippedAt": when.isoformat(), "updatedAt": datetime.now(timezone.utc).isoformat()}},
+    )
+
+
+async def _agent_ai_allowed(db, agent: dict, task: str, when: datetime) -> bool:
+    """Billing gate for agent runs; records a skipped run when not allowed."""
+    from routes.billing import background_ai_entitlement, compute_entitlement, get_or_create_billing
+
+    org_id = agent.get("organizationId")
+    if await background_ai_entitlement(org_id, db, task) is not None:
+        return True
+    reason = "no_ai_entitlement"
+    if org_id:
+        message = compute_entitlement(await get_or_create_billing(org_id, db)).message
+        reason = message or reason
+    await _record_skipped_run(db, agent, reason, when)
+    return False
 
 
 def cron_to_next_run(cron_expr: str, from_time: datetime = None) -> Optional[datetime]:
@@ -93,11 +126,15 @@ async def _check_due_agents_async():
         })
         
         agents = await cursor.to_list(100)
+        agents_skipped = 0
         
         for agent in agents:
-            # Queue the agent execution
-            execute_contract_agent.delay(agent["id"])
-            agents_queued += 1
+            # Billing gate: lapsed / expired orgs don't get scheduled AI runs.
+            if await _agent_ai_allowed(db, agent, f"scheduled agent {agent.get('id')}", now):
+                execute_contract_agent.delay(agent["id"])
+                agents_queued += 1
+            else:
+                agents_skipped += 1
             
             # Update next run time
             next_run = cron_to_next_run(agent.get("schedule", "0 9 * * *"), now)
@@ -106,8 +143,8 @@ async def _check_due_agents_async():
                 {"$set": {"nextRunAt": next_run.isoformat() if next_run else None}}
             )
 
-        logger.info(f"Queued {agents_queued} contract agents for execution")
-        return {"status": "success", "agents_queued": agents_queued}
+        logger.info(f"Queued {agents_queued} contract agents for execution ({agents_skipped} skipped: billing)")
+        return {"status": "success", "agents_queued": agents_queued, "agents_skipped": agents_skipped}
 
     except Exception as e:
         logger.error(f"Check due agents failed: {e}")
@@ -153,6 +190,11 @@ async def _execute_contract_agent_async(agent_id: str):
 
         if agent.get("status") != "active":
             return {"status": "skipped", "message": "Agent not active"}
+
+        # Billing gate (also covers runs queued before the org lapsed and
+        # manual triggers that slipped past the API gate).
+        if not await _agent_ai_allowed(db, agent, f"agent run {agent_id}", start_time):
+            return {"status": "skipped", "reason": "no_ai_entitlement", "agent_id": agent_id}
 
         config = agent.get("config", {})
         org_id = agent["organizationId"]

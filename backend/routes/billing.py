@@ -4,6 +4,7 @@ from typing import Optional, Tuple, Union
 from datetime import datetime, timezone, timedelta
 import logging
 import stripe
+from pymongo.errors import DuplicateKeyError
 
 from models.billing import (
     OrganizationBilling,
@@ -226,9 +227,14 @@ def _trial_limit_message(limit: int) -> str:
     return f"You've reached the trial limit of {limit} contract uploads. Please upgrade to continue."
 
 
-async def get_or_create_billing(org_id: str) -> OrganizationBilling:
-    """Get existing billing record or create a new one for trial"""
-    billing = await db.organization_billing.find_one({"organizationId": org_id})
+async def get_or_create_billing(org_id: str, database=None) -> OrganizationBilling:
+    """Get existing billing record or create a new one for trial.
+
+    ``database`` lets Celery workers (which have their own per-task Motor
+    handle) use the same logic; it defaults to the API's database.
+    """
+    database = db if database is None else database
+    billing = await database.organization_billing.find_one({"organizationId": org_id})
     if billing:
         return OrganizationBilling(**billing)
 
@@ -242,7 +248,14 @@ async def get_or_create_billing(org_id: str) -> OrganizationBilling:
         trialContractsUsed=0,
         trialContractsLimit=trial.upload_limit,
     )
-    await db.organization_billing.insert_one(new_billing.model_dump())
+    try:
+        await database.organization_billing.insert_one(new_billing.model_dump())
+    except DuplicateKeyError:
+        # Concurrent first access (unique index on organizationId): use the winner.
+        existing = await database.organization_billing.find_one({"organizationId": org_id})
+        if existing:
+            return OrganizationBilling(**existing)
+        raise
     return new_billing
 
 
@@ -255,6 +268,30 @@ async def ensure_ai_access(org_id: str) -> Entitlement:
     entitlement = await get_entitlement(org_id)
     if not entitlement.can_use_ai:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
+    return entitlement
+
+
+#: Recorded status for background AI work skipped by the entitlement gate.
+SKIPPED_NO_ENTITLEMENT = "skipped"
+
+
+async def background_ai_entitlement(org_id: Optional[str], database, task: str) -> Optional[Entitlement]:
+    """Entitlement gate for background (Celery) AI work.
+
+    Returns the entitlement when the org may use AI, otherwise logs the skip
+    and returns ``None`` -- callers skip the work and record a skipped status
+    instead of raising (a 403 makes no sense in a worker, and retrying would
+    not help).
+    """
+    if not org_id:
+        logger.warning("Skipping %s: no organization id", task)
+        return None
+    entitlement = compute_entitlement(await get_or_create_billing(org_id, database))
+    if not entitlement.can_use_ai:
+        logger.info(
+            "Skipping %s for org %s: no AI entitlement (state=%s)", task, org_id, entitlement.state
+        )
+        return None
     return entitlement
 
 
@@ -993,6 +1030,8 @@ __all__ = [
     "compute_entitlement",
     "has_live_subscription",
     "ensure_ai_access",
+    "background_ai_entitlement",
+    "SKIPPED_NO_ENTITLEMENT",
     "get_entitlement",
     "Entitlement",
     "reserve_trial_upload_atomic",

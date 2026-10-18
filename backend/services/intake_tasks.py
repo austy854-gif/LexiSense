@@ -256,6 +256,9 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
         )
         
         if playbook_id:
+            # Keep the in-memory record in sync: _create_contract_from_intake
+            # reads intake.playbook_id to decide whether to run the playbook.
+            intake.playbook_id = playbook_id
             await db.contract_intakes.update_one(
                 {"id": intake.id},
                 {"$set": {"playbook_id": playbook_id}}
@@ -444,10 +447,30 @@ async def _create_contract_from_intake(intake: ContractIntake, classification: D
         from services.obligation_tasks import extract_obligations_from_contract
         extract_obligations_from_contract.delay(contract.id, force_refresh=True)
     
-    # Trigger playbook analysis if playbook assigned
+    # Trigger playbook analysis if playbook assigned -- only for orgs entitled
+    # to AI; otherwise record that it was skipped (no crash, no AI call).
     if intake.playbook_id:
-        from services.playbook_tasks import analyze_contract_with_playbook
-        analyze_contract_with_playbook.delay(contract.id, intake.playbook_id, auto_apply=False)
+        from routes.billing import SKIPPED_NO_ENTITLEMENT, background_ai_entitlement
+
+        entitled = await background_ai_entitlement(
+            intake.organizationId, db, f"intake playbook analysis of {contract.id}"
+        )
+        if entitled is None:
+            await db.contract_intakes.update_one(
+                {"id": intake.id, "organizationId": intake.organizationId},
+                {"$set": {
+                    "playbook_analysis_status": SKIPPED_NO_ENTITLEMENT,
+                    "playbook_analysis_skip_reason": "no_ai_entitlement",
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+        else:
+            from services.playbook_tasks import analyze_contract_with_playbook
+            analyze_contract_with_playbook.delay(contract.id, intake.playbook_id, auto_apply=False)
+            await db.contract_intakes.update_one(
+                {"id": intake.id, "organizationId": intake.organizationId},
+                {"$set": {"playbook_analysis_status": "queued"}},
+            )
     
     return contract.id
 
