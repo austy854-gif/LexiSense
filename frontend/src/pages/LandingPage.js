@@ -74,7 +74,7 @@ const FEATURES = [
 const STEPS = [
   {
     title: 'Upload your contracts',
-    body: 'Add your contracts as PDF files.',
+    body: 'Add your contracts as PDF or .txt files.',
   },
   {
     title: "See what's in them",
@@ -97,7 +97,7 @@ const FAQS = [
   },
   {
     q: 'What kinds of files can I upload?',
-    a: "PDFs with selectable text, like the ones you export from Word or Google Docs or get back from an e-signature tool. Scanned images of paper contracts can't be read.",
+    a: "PDFs with selectable text, like the ones you export from Word or Google Docs or get back from an e-signature tool, and .txt files. Scanned images of paper contracts can't be read.",
   },
   {
     q: 'How does LexiSense help with renewals?',

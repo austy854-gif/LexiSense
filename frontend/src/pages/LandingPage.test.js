@@ -112,3 +112,13 @@ test('landing copy never claims OCR or scanned-document support', () => {
   const scanSentences = text.match(/[^.?]*\bscan\w*[^.]*\./gi) || [];
   scanSentences.forEach((sentence) => expect(sentence).toMatch(/(n[’']t|not) (supported|be read)/));
 });
+
+describe('supported file types (PDF or .txt)', () => {
+  test('how-it-works step and FAQ name both formats', () => {
+    render(home());
+    expect(container.textContent).toContain('Add your contracts as PDF or .txt files.');
+    expect(container.textContent).toContain(
+      "PDFs with selectable text, like the ones you export from Word or Google Docs or get back from an e-signature tool, and .txt files. Scanned images of paper contracts can't be read.",
+    );
+  });
+});
