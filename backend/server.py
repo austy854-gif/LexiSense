@@ -30,6 +30,7 @@ setup_logging(
 logger = get_logger("main")
 from utils.logging_config import install_access_log_redaction  # noqa: E402
 install_access_log_redaction()
+from utils.env import get_database_url, get_env  # noqa: E402
 
 # MongoDB connection.
 #
@@ -44,13 +45,13 @@ install_access_log_redaction()
 #     can serve health checks.
 #   * serverSelectionTimeoutMS bounds how long a request waits for a primary,
 #     so a database outage fails fast instead of hanging every request.
-mongo_url = os.environ.get("DATABASE_URL") or os.environ.get("MONGO_URL")
+mongo_url = get_database_url()
 if not mongo_url:
     raise RuntimeError("DATABASE_URL (or MONGO_URL) must be set at runtime")
 
 
 def _resolve_db_name(url: str) -> str:
-    name = os.environ.get("DB_NAME")
+    name = get_env("DB_NAME")
     if name:
         return name
     try:
@@ -75,7 +76,7 @@ client = AsyncIOMotorClient(
 db = client[DB_NAME]
 
 # Initialize Sentry
-sentry_dsn = os.environ.get("SENTRY_DSN")
+sentry_dsn = get_env("SENTRY_DSN")
 if sentry_dsn and not sentry_dsn.startswith("your-"):
     import sentry_sdk
     from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -302,7 +303,7 @@ async def _probe_storage() -> dict:
 
 def _probe_config(env_var: str) -> dict:
     """Report whether an optional integration is configured."""
-    value = os.environ.get(env_var)
+    value = get_env(env_var)
     if value and not value.startswith("your-"):
         return {"status": "healthy", "details": "Configured"}
     return {"status": "degraded", "details": "Not configured"}
@@ -381,7 +382,7 @@ REDIS_PROBE_TIMEOUT_SECONDS = 1.0
 
 def _redis_url():
     """The broker URL Celery actually uses (see services/celery_app.py)."""
-    return os.environ.get("CELERY_BROKER_URL") or os.environ.get("REDIS_URL")
+    return get_env("CELERY_BROKER_URL") or get_env("REDIS_URL")
 
 
 async def _probe_redis() -> str:

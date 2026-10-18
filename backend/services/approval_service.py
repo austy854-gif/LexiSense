@@ -33,6 +33,8 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 from typing import Any, Dict, Optional
 
+from utils.env import get_env
+
 logger = logging.getLogger(__name__)
 
 ACTIONS = ("approve", "reject")
@@ -52,7 +54,7 @@ def _ttl_hours() -> int:
 def _current_key() -> bytes:
     """Signing key. APPROVAL_TOKEN_SECRET if set, else a domain-separated key
     derived from JWT_SECRET (so an approval token can never collide with a JWT)."""
-    explicit = os.environ.get("APPROVAL_TOKEN_SECRET")
+    explicit = get_env("APPROVAL_TOKEN_SECRET")
     if explicit:
         return explicit.encode("utf-8")
     derived = _jwt_derived_key()
@@ -70,7 +72,7 @@ def _verification_keys() -> Dict[str, bytes]:
     keys = {}
     current = _current_key()
     keys[_kid(current)] = current
-    previous = os.environ.get("APPROVAL_TOKEN_SECRET_PREVIOUS")
+    previous = get_env("APPROVAL_TOKEN_SECRET_PREVIOUS")
     if previous:
         keys.setdefault(_kid(previous.encode("utf-8")), previous.encode("utf-8"))
     # Links minted before APPROVAL_TOKEN_SECRET was introduced were signed with
@@ -82,7 +84,7 @@ def _verification_keys() -> Dict[str, bytes]:
 
 
 def _jwt_derived_key() -> Optional[bytes]:
-    jwt_secret = os.environ.get("JWT_SECRET")
+    jwt_secret = get_env("JWT_SECRET")
     if not jwt_secret:
         return None
     return hmac.new(jwt_secret.encode("utf-8"), b"approval-token-v1", hashlib.sha256).digest()
@@ -547,7 +549,7 @@ async def sync_in_app_decision(db, contract_id: str, organization_id: str, actio
 # Email rendering
 # ---------------------------------------------------------------------------
 def _app_url() -> str:
-    return os.environ.get("APP_URL", "").rstrip("/")
+    return get_env("APP_URL", "").rstrip("/")
 
 
 def action_link(token: str) -> str:

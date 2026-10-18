@@ -8,7 +8,6 @@ mail-client prefetchers follow GETs); POST performs the action.
 """
 import json
 import logging
-import os
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
@@ -20,6 +19,7 @@ from services.approval_service import ApprovalTokenError
 from services.approval_tasks import dispatch_notification
 from utils import svix
 from utils.rbac import SlidingWindowRateLimiter, client_key, rate_limit
+from utils.env import get_env
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ async def _new_notification(approval: dict, kind: str, to: str) -> dict:
 async def resend_status_webhook(request: Request):
     """Record Resend delivery events (delivered/bounced/complained/...) on the
     matching ``email_notifications`` record. Svix-signed; fails closed."""
-    secret = os.environ.get("RESEND_WEBHOOK_SECRET")
+    secret = get_env("RESEND_WEBHOOK_SECRET")
     if not secret:
         logger.error("RESEND_WEBHOOK_SECRET not configured; rejecting Resend webhook")
         raise HTTPException(status_code=503, detail="Webhook not configured")

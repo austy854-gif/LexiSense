@@ -39,6 +39,7 @@ import jwt
 from jwt import PyJWTError as JWTError
 from passlib.context import CryptContext
 
+from utils.env import get_env
 from utils.rbac import normalize_role
 
 logger = logging.getLogger(__name__)
@@ -47,16 +48,16 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 #: Symmetric secret. Fail fast: a missing secret must never silently become "".
-JWT_SECRET = os.environ.get("JWT_SECRET")
+JWT_SECRET = get_env("JWT_SECRET")
 if not JWT_SECRET:
     raise RuntimeError("JWT_SECRET environment variable is required but not set")
 
-JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
+JWT_ALGORITHM = get_env("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
 #: Token audience/issuer, verified on every decode.
-JWT_ISSUER = os.environ.get("JWT_ISSUER", "lexisense-api")
-JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "lexisense-client")
+JWT_ISSUER = get_env("JWT_ISSUER", "lexisense-api")
+JWT_AUDIENCE = get_env("JWT_AUDIENCE", "lexisense-client")
 
 #: HS256 is only as strong as the secret; refuse trivially short ones in
 #: production. Development/test environments get a warning instead of a hard
