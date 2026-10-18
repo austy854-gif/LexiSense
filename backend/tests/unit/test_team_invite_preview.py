@@ -26,6 +26,7 @@ async def test_pending_invitation_returns_details(client, db, org_id, users):
     assert body == {
         "email": inv["email"],
         "accountExists": False,
+        "accountInOtherTeam": False,
         "organizationName": "Acme Studio",
         "inviterName": "Test User",
         "role": "manager",
@@ -114,6 +115,16 @@ async def test_reports_when_the_invitee_already_has_an_account(client, db, org_i
     await db.users.insert_one(make_user("org-other", email=inv["email"]))
     response = await client.post(PREVIEW_URL, json={"token": "tok-acct"})
     assert response.json()["accountExists"] is True
+    assert response.json()["accountInOtherTeam"] is True
+
+
+async def test_existing_member_is_not_flagged_as_other_team(client, db, org_id, users):
+    from tests.unit.conftest import make_user
+    inv = await _seed(db, org_id, users, token="tok-same", email="same@example.com")
+    await db.users.insert_one(make_user(org_id, email=inv["email"]))
+    body = (await client.post(PREVIEW_URL, json={"token": "tok-same"})).json()
+    assert body["accountExists"] is True
+    assert body["accountInOtherTeam"] is False
 
 
 async def test_looks_up_by_token_hash_and_never_returns_it(client, db, org_id, users):

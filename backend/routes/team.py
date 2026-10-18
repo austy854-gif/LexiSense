@@ -344,11 +344,18 @@ async def preview_invitation(payload: InvitationPreviewRequest):
     role = _invite_role(invitation)
     # Lets the page ask for the existing password instead of a new one. The
     # token holder already knows the address, so this reveals nothing new.
-    account_exists = await db.users.find_one({"email": invitation["email"]}, {"_id": 0, "id": 1}) is not None
+    existing = await db.users.find_one(
+        {"email": invitation["email"]}, {"_id": 0, "id": 1, "organizationId": 1}
+    )
+    account_exists = existing is not None
+    # True when accepting would move the account out of another team (the
+    # page warns that they'll lose access to that team's contracts).
+    in_other_team = bool(existing) and existing.get("organizationId") != invitation["organizationId"]
 
     return {
         "email": invitation["email"],
         "accountExists": account_exists,
+        "accountInOtherTeam": in_other_team,
         "organizationName": (org or {}).get("name"),
         "inviterName": inviter_name,
         "role": role,

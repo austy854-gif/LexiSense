@@ -219,3 +219,24 @@ test('sole-admin refusal (409 on accept) shows the message instead of "already u
   expect(toast.error).toHaveBeenCalledWith("You're the only admin of your current team.");
   expect(q('accept-invite-used')).toBeNull();
 });
+
+test('existing account in another team: warns about losing access before the password step', async () => {
+  teamAPI.previewInvite.mockResolvedValue({ data: { ...PREVIEW, accountExists: true, accountInOtherTeam: true } });
+  await renderAt('?token=tok-123');
+  const warning = q('accept-invite-leave-team-warning');
+  expect(warning.textContent).toBe(
+    "Joining this team moves your account out of your current team. You'll lose access to its contracts, which stay with that team.",
+  );
+  // Shown before the password field.
+  const password = q('accept-invite-password');
+  expect(warning.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test.each([
+  ['new account', { accountExists: false, accountInOtherTeam: false }],
+  ['already in this team', { accountExists: true, accountInOtherTeam: false }],
+])('no leave-team warning for %s', async (_label, flags) => {
+  teamAPI.previewInvite.mockResolvedValue({ data: { ...PREVIEW, ...flags } });
+  await renderAt('?token=tok-123');
+  expect(q('accept-invite-leave-team-warning')).toBeNull();
+});

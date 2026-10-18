@@ -87,6 +87,7 @@ export default function AcceptInvitePage() {
 
   const state = inviteViewState({ token, authLoading, user, preview, errorKind });
   const existingAccount = Boolean(preview?.accountExists);
+  const leavingOtherTeam = existingAccount && Boolean(preview?.accountInOtherTeam);
 
   const set = (field) => (e) => setForm({ ...form, [field]: e.target.value });
 
@@ -228,6 +229,11 @@ export default function AcceptInvitePage() {
               <Input id="invite-last-name" placeholder="Doe" value={form.lastName} onChange={set('lastName')} autoComplete="family-name" />
             </div>
           </div>
+          )}
+          {leavingOtherTeam && (
+            <p className="text-sm text-muted-foreground" data-testid="accept-invite-leave-team-warning">
+              {INVITE_COPY.leaveTeamWarning}
+            </p>
           )}
           <div className="space-y-2">
             <Label htmlFor="invite-password">Password</Label>

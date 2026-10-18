@@ -6,7 +6,8 @@
  *
  * Backend contract (backend/routes/team.py):
  *   POST /team/accept-invite/preview {token}
- *     200 {email, accountExists, organizationName, inviterName, role, expiresAt}
+ *     200 {email, accountExists, accountInOtherTeam, organizationName,
+ *          inviterName, role, expiresAt}
  *     404 unknown/cancelled  400 expired  409 already accepted  429 rate limited
  *   POST /team/accept-invite {token, password, firstName?, lastName?}
  *     200 {message, email, existingAccount?, alreadyMember?}
@@ -38,6 +39,8 @@ export const INVITE_COPY = {
   successSignInToast: 'Your account is ready. Sign in to continue.',
   acceptFailed: "We couldn't create your account. Please try again.",
   existingAccountIntro: 'You already have a LexiSense account with this email. Enter your password to join the team.',
+  leaveTeamWarning:
+    "Joining this team moves your account out of your current team. You'll lose access to its contracts, which stay with that team.",
   joinedToast: "You're in. Welcome to the team.",
   alreadyMemberToast: "You're already a member of this team.",
 };
