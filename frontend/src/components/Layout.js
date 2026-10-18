@@ -12,7 +12,6 @@ import {
   Menu,
   X,
   ChevronDown,
-  Scale,
   Bell,
   BarChart3,
   Files,
@@ -22,6 +21,7 @@ import {
   CheckCheck,
   CreditCard,
 } from 'lucide-react';
+import { BrandLockup } from './BrandLockup';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Avatar, AvatarFallback } from './ui/avatar';
@@ -139,10 +139,9 @@ export function Layout({ children }) {
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-border">
-            <div className="p-2 bg-primary rounded-lg">
-              <Scale className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <span className="text-xl font-bold text-foreground tracking-tight">LexiSense</span>
+            <Link to="/" className="flex items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <BrandLockup className="h-8 w-auto" />
+            </Link>
             <Button
               variant="ghost"
               size="icon"
