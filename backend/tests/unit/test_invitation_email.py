@@ -109,6 +109,21 @@ class TestEscaping:
         assert subject == "A teammate invited you to LexiSense"
         assert "your team" in html
 
+    def test_missing_inviter_is_capitalised_only_at_sentence_start(self):
+        subject, html, text = render_invitation_email(dict(DATA, inviter_name=""))
+        assert subject.startswith("A teammate ")
+        for body in (html, text):
+            assert "A teammate invited you to join" in body
+            assert "because a teammate invited" in body
+            assert "because A teammate" not in body
+        assert "Invited by:  A teammate" in text
+
+    def test_named_inviter_is_unchanged_mid_sentence(self):
+        _, html, text = render_invitation_email(dict(DATA, inviter_name="Sam Lee"))
+        for body in (html, text):
+            assert "because Sam Lee invited" in body
+            assert "{{" not in body
+
 
 class TestSendEmailPassesPlainText:
     async def test_invitation_send_includes_text_alternative(self, monkeypatch):

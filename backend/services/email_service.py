@@ -64,6 +64,12 @@ def _fill(template: str, values: dict, *, escape: bool) -> str:
     return _PLACEHOLDER.sub(_sub, template)
 
 
+# {{inviter_name}} right after a lowercase word ("because {{inviter_name}}")
+# is mid-sentence, so its fallback is lowercase. The brand templates stay
+# verbatim; this only renames the placeholder at render time.
+_MID_SENTENCE_INVITER = re.compile(r"(?<=[a-z,] )\{\{inviter_name\}\}")
+
+
 def _split_text_template(text: str) -> tuple[str, str, str]:
     """Split a brand ``.txt`` template into ``(subject, preview, body)``.
 
@@ -101,11 +107,14 @@ def render_invitation_email(data: dict) -> tuple[str, str, str]:
     are copied verbatim into ``services/email_templates``. Subject and preview
     are the ``Subject:``/``Preview:`` lines of the ``.txt`` file.
     """
-    inviter_name = _one_line(data.get("inviter_name")) or "A teammate"
+    inviter_name = _one_line(data.get("inviter_name"))
     organization_name = _one_line(data.get("organization_name")) or "your team"
     role = (data.get("role") or "user").lower()
     values = {
-        "inviter_name": inviter_name,
+        # Fallback is "A teammate" at a sentence start (subject, body) and
+        # "a teammate" mid-sentence (footer: "because a teammate invited...").
+        "inviter_name": inviter_name or "A teammate",
+        "inviter_name_mid": inviter_name or "a teammate",
         "organization_name": organization_name,
         "role_label": ROLE_LABELS.get(role, role.capitalize() or "User"),
         "invitee_email": data.get("invitee_email") or "you",
@@ -114,6 +123,8 @@ def render_invitation_email(data: dict) -> tuple[str, str, str]:
     subject_tpl, _preview_tpl, text_tpl = _split_text_template(_read_template(INVITE_TEXT_TEMPLATE))
     subject = _one_line(_fill(subject_tpl, values, escape=False))
     html_tpl = _DEV_COMMENT.sub("", _read_template(INVITE_HTML_TEMPLATE))
+    html_tpl = _MID_SENTENCE_INVITER.sub("{{inviter_name_mid}}", html_tpl)
+    text_tpl = _MID_SENTENCE_INVITER.sub("{{inviter_name_mid}}", text_tpl)
     html = _fill(html_tpl, values, escape=True)
     text = _fill(text_tpl, values, escape=False)
     return subject, html, text

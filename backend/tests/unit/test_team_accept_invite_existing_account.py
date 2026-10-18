@@ -34,6 +34,7 @@ async def test_account_in_another_team_joins_with_invite_role(client, db, org_id
     body = response.json()
     assert body["email"] == "ext@example.com"
     assert body["existingAccount"] is True and body["alreadyMember"] is False
+    assert body["message"] == "You've joined the team."
     stored = await db.users.find_one({"id": "u-ext"})
     assert stored["organizationId"] == org_id
     assert stored["role"] == "manager"
@@ -64,6 +65,7 @@ async def test_already_a_member_is_idempotent(client, db, org_id, users):
 
     assert response.status_code == 200
     assert response.json()["alreadyMember"] is True
+    assert response.json()["message"] == "You're already a member of this team."
     stored = await db.users.find_one({"id": "u-mem"})
     assert stored["role"] == "admin"  # not downgraded to the invite role
     assert stored["organizationId"] == org_id

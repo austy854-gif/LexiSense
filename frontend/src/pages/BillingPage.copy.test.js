@@ -33,3 +33,15 @@ test.each([
 ])('BillingPage has no Title Case label "%s"', (label) => {
   expect(source).not.toContain(label);
 });
+
+// Quinn's final wording (invites-strings-final.md #35, #40).
+test.each([
+  'Your plan, payment method and billing history',
+  "When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to the Team plan.",
+])('BillingPage uses final copy "%s"', (text) => {
+  expect(source).toContain(text);
+});
+
+test('BillingPage no longer says contracts "stay safe"', () => {
+  expect(source).not.toContain('stay safe');
+});

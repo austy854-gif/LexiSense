@@ -168,7 +168,7 @@ export default function BillingPage() {
           <div>
             <h1 className="text-3xl font-bold">Billing & subscription</h1>
             <p className="text-muted-foreground mt-1">
-              Manage your plan and payment method, and see your billing history
+              Your plan, payment method and billing history
             </p>
           </div>
         </div>
@@ -480,7 +480,7 @@ export default function BillingPage() {
                   What happens when my trial ends?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  When your trial ends, your contracts stay safe. You just won't be able to add new ones until you upgrade to the Team plan.
+                  When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to the Team plan.
                 </p>
               </details>
               <details className="group border rounded-lg p-4">

@@ -235,7 +235,7 @@ async def _join_existing_account(invitation: dict, user: dict, password: str) ->
     if user.get("organizationId") == org_id:
         await _claim_invitation(invitation)
         return {
-            "message": "You're already a member of this team",
+            "message": "You're already a member of this team.",
             "email": user["email"],
             "existingAccount": True,
             "alreadyMember": True,
@@ -293,7 +293,7 @@ async def _join_existing_account(invitation: dict, user: dict, password: str) ->
         details={"role": role, "existingAccount": True, "previousOrganizationId": old_org_id},
     )
     return {
-        "message": "Joined team",
+        "message": "You've joined the team.",
         "email": user["email"],
         "existingAccount": True,
         "alreadyMember": False,
@@ -325,7 +325,7 @@ async def preview_invitation(payload: InvitationPreviewRequest):
     if invitation["status"] == "accepted":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Invitation has already been accepted",
+            detail="This invite has already been used.",
         )
     if invitation["status"] == "expired" or _invitation_is_expired(invitation):
         raise HTTPException(

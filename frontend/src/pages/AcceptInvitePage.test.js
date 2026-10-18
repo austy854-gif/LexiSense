@@ -71,17 +71,43 @@ afterEach(() => {
 test('missing token shows the incomplete-link state without calling the API', async () => {
   await renderAt('');
   expect(q('accept-invite-missing')).not.toBeNull();
+  expect(container.textContent).toContain(
+    'Part of this link is missing. Open the invite email again and use the Accept invite button.',
+  );
   expect(teamAPI.previewInvite).not.toHaveBeenCalled();
 });
 
 test.each([
-  [404, 'accept-invite-invalid'],
-  [400, 'accept-invite-expired'],
-  [409, 'accept-invite-used'],
-])('preview %s shows %s', async (status, testId) => {
+  [404, 'accept-invite-invalid', "This invite link doesn't work",
+    'It may have been cancelled or already used. Ask the person who invited you to send a new one.'],
+  [400, 'accept-invite-expired', 'This invite has expired',
+    'Invites expire after 7 days. Ask the person who invited you to send a new one.'],
+  [409, 'accept-invite-used', 'This invite has already been used', "Sign in to see your team's contracts."],
+  [429, 'accept-invite-rate_limited', 'Too many tries in a row', 'Wait a minute, then try again.'],
+  [500, 'accept-invite-error', "We couldn't check this invite", "We couldn't check this invite. Refresh the page to try again."],
+])('preview %s shows %s with its own title and body', async (status, testId, title, body) => {
   teamAPI.previewInvite.mockRejectedValue(httpError(status));
   await renderAt('?token=tok');
-  expect(q(testId)).not.toBeNull();
+  const el = q(testId);
+  expect(el).not.toBeNull();
+  expect(el.textContent).toBe(title);
+  expect(container.textContent).toContain(body);
+});
+
+test.each([[429], [500]])('preview %s does not say the link is broken', async (status) => {
+  teamAPI.previewInvite.mockRejectedValue(httpError(status));
+  await renderAt('?token=tok');
+  expect(container.textContent).not.toContain("This invite link doesn't work");
+});
+
+test('error states link signed-in people to "Go to Dashboard"', async () => {
+  localStorage.setItem('token', 'jwt');
+  localStorage.setItem('user', JSON.stringify({ id: 'a', email: 'boss@example.com', role: 'admin' }));
+  authAPI.getMe.mockResolvedValue({ data: { id: 'a', email: 'boss@example.com', role: 'admin' } });
+  teamAPI.previewInvite.mockRejectedValue(httpError(404));
+  await renderAt('?token=tok');
+  expect(q('accept-invite-invalid')).not.toBeNull();
+  expect(container.querySelector('a[href="/"]').textContent).toBe('Go to Dashboard');
 });
 
 test('logged out: shows the form, strips the token from the URL, and the invite details', async () => {
@@ -155,6 +181,8 @@ test('signed in as someone else: offers to sign out instead of showing the form'
   await renderAt('?token=tok-123');
   expect(q('accept-invite-signed_in_other')).not.toBeNull();
   expect(q('accept-invite-password')).toBeNull();
+  expect(q('accept-invite-sign-out').textContent).toBe('Sign out and accept');
+  expect(container.querySelector('a[href="/"]').textContent).toBe('Go to Dashboard');
 
   await act(async () => { q('accept-invite-sign-out').click(); });
   expect(q('accept-invite-password')).not.toBeNull();
@@ -225,7 +253,7 @@ test('existing account in another team: warns about losing access before the pas
   await renderAt('?token=tok-123');
   const warning = q('accept-invite-leave-team-warning');
   expect(warning.textContent).toBe(
-    "Joining this team moves your account out of your current team. You'll lose access to its contracts, which stay with that team.",
+    "Joining this team moves your account out of your current team. You'll lose access to that team's contracts. They'll stay with that team.",
   );
   // Shown before the password field.
   const password = q('accept-invite-password');
@@ -239,4 +267,30 @@ test.each([
   teamAPI.previewInvite.mockResolvedValue({ data: { ...PREVIEW, ...flags } });
   await renderAt('?token=tok-123');
   expect(q('accept-invite-leave-team-warning')).toBeNull();
+});
+
+test.each([
+  ['new account', { accountExists: false }, 'Creating your account...'],
+  ['existing account', { accountExists: true }, 'Joining the team...'],
+])('submit button while working: %s', async (_label, flags, label) => {
+  teamAPI.previewInvite.mockResolvedValue({ data: { ...PREVIEW, ...flags } });
+  teamAPI.acceptInvite.mockReturnValue(new Promise(() => {})); // stays pending
+  await renderAt('?token=tok-123');
+  await act(async () => {
+    type(q('accept-invite-password'), 'Sup3rSecret!');
+    const confirm = q('accept-invite-confirm-password');
+    if (confirm) type(confirm, 'Sup3rSecret!');
+  });
+  await act(async () => {
+    q('accept-invite-submit').closest('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+  expect(q('accept-invite-submit').textContent).toBe(label);
+});
+
+test('rate limit on submit shows the full copy-file toast', async () => {
+  teamAPI.previewInvite.mockResolvedValue({ data: { ...PREVIEW, accountExists: true } });
+  teamAPI.acceptInvite.mockRejectedValue(httpError(429));
+  await renderAt('?token=tok-123');
+  await submit('old-pass');
+  expect(toast.error).toHaveBeenCalledWith('Too many tries in a row. Wait a minute, then try again.');
 });

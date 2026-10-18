@@ -67,7 +67,7 @@ async def test_accepted_invitation_is_409(client, db, org_id, users):
     await _seed(db, org_id, users, token="tok-a", status="accepted")
     response = await client.post(PREVIEW_URL, json={"token": "tok-a"})
     assert response.status_code == 409
-    assert response.json()["detail"] == "Invitation has already been accepted"
+    assert response.json()["detail"] == "This invite has already been used."
 
 
 async def test_after_accepting_preview_reports_409(client, db, org_id, users):

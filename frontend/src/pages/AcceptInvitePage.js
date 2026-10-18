@@ -112,7 +112,7 @@ export default function AcceptInvitePage() {
         // server refused the move (sole admin of another team). Show its text.
         toast.error(getErrorInfo(err).message);
       } else if (kind === 'rate_limited') {
-        toast.error(INVITE_COPY.rateLimitedBody);
+        toast.error(INVITE_COPY.rateLimitedToast);
       } else if (kind === 'validation') {
         toast.error(getErrorInfo(err).message);
       } else {
@@ -151,12 +151,12 @@ export default function AcceptInvitePage() {
 
   const signInButton = (
     <Button asChild className="w-full">
-      <Link to="/login">Sign in</Link>
+      <Link to="/login">{INVITE_COPY.signIn}</Link>
     </Button>
   );
   const dashboardButton = (
     <Button asChild className="w-full">
-      <Link to="/">Go to your dashboard</Link>
+      <Link to="/">{INVITE_COPY.goToDashboard}</Link>
     </Button>
   );
 
@@ -172,22 +172,24 @@ export default function AcceptInvitePage() {
   if (state === 'used') {
     return <Message state={state} title={INVITE_COPY.usedTitle} body={INVITE_COPY.usedBody}>{user ? dashboardButton : signInButton}</Message>;
   }
-  if (state === 'rate_limited' || state === 'error') {
-    const body = state === 'rate_limited' ? INVITE_COPY.rateLimitedBody : INVITE_COPY.errorBody;
-    return <Message state={state} title={INVITE_COPY.invalidTitle} body={body} />;
+  if (state === 'rate_limited') {
+    return <Message state={state} title={INVITE_COPY.rateLimitedTitle} body={INVITE_COPY.rateLimitedBody} />;
+  }
+  if (state === 'error') {
+    return <Message state={state} title={INVITE_COPY.errorTitle} body={INVITE_COPY.errorBody} />;
   }
   if (state === 'signed_in_other') {
     return (
       <Message
         state={state}
-        title="This invite is for someone else"
+        title={INVITE_COPY.signedInOtherTitle}
         body={`You're signed in as ${user.email}, but this invite is for ${preview.email}. Sign out to accept it.`}
       >
         <Button className="w-full" onClick={logout} data-testid="accept-invite-sign-out">
-          Sign out and accept invite
+          {INVITE_COPY.signOutAndAccept}
         </Button>
         <Button asChild variant="outline" className="w-full">
-          <Link to="/">Go to your dashboard</Link>
+          <Link to="/">{INVITE_COPY.goToDashboard}</Link>
         </Button>
       </Message>
     );
@@ -279,7 +281,7 @@ export default function AcceptInvitePage() {
             {submitting ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {INVITE_COPY.submitting}
+                {existingAccount ? INVITE_COPY.submittingExisting : INVITE_COPY.submitting}
               </>
             ) : (
               INVITE_COPY.submit
