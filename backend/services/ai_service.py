@@ -9,6 +9,30 @@ logger = logging.getLogger(__name__)
 
 EMERGENT_LLM_KEY = get_env("EMERGENT_LLM_KEY")
 
+#: Characters of contract text sent to the model. Text beyond these caps is not
+#: seen (no chunking yet), so callers record the coverage via analysis_coverage().
+ANALYSIS_MAX_CHARS = 8000
+CHAT_MAX_CHARS = 6000
+#: Rough characters per printed contract page, used only for the
+#: "Analyzed the first ~N pages" label.
+APPROX_CHARS_PER_PAGE = 3000
+
+
+def analysis_coverage(contract_text: Optional[str], max_chars: int = ANALYSIS_MAX_CHARS) -> Dict[str, Any]:
+    """How much of ``contract_text`` the model sees under ``max_chars``.
+
+    ``analysisPartial`` is True when the text was cut off; ``approxPagesAnalyzed``
+    is a rounded page estimate for UI copy (at least 1).
+    """
+    total = len(contract_text or "")
+    analyzed = min(total, max_chars)
+    return {
+        "analysisPartial": total > max_chars,
+        "analyzedChars": analyzed,
+        "totalChars": total,
+        "approxPagesAnalyzed": max(1, round(analyzed / APPROX_CHARS_PER_PAGE)),
+    }
+
 CONTRACT_ANALYSIS_PROMPT = """You are an expert legal contract analyzer. Analyze the following contract and return a JSON object with the following structure:
 {
   "summary": "A brief 2-3 sentence summary of what this contract is about",
@@ -48,7 +72,7 @@ async def analyze_contract(contract_text: str) -> Optional[Dict[str, Any]]:
             system_message=CONTRACT_ANALYSIS_PROMPT
         ).with_model("openai", "gpt-5.2")
         
-        truncated_text = contract_text[:8000] if len(contract_text) > 8000 else contract_text
+        truncated_text = contract_text[:ANALYSIS_MAX_CHARS]
         
         user_message = UserMessage(
             text=f"Analyze this contract:\n\n{truncated_text}"
@@ -92,7 +116,7 @@ async def get_chat_response(contract_text: str, question: str, session_id: str) 
             system_message=CHAT_SYSTEM_PROMPT
         ).with_model("openai", "gpt-5.2")
         
-        truncated_text = contract_text[:6000] if len(contract_text) > 6000 else contract_text
+        truncated_text = contract_text[:CHAT_MAX_CHARS]
         
         user_message = UserMessage(
             text=f"Contract Text:\n{truncated_text}\n\nQuestion: {question}"

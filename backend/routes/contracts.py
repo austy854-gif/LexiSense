@@ -10,7 +10,13 @@ from models.contract_version import ContractVersion, ContractVersionResponse
 from utils.auth import get_current_user, require_role
 from utils.pagination import normalize_date_bound, resolve_pagination
 from utils.rbac import ROLE_ADMIN, ROLE_MANAGER, WRITE_ROLES
-from services.ai_service import analyze_contract, get_chat_response
+from services.ai_service import (
+    ANALYSIS_MAX_CHARS,
+    CHAT_MAX_CHARS,
+    analysis_coverage,
+    analyze_contract,
+    get_chat_response,
+)
 from services.storage_service import upload_file_to_s3, delete_file_from_s3
 from services.pdf_service import extract_text_from_file
 from services.audit_service import log_action
@@ -34,6 +40,24 @@ router = APIRouter(prefix="/contracts", tags=["Contracts"])
 #: Uploading creates contracts (and spends trial quota / AI credits), so it is
 #: limited to the shared write roles -- viewers are read-only.
 _require_writer = require_role(*WRITE_ROLES)
+
+#: Coverage fields stored on a contract and exposed in ContractResponse.
+_COVERAGE_FIELDS = ("analysisPartial", "analyzedChars", "totalChars", "approxPagesAnalyzed")
+
+
+def _coverage_fields(source) -> dict:
+    """Analysis-coverage fields from a contract document or model."""
+    if isinstance(source, dict):
+        return {k: source.get(k) for k in _COVERAGE_FIELDS}
+    return {k: getattr(source, k, None) for k in _COVERAGE_FIELDS}
+
+
+def _analysis_coverage_for(text, ai_analysis) -> dict:
+    """Only an analysis that actually ran has a coverage to report."""
+    if ai_analysis is None:
+        return {}
+    return analysis_coverage(text, ANALYSIS_MAX_CHARS)
+
 
 db = None
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -168,6 +192,7 @@ async def list_contracts(
             aiAnalysis=c.get("aiAnalysis"),
             aiAnalysisStatus=c.get("aiAnalysisStatus"),
             aiAnalysisError=c.get("aiAnalysisError"),
+            **_coverage_fields(c),
             fileName=c.get("fileName"),
             fileSize=c.get("fileSize"),
             tags=c.get("tags", []),
@@ -213,6 +238,7 @@ async def get_contract(
         aiAnalysis=contract.get("aiAnalysis"),
         aiAnalysisStatus=contract.get("aiAnalysisStatus"),
         aiAnalysisError=contract.get("aiAnalysisError"),
+        **_coverage_fields(contract),
         fileName=contract.get("fileName"),
         fileSize=contract.get("fileSize"),
         tags=contract.get("tags", []),
@@ -308,6 +334,7 @@ async def upload_contract(
             riskLevel=risk_level,
             originalText=extracted_text,
             aiAnalysis=ai_analysis,
+            **_analysis_coverage_for(extracted_text, ai_analysis),
             storageKey=storage_key,
             fileName=file.filename,
             fileSize=len(file_content),
@@ -367,6 +394,7 @@ async def upload_contract(
         aiAnalysis=contract.aiAnalysis,
         aiAnalysisStatus="failed" if ai_error else "success",
         aiAnalysisError=ai_error,
+        **_coverage_fields(contract),
         fileName=contract.fileName,
         fileSize=contract.fileSize,
         tags=contract.tags,
@@ -479,6 +507,7 @@ async def bulk_upload_contracts(
                     riskLevel=risk_level,
                     originalText=extracted_text,
                     aiAnalysis=ai_analysis,
+                    **_analysis_coverage_for(extracted_text, ai_analysis),
                     storageKey=storage_key,
                     fileName=file.filename,
                     fileSize=len(file_content),
@@ -566,7 +595,14 @@ async def chat_with_contract(
         }
         await db.chat_history.insert_one(chat_doc)
         
-        return ChatResponse(answer=answer, contractId=contract_id)
+        context = analysis_coverage(contract["originalText"], CHAT_MAX_CHARS)
+        return ChatResponse(
+            answer=answer,
+            contractId=contract_id,
+            contextPartial=context["analysisPartial"],
+            contextChars=context["analyzedChars"],
+            approxPagesInContext=context["approxPagesAnalyzed"],
+        )
         
     except Exception as e:
         logger.error(f"Chat failed: {e}")

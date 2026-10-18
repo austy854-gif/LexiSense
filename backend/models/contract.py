@@ -37,6 +37,12 @@ class Contract(BaseModel):
     riskLevel: Optional[str] = None
     originalText: Optional[str] = None
     aiAnalysis: Optional[Dict[str, Any]] = None
+    #: Analysis coverage: True when the text exceeded the analysis cap and only
+    #: the first ``analyzedChars`` (~``approxPagesAnalyzed`` pages) were analysed.
+    analysisPartial: Optional[bool] = None
+    analyzedChars: Optional[int] = None
+    totalChars: Optional[int] = None
+    approxPagesAnalyzed: Optional[int] = None
     storageKey: Optional[str] = None
     fileName: Optional[str] = None
     fileSize: Optional[int] = None
@@ -64,6 +70,10 @@ class ContractResponse(BaseModel):
     aiAnalysis: Optional[Dict[str, Any]] = None
     aiAnalysisStatus: Optional[str] = None
     aiAnalysisError: Optional[str] = None
+    analysisPartial: Optional[bool] = None
+    analyzedChars: Optional[int] = None
+    totalChars: Optional[int] = None
+    approxPagesAnalyzed: Optional[int] = None
     fileName: Optional[str] = None
     fileSize: Optional[int] = None
     tags: List[str] = []
@@ -93,3 +103,8 @@ class ChatMessage(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     contractId: str
+    #: True when the contract exceeded the chat context cap, so the answer is
+    #: based only on the first ``contextChars`` (~``approxPagesInContext`` pages).
+    contextPartial: bool = False
+    contextChars: Optional[int] = None
+    approxPagesInContext: Optional[int] = None
