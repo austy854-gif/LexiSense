@@ -708,3 +708,191 @@ async def test_bulk_upload_requires_write_role(http, db, users, upload_stubs, ro
     )
     assert resp.status_code == expected, resp.text
     assert await db.contracts.count_documents({}) == (1 if expected == 200 else 0)
+
+
+# --------------------------------------------------------------------------
+# Past-due grace period (BILLING_PAST_DUE_GRACE_DAYS)
+# --------------------------------------------------------------------------
+NOW = datetime(2026, 10, 18, 7, 0, tzinfo=timezone.utc)
+
+
+def _past_due(since):
+    return billing_doc("o", **dict(PAST_DUE, pastDueSince=since))
+
+
+def test_past_due_inside_grace_keeps_access_with_warning():
+    ent = billing_route.compute_entitlement(_past_due((NOW - timedelta(days=2)).isoformat()), now=NOW)
+    assert ent.state == billing_route.ACCESS_PAST_DUE_GRACE
+    assert ent.can_use_ai and ent.unlimited_uploads and ent.message == ""
+    assert "within 5 days" in ent.warning
+    assert ent.grace_ends_at == NOW + timedelta(days=5)
+
+
+def test_past_due_after_grace_is_blocked_with_payment_failed_message():
+    ent = billing_route.compute_entitlement(_past_due((NOW - timedelta(days=7, seconds=1)).isoformat()), now=NOW)
+    assert ent.state == billing_route.ACCESS_PAST_DUE
+    assert not ent.can_use_ai and not ent.unlimited_uploads
+    assert ent.message == billing_route.MSG_PAST_DUE and "payment failed" in ent.message
+
+
+def test_grace_boundary_is_exclusive():
+    exactly = billing_route.compute_entitlement(_past_due((NOW - timedelta(days=7)).isoformat()), now=NOW)
+    assert exactly.state == billing_route.ACCESS_PAST_DUE
+    last_second = billing_route.compute_entitlement(
+        _past_due((NOW - timedelta(days=7) + timedelta(seconds=1)).isoformat()), now=NOW)
+    assert last_second.state == billing_route.ACCESS_PAST_DUE_GRACE
+    assert "within 1 day " in last_second.warning
+
+
+def test_grace_handles_offsets_and_naive_timestamps():
+    # 2 days ago expressed in Edmonton time (UTC-6) and as a naive UTC string.
+    local = (NOW - timedelta(days=2)).astimezone(timezone(timedelta(hours=-6))).isoformat()
+    naive = (NOW - timedelta(days=2)).replace(tzinfo=None).isoformat()
+    zulu = (NOW - timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert billing_route.compute_entitlement(_past_due(local), now=NOW).grace_ends_at == NOW + timedelta(days=5)
+    assert billing_route.compute_entitlement(_past_due(naive), now=NOW).grace_ends_at == NOW + timedelta(days=5)
+    assert billing_route.compute_entitlement(_past_due(zulu), now=NOW).state == billing_route.ACCESS_PAST_DUE
+
+
+def test_past_due_without_start_time_gets_no_grace():
+    assert billing_route.compute_entitlement(billing_doc("o", **PAST_DUE), now=NOW).state == billing_route.ACCESS_PAST_DUE
+
+
+def test_grace_days_are_config_driven(billing_env):
+    since = (NOW - timedelta(days=8)).isoformat()
+    billing_env.setenv("BILLING_PAST_DUE_GRACE_DAYS", "10")
+    assert billing_route.compute_entitlement(_past_due(since), now=NOW).state == billing_route.ACCESS_PAST_DUE_GRACE
+    billing_env.setenv("BILLING_PAST_DUE_GRACE_DAYS", "0")
+    assert billing_route.compute_entitlement(_past_due(NOW.isoformat()), now=NOW).state == billing_route.ACCESS_PAST_DUE
+    billing_env.setenv("BILLING_PAST_DUE_GRACE_DAYS", "-3")  # invalid -> default 7
+    assert plans_module.get_past_due_grace_period() == timedelta(days=7)
+
+
+GRACE = dict(PAST_DUE, pastDueSince=iso_in(-2))
+GRACE_OVER = dict(PAST_DUE, pastDueSince=iso_in(-8))
+
+
+async def test_grace_allows_upload_and_chat_then_blocks(http, db, org_id, owner, chat_contract, fake_chat):
+    await db.organization_billing.insert_one(billing_doc(org_id, **GRACE))
+    assert await billing_route.reserve_trial_upload_atomic(org_id) == (True, "")
+    ok = await http.post(f"{API_PREFIX}/contracts/c-chat/chat", json={"question": "Term?"}, headers=auth_headers(owner))
+    assert ok.status_code == 200, ok.text
+    await db.organization_billing.update_one({"organizationId": org_id}, {"$set": {"pastDueSince": iso_in(-8)}})
+    allowed, msg = await billing_route.reserve_trial_upload_atomic(org_id)
+    assert allowed is False and "payment failed" in msg
+    blocked = await http.post(f"{API_PREFIX}/contracts/c-chat/chat", json={"question": "Term?"}, headers=auth_headers(owner))
+    assert blocked.status_code == 403 and "payment failed" in blocked.json()["detail"]
+    assert fake_chat == ["Term?"]
+
+
+async def test_playbook_analysis_allowed_in_grace(agentic_client, agentic_seed, queued, db, org_id, owner):
+    await db.organization_billing.insert_one(billing_doc(org_id, **GRACE))
+    resp = await agentic_client.post(f"{API_PREFIX}/agentic/redline/analyze",
+                                     json={"contractId": "c-1", "playbookId": "pb-1"}, headers=auth_headers(owner))
+    assert resp.status_code == 200, resp.text
+
+
+async def test_subscription_endpoint_shows_past_due_with_warning(http, db, org_id, owner):
+    await db.organization_billing.insert_one(billing_doc(org_id, **GRACE))
+    body = (await http.get(f"{API_PREFIX}/billing/subscription", headers=auth_headers(owner))).json()
+    assert body["billingStatus"] == "past_due" and body["subscriptionTier"] == "team"
+    assert body["accessState"] == "past_due_grace"
+    assert "payment failed" in body["warning"]
+    assert body["pastDueSince"] and body["gracePeriodEndsAt"]
+
+
+async def test_subscription_endpoint_after_grace_has_no_warning(http, db, org_id, owner):
+    await db.organization_billing.insert_one(billing_doc(org_id, **GRACE_OVER))
+    body = (await http.get(f"{API_PREFIX}/billing/subscription", headers=auth_headers(owner))).json()
+    assert body["billingStatus"] == "past_due" and body["accessState"] == "past_due"
+    assert body["warning"] is None
+
+
+def _ts(dt):
+    return int(dt.timestamp())
+
+
+async def _doc(db, org_id):
+    return await db.organization_billing.find_one({"organizationId": org_id})
+
+
+async def test_payment_failed_records_event_time_and_keeps_first(db, org_id):
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(org_id, **PAID))
+    first = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    await billing_route.handle_payment_failed({"customer": "cus_1"}, _ts(first))
+    await billing_route.handle_payment_failed({"customer": "cus_1"}, _ts(first + timedelta(days=3)))
+    doc = await _doc(db, org_id)
+    assert doc["billingStatus"] == "past_due"
+    assert doc["pastDueSince"] == "2026-10-01T12:00:00+00:00"
+
+
+async def test_subscription_past_due_keeps_invoice_failure_time(db, org_id):
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(org_id, **PAID))
+    failed = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    await billing_route.handle_payment_failed({"customer": "cus_1"}, _ts(failed))
+    await billing_route.update_billing_from_subscription(
+        org_id, _subscription("past_due"), "cus_1", _ts(failed + timedelta(seconds=2)))
+    assert (await _doc(db, org_id))["pastDueSince"] == "2026-10-01T12:00:00+00:00"
+
+
+async def test_subscription_past_due_first_starts_grace(db, org_id):
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(org_id, **PAID))
+    at = datetime(2026, 10, 2, 8, 30, tzinfo=timezone.utc)
+    await billing_route.update_billing_from_subscription(org_id, _subscription("past_due"), "cus_1", _ts(at))
+    assert (await _doc(db, org_id))["pastDueSince"] == "2026-10-02T08:30:00+00:00"
+
+
+@pytest.mark.parametrize("recover", ["invoice_paid", "subscription_active"])
+async def test_recovery_clears_past_due_since(db, org_id, recover):
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(org_id, **PAID))
+    t0 = _ts(datetime(2026, 10, 1, tzinfo=timezone.utc))
+    await billing_route.handle_payment_failed({"customer": "cus_1"}, t0)
+    if recover == "invoice_paid":
+        await billing_route.handle_invoice_paid({"customer": "cus_1"}, t0 + 60)
+    else:
+        await billing_route.update_billing_from_subscription(org_id, _subscription("active"), "cus_1", t0 + 60)
+    doc = await _doc(db, org_id)
+    assert doc["billingStatus"] == "active" and doc["pastDueSince"] is None
+    assert billing_route.compute_entitlement(doc).is_paid
+    # A new failure later starts a fresh grace period.
+    await billing_route.handle_payment_failed({"customer": "cus_1"}, t0 + 86400 * 20)
+    assert (await _doc(db, org_id))["pastDueSince"] == billing_route._iso_from_ts(t0 + 86400 * 20)
+
+
+async def test_stale_payment_failed_after_recovery_is_ignored(db, org_id):
+    """Stripe may deliver invoice.payment_failed after the later invoice.paid."""
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(org_id, **PAID))
+    t0 = _ts(datetime(2026, 10, 1, tzinfo=timezone.utc))
+    await billing_route.handle_payment_failed({"customer": "cus_1"}, t0)
+    await billing_route.handle_invoice_paid({"customer": "cus_1"}, t0 + 120)
+    await billing_route.handle_payment_failed({"customer": "cus_1"}, t0 + 5)  # late, older
+    await billing_route.update_billing_from_subscription(org_id, _subscription("past_due"), "cus_1", t0 + 10)
+    doc = await _doc(db, org_id)
+    assert (doc["billingStatus"], doc["pastDueSince"]) == ("active", None)
+
+
+async def test_webhook_passes_event_created_time(http, db, org_id, monkeypatch):
+    monkeypatch.setattr(billing_route, "stripe_api_key", "sk_test_fake")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    await db.organization_billing.insert_one(billing_doc(org_id, **PAID))
+    created = _ts(datetime(2026, 10, 3, 9, 15, tzinfo=timezone.utc))
+    event = {"type": "invoice.payment_failed", "created": created,
+             "data": {"object": {"customer": "cus_1", "subscription": None}}}
+    monkeypatch.setattr(stripe.Webhook, "construct_event", staticmethod(lambda p, s, k: event))
+    resp = await http.post(f"{API_PREFIX}/billing/webhook", content=b"{}", headers={"stripe-signature": "sig"})
+    assert resp.status_code == 200
+    doc = await _doc(db, org_id)
+    assert doc["pastDueSince"] == "2026-10-03T09:15:00+00:00" and doc["stripeEventAt"] == created
+
+
+async def test_subscription_deleted_clears_past_due(db, org_id):
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(org_id, stripeSubscriptionId="sub_1", **GRACE))
+    await billing_route.handle_subscription_deleted(_subscription("canceled"))
+    doc = await _doc(db, org_id)
+    assert doc["billingStatus"] == "cancelled" and doc["pastDueSince"] is None

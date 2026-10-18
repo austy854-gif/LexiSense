@@ -22,6 +22,7 @@ from utils.env import get_env
 from utils.plans import (
     DEFAULT_PAID_PLAN_ID,
     PlanConfig,
+    get_past_due_grace_period,
     get_paid_plan,
     get_paid_plans,
     get_trial_config,
@@ -55,6 +56,8 @@ ACCESS_PAID = "paid"
 ACCESS_TRIAL = "trial"
 ACCESS_TRIAL_EXPIRED = "trial_expired"
 ACCESS_PAST_DUE = "past_due"
+#: Payment failed but still inside BILLING_PAST_DUE_GRACE_DAYS: access continues.
+ACCESS_PAST_DUE_GRACE = "past_due_grace"
 ACCESS_CANCELLED = "cancelled"
 ACCESS_INACTIVE = "inactive"
 
@@ -80,6 +83,10 @@ class Entitlement:
     member_limit: Optional[int]
     #: User-facing reason when access is blocked; "" otherwise.
     message: str = ""
+    #: Non-blocking user-facing warning (past-due grace period); "" otherwise.
+    warning: str = ""
+    #: End of the past-due grace period (only for past_due states).
+    grace_ends_at: Optional[datetime] = None
 
     @property
     def is_paid(self) -> bool:
@@ -107,6 +114,42 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
     return parsed
 
 
+def _iso(value: datetime) -> str:
+    """Canonical stored form for billing timestamps: UTC, whole seconds.
+
+    One fixed format keeps stored ISO strings comparable as strings.
+    """
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _iso_from_ts(ts: Optional[int]) -> Optional[str]:
+    if ts is None:
+        return None
+    return _iso(datetime.fromtimestamp(int(ts), tz=timezone.utc))
+
+
+def past_due_grace_ends_at(billing) -> Optional[datetime]:
+    """End of the past-due grace period, or ``None`` if it can't be determined.
+
+    Records that went past_due before ``pastDueSince`` was tracked have no
+    start time; they get no grace (the pre-existing, blocking behaviour).
+    """
+    since = _parse_iso(_billing_get(billing, "pastDueSince"))
+    if since is None:
+        return None
+    return since + get_past_due_grace_period()
+
+
+def _grace_warning(grace_end: datetime, now: datetime) -> str:
+    remaining = grace_end - now
+    days = max(1, -(-remaining // timedelta(days=1)))  # ceil, at least 1
+    unit = "day" if days == 1 else "days"
+    return (
+        "Your last payment failed. Please update your payment method in the billing "
+        f"portal within {days} {unit} to keep using LexiSense."
+    )
+
+
 def _resolve_paid_plan(billing) -> PlanConfig:
     return (
         get_paid_plan(_billing_get(billing, "planId"))
@@ -120,8 +163,9 @@ def compute_entitlement(billing: Union[OrganizationBilling, dict, None], now: Op
 
     * Team tier with Stripe status ``active`` or ``trialing`` -> paid: unlimited
       uploads, AI access, the plan's member cap.
-    * Team tier ``past_due`` / other non-paid status -> blocked (not relabelled
-      as a trial).
+    * Team tier ``past_due`` -> still entitled (with a warning) for
+      ``BILLING_PAST_DUE_GRACE_DAYS`` after ``pastDueSince``, then blocked.
+    * Other non-paid Team statuses -> blocked (not relabelled as a trial).
     * Cancelled tier -> blocked.
     * Trial tier -> in-app trial: AI + capped uploads until ``trialEndDate``.
     """
@@ -135,7 +179,16 @@ def compute_entitlement(billing: Union[OrganizationBilling, dict, None], now: Op
         if billing_status in PAID_BILLING_STATUSES:
             return Entitlement(ACCESS_PAID, plan.id, True, True, plan.max_uploads, plan.max_members)
         if billing_status == BillingStatus.PAST_DUE:
-            return Entitlement(ACCESS_PAST_DUE, plan.id, False, False, 0, plan.max_members, MSG_PAST_DUE)
+            grace_end = past_due_grace_ends_at(billing)
+            if grace_end is not None and now < grace_end:
+                return Entitlement(
+                    ACCESS_PAST_DUE_GRACE, plan.id, True, True, plan.max_uploads, plan.max_members,
+                    warning=_grace_warning(grace_end, now), grace_ends_at=grace_end,
+                )
+            return Entitlement(
+                ACCESS_PAST_DUE, plan.id, False, False, 0, plan.max_members, MSG_PAST_DUE,
+                grace_ends_at=grace_end,
+            )
         if billing_status == BillingStatus.CANCELLED:
             return Entitlement(ACCESS_CANCELLED, plan.id, False, False, 0, plan.max_members, MSG_CANCELLED)
         return Entitlement(ACCESS_INACTIVE, plan.id, False, False, 0, plan.max_members, MSG_INACTIVE)
@@ -324,6 +377,10 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
         stripeSubscriptionId=billing.stripeSubscriptionId,
         planId=entitlement.plan_id,
         memberLimit=entitlement.member_limit,
+        accessState=entitlement.state,
+        pastDueSince=billing.pastDueSince if billing.billingStatus == BillingStatus.PAST_DUE else None,
+        gracePeriodEndsAt=_iso(entitlement.grace_ends_at) if entitlement.grace_ends_at else None,
+        warning=entitlement.warning or None,
     )
 
 
@@ -483,26 +540,90 @@ async def stripe_webhook(request: Request):
     # Handle the event
     event_type = event["type"]
     data = event["data"]["object"]
+    # Stripe does not guarantee delivery order; the event creation time (Unix
+    # seconds) is used to drop stale state changes and to date past_due.
+    event_at = _event_created(event)
     
     logger.info(f"Received Stripe webhook: {event_type}")
     
     if event_type == "checkout.session.completed":
-        await handle_checkout_completed(data)
+        await handle_checkout_completed(data, event_at)
     elif event_type == "customer.subscription.created":
-        await handle_subscription_created(data)
+        await handle_subscription_created(data, event_at)
     elif event_type == "customer.subscription.updated":
-        await handle_subscription_updated(data)
+        await handle_subscription_updated(data, event_at)
     elif event_type == "customer.subscription.deleted":
-        await handle_subscription_deleted(data)
+        await handle_subscription_deleted(data, event_at)
     elif event_type == "invoice.payment_failed":
-        await handle_payment_failed(data)
+        await handle_payment_failed(data, event_at)
     elif event_type == "invoice.paid":
-        await handle_invoice_paid(data)
+        await handle_invoice_paid(data, event_at)
     
     return {"received": True}
 
 
-async def handle_checkout_completed(session):
+def _event_created(event) -> Optional[int]:
+    try:
+        created = event.get("created")
+    except AttributeError:
+        created = getattr(event, "created", None)
+    try:
+        return int(created) if created is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _state_filter(org_id: str, event_at: Optional[int]) -> dict:
+    """Match the org's billing record unless a newer Stripe event already won.
+
+    ``stripeEventAt`` is the creation time of the last Stripe event whose state
+    was applied. An older event delivered late must not overwrite it (e.g. a
+    stale ``invoice.payment_failed`` arriving after ``invoice.paid``). Events
+    created in the same second are applied in arrival order.
+    """
+    query = {"organizationId": org_id}
+    if event_at is not None:
+        query["$or"] = [
+            {"stripeEventAt": {"$exists": False}},
+            {"stripeEventAt": None},
+            {"stripeEventAt": {"$lte": event_at}},
+        ]
+    return query
+
+
+def _state_set(update: dict, event_at: Optional[int]) -> dict:
+    update = dict(update)
+    update["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    if event_at is not None:
+        update["stripeEventAt"] = event_at
+    return update
+
+
+async def _apply_state(org_id: str, update: dict, event_at: Optional[int]) -> bool:
+    result = await db.organization_billing.update_one(
+        _state_filter(org_id, event_at), {"$set": _state_set(update, event_at)}
+    )
+    if result.matched_count == 0:
+        logger.info(
+            "Stripe event (created=%s) not applied for org %s: no billing record, "
+            "or a newer event was already applied",
+            event_at, org_id,
+        )
+        return False
+    return True
+
+
+def _past_due_since(current: Optional[dict], event_at: Optional[int]) -> str:
+    """Start of the current past-due episode: keep the existing start, if any."""
+    started = _iso_from_ts(event_at) or _iso(datetime.now(timezone.utc))
+    if current and current.get("billingStatus") == BillingStatus.PAST_DUE:
+        existing = _parse_iso(current.get("pastDueSince"))
+        if existing is not None:
+            return min(_iso(existing), started)
+    return started
+
+
+async def handle_checkout_completed(session, event_at: Optional[int] = None):
     """Handle successful checkout session"""
     org_id = session.get("metadata", {}).get("organizationId")
     if not org_id:
@@ -513,62 +634,58 @@ async def handle_checkout_completed(session):
     
     if subscription_id:
         subscription = stripe.Subscription.retrieve(subscription_id)
-        await update_billing_from_subscription(org_id, subscription, customer_id)
+        await update_billing_from_subscription(org_id, subscription, customer_id, event_at)
 
 
-async def handle_subscription_created(subscription):
+async def handle_subscription_created(subscription, event_at: Optional[int] = None):
     """Handle subscription creation"""
     org_id = subscription.get("metadata", {}).get("organizationId")
     if not org_id:
         return
     customer_id = subscription.get("customer")
-    await update_billing_from_subscription(org_id, subscription, customer_id)
+    await update_billing_from_subscription(org_id, subscription, customer_id, event_at)
 
 
-async def handle_subscription_updated(subscription):
-    """Handle subscription updates"""
+async def _org_for_subscription(subscription) -> Optional[str]:
     org_id = subscription.get("metadata", {}).get("organizationId")
-    if not org_id:
-        # Try to find by customer
-        customer_id = subscription.get("customer")
-        if customer_id:
-            billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
-            if billing:
-                org_id = billing["organizationId"]
+    if org_id:
+        return org_id
+    # Fall back to the customer -> org mapping.
+    customer_id = subscription.get("customer")
+    if customer_id:
+        billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
+        if billing:
+            return billing["organizationId"]
+    return None
+
+
+async def handle_subscription_updated(subscription, event_at: Optional[int] = None):
+    """Handle subscription updates"""
+    org_id = await _org_for_subscription(subscription)
     if not org_id:
         return
     customer_id = subscription.get("customer")
-    await update_billing_from_subscription(org_id, subscription, customer_id)
+    await update_billing_from_subscription(org_id, subscription, customer_id, event_at)
 
 
-async def handle_subscription_deleted(subscription):
+async def handle_subscription_deleted(subscription, event_at: Optional[int] = None):
     """Handle subscription cancellation"""
-    org_id = subscription.get("metadata", {}).get("organizationId")
-    if not org_id:
-        customer_id = subscription.get("customer")
-        if customer_id:
-            billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
-            if billing:
-                org_id = billing["organizationId"]
+    org_id = await _org_for_subscription(subscription)
     if not org_id:
         return
-    
-    await db.organization_billing.update_one(
-        {"organizationId": org_id},
-        {
-            "$set": {
-                "subscriptionTier": SubscriptionTier.CANCELLED,
-                "billingStatus": BillingStatus.CANCELLED,
-                "cancelledAt": datetime.now(timezone.utc).isoformat(),
-                "stripeSubscriptionId": None,
-                "updatedAt": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await _apply_state(org_id, {
+        "subscriptionTier": SubscriptionTier.CANCELLED,
+        "billingStatus": BillingStatus.CANCELLED,
+        "cancelledAt": now,
+        "stripeSubscriptionId": None,
+        "pastDueSince": None,
+    }, event_at)
 
 
-async def handle_payment_failed(invoice):
-    """Handle failed payment"""
+async def handle_payment_failed(invoice, event_at: Optional[int] = None):
+    """Handle failed payment: start (or continue) the past-due grace period."""
     customer_id = invoice.get("customer")
     if not customer_id:
         return
@@ -580,14 +697,14 @@ async def handle_payment_failed(invoice):
     # and must not be shown as a past-due subscriber.
     if billing.get("subscriptionTier") != SubscriptionTier.TEAM:
         return
-    
-    await db.organization_billing.update_one(
-        {"organizationId": billing["organizationId"]},
-        {"$set": {"billingStatus": BillingStatus.PAST_DUE, "updatedAt": datetime.now(timezone.utc).isoformat()}}
-    )
+
+    await _apply_state(billing["organizationId"], {
+        "billingStatus": BillingStatus.PAST_DUE,
+        "pastDueSince": _past_due_since(billing, event_at),
+    }, event_at)
 
 
-async def handle_invoice_paid(invoice):
+async def handle_invoice_paid(invoice, event_at: Optional[int] = None):
     """Handle successful invoice payment"""
     customer_id = invoice.get("customer")
     if not customer_id:
@@ -596,20 +713,19 @@ async def handle_invoice_paid(invoice):
     if not billing:
         return
     
-    # If was past_due, restore to active. The tier is set too, so records
-    # written before past_due kept the Team tier are repaired.
+    # If was past_due, restore to active and end the grace period. The tier is
+    # set too, so records written before past_due kept the Team tier are repaired.
     if billing.get("billingStatus") == BillingStatus.PAST_DUE:
-        await db.organization_billing.update_one(
-            {"organizationId": billing["organizationId"]},
-            {"$set": {
-                "billingStatus": BillingStatus.ACTIVE,
-                "subscriptionTier": SubscriptionTier.TEAM,
-                "updatedAt": datetime.now(timezone.utc).isoformat(),
-            }}
-        )
+        await _apply_state(billing["organizationId"], {
+            "billingStatus": BillingStatus.ACTIVE,
+            "subscriptionTier": SubscriptionTier.TEAM,
+            "pastDueSince": None,
+        }, event_at)
 
 
-async def update_billing_from_subscription(org_id: str, subscription, customer_id: str):
+async def update_billing_from_subscription(
+    org_id: str, subscription, customer_id: str, event_at: Optional[int] = None
+):
     """Update billing record from Stripe subscription object"""
     status_map = {
         "active": BillingStatus.ACTIVE,
@@ -623,6 +739,7 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
     
     stripe_status = subscription.get("status", "incomplete")
     billing_status = status_map.get(stripe_status, BillingStatus.INCOMPLETE)
+    current = await db.organization_billing.find_one({"organizationId": org_id})
     
     # Determine tier. A past-due / unpaid subscriber is still a Team customer
     # with a payment problem -- it is NOT a free trial. Only a subscription
@@ -657,7 +774,11 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
         "currentPeriodStart": datetime.fromtimestamp(subscription.get("current_period_start", 0), tz=timezone.utc).isoformat() if subscription.get("current_period_start") else None,
         "currentPeriodEnd": current_period_end,
         "cancelAtPeriodEnd": subscription.get("cancel_at_period_end", False),
-        "updatedAt": datetime.now(timezone.utc).isoformat()
+        # Past-due grace period: starts at the first past_due report, kept
+        # across repeated reports, cleared as soon as the subscription recovers.
+        "pastDueSince": (
+            _past_due_since(current, event_at) if billing_status == BillingStatus.PAST_DUE else None
+        ),
     }
     # Only overwrite the in-app trial end when Stripe actually reports a trial
     # (legacy subscriptions). Writing None here would erase the in-app trial
@@ -665,7 +786,7 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
     if subscription.get("trial_end"):
         update["trialEndDate"] = datetime.fromtimestamp(subscription["trial_end"], tz=timezone.utc).isoformat()
 
-    await db.organization_billing.update_one({"organizationId": org_id}, {"$set": update})
+    await _apply_state(org_id, update, event_at)
 
 
 def _subscription_price_id(subscription) -> Optional[str]:

@@ -45,6 +45,9 @@ class OrganizationBilling(BaseModel):
     trialContractsLimit: int = Field(default_factory=_trial_upload_limit)
     #: Paid plan id (see utils.plans); None while on the trial.
     planId: Optional[str] = None
+    #: When the subscription first went past_due in the current episode (UTC
+    #: ISO-8601). Starts the payment-failure grace period; cleared on recovery.
+    pastDueSince: Optional[str] = None
     createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -88,6 +91,13 @@ class SubscriptionInfo(BaseModel):
     planId: Optional[str] = None
     #: Member cap for the org's current plan; None = unlimited.
     memberLimit: Optional[int] = None
+    #: Derived access state (paid / trial / past_due_grace / past_due / ...).
+    accessState: Optional[str] = None
+    #: Past-due grace period (UTC ISO-8601); only set while past_due.
+    pastDueSince: Optional[str] = None
+    gracePeriodEndsAt: Optional[str] = None
+    #: Non-blocking warning to show the user (e.g. during the grace period).
+    warning: Optional[str] = None
 
 
 class WebhookEvent(BaseModel):
