@@ -14,9 +14,10 @@ values are never logged.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from typing import Optional
+
+from utils.env import get_env
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,10 @@ _warn_lock = threading.Lock()
 def get_intake_webhook_secret() -> Optional[str]:
     """Secret for the intake webhook, or ``None`` when neither variable is set."""
     global _warned
-    secret = os.environ.get(INTAKE_SECRET_VAR)
+    secret = get_env(INTAKE_SECRET_VAR)
     if secret:
         return secret
-    legacy = os.environ.get(LEGACY_SECRET_VAR)
+    legacy = get_env(LEGACY_SECRET_VAR)
     if legacy:
         with _warn_lock:
             if not _warned:

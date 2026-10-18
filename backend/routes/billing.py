@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException, status, Depends, Request
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import logging
-import os
 import stripe
 
 from models.billing import (
@@ -18,6 +17,7 @@ from models.billing import (
     WebhookEvent
 )
 from utils.auth import get_current_user, require_role
+from utils.env import get_env
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing", tags=["Billing"])
@@ -28,7 +28,7 @@ stripe_api_key = None
 def init_db(database):
     global db, stripe_api_key
     db = database
-    stripe_api_key = os.environ.get("STRIPE_SECRET_KEY")
+    stripe_api_key = get_env("STRIPE_SECRET_KEY")
     if stripe_api_key:
         stripe.api_key = stripe_api_key
     else:
@@ -37,7 +37,7 @@ def init_db(database):
 
 TRIAL_DAYS = 7
 TRIAL_CONTRACT_LIMIT = 3
-TEAM_PLAN_PRICE_ID = os.environ.get("STRIPE_TEAM_PRICE_ID")  # price_... from Stripe Dashboard
+TEAM_PLAN_PRICE_ID = get_env("STRIPE_TEAM_PRICE_ID")  # price_... from Stripe Dashboard
 
 
 async def get_or_create_billing(org_id: str) -> OrganizationBilling:
@@ -288,7 +288,7 @@ async def stripe_webhook(request: Request):
     
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
-    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
+    webhook_secret = get_env("STRIPE_WEBHOOK_SECRET")
     
     if not webhook_secret:
         logger.error("STRIPE_WEBHOOK_SECRET not configured")

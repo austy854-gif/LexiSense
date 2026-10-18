@@ -1,12 +1,13 @@
-import os
 import json
 import logging
 from typing import Optional, Dict, Any
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
+from utils.env import get_env
+
 logger = logging.getLogger(__name__)
 
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
+EMERGENT_LLM_KEY = get_env("EMERGENT_LLM_KEY")
 
 CONTRACT_ANALYSIS_PROMPT = """You are an expert legal contract analyzer. Analyze the following contract and return a JSON object with the following structure:
 {

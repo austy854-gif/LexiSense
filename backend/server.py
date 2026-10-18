@@ -17,6 +17,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # Configure structured logging FIRST (before other imports that may log)
+from utils.env import get_database_url, get_env  # noqa: E402
 from utils.logging_config import (
     RequestLoggingMiddleware,
     get_logger,
@@ -24,8 +25,8 @@ from utils.logging_config import (
     setup_logging,
 )
 setup_logging(
-    level=os.environ.get("LOG_LEVEL", "INFO"),
-    json_format=os.environ.get("LOG_JSON", "true").lower() == "true"
+    level=get_env("LOG_LEVEL", "INFO"),
+    json_format=get_env("LOG_JSON", "true").lower() == "true"
 )
 logger = get_logger("main")
 from utils.logging_config import install_access_log_redaction  # noqa: E402
@@ -44,13 +45,13 @@ install_access_log_redaction()
 #     can serve health checks.
 #   * serverSelectionTimeoutMS bounds how long a request waits for a primary,
 #     so a database outage fails fast instead of hanging every request.
-mongo_url = os.environ.get("DATABASE_URL") or os.environ.get("MONGO_URL")
+mongo_url = get_database_url()
 if not mongo_url:
     raise RuntimeError("DATABASE_URL (or MONGO_URL) must be set at runtime")
 
 
 def _resolve_db_name(url: str) -> str:
-    name = os.environ.get("DB_NAME")
+    name = get_env("DB_NAME")
     if name:
         return name
     try:
@@ -75,7 +76,7 @@ client = AsyncIOMotorClient(
 db = client[DB_NAME]
 
 # Initialize Sentry
-sentry_dsn = os.environ.get("SENTRY_DSN")
+sentry_dsn = get_env("SENTRY_DSN")
 if sentry_dsn and not sentry_dsn.startswith("your-"):
     import sentry_sdk
     from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -96,10 +97,10 @@ if sentry_dsn and not sentry_dsn.startswith("your-"):
         ],
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
-        environment=os.environ.get("ENVIRONMENT", "development"),
+        environment=get_env("ENVIRONMENT", "development"),
         release=os.environ.get("RELEASE_VERSION", "2.0.0"),
     )
-    logger.info("Sentry initialized", extra={"environment": os.environ.get("ENVIRONMENT", "development")})
+    logger.info("Sentry initialized", extra={"environment": get_env("ENVIRONMENT", "development")})
 else:
     logger.info("Sentry not configured (SENTRY_DSN not set)")
 
@@ -302,7 +303,7 @@ async def _probe_storage() -> dict:
 
 def _probe_config(env_var: str) -> dict:
     """Report whether an optional integration is configured."""
-    value = os.environ.get(env_var)
+    value = get_env(env_var)
     if value and not value.startswith("your-"):
         return {"status": "healthy", "details": "Configured"}
     return {"status": "degraded", "details": "Not configured"}
@@ -381,7 +382,7 @@ REDIS_PROBE_TIMEOUT_SECONDS = 1.0
 
 def _redis_url():
     """The broker URL Celery actually uses (see services/celery_app.py)."""
-    return os.environ.get("CELERY_BROKER_URL") or os.environ.get("REDIS_URL")
+    return get_env("CELERY_BROKER_URL") or get_env("REDIS_URL")
 
 
 async def _probe_redis() -> str:
@@ -476,7 +477,7 @@ register_exception_handlers(app)
 # ---------------------------------------------------------------------------
 from fastapi.responses import FileResponse  # noqa: E402
 
-FRONTEND_BUILD_DIR = Path(os.environ.get("FRONTEND_BUILD_DIR", str(ROOT_DIR / "static")))
+FRONTEND_BUILD_DIR = Path(get_env("FRONTEND_BUILD_DIR", str(ROOT_DIR / "static")))
 
 if (FRONTEND_BUILD_DIR / "index.html").is_file():
     _frontend_root = FRONTEND_BUILD_DIR.resolve()

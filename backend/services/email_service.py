@@ -1,18 +1,19 @@
-import os
 import asyncio
 import logging
 import resend
 from typing import Optional
 
+from utils.env import get_env
+
 logger = logging.getLogger(__name__)
 
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
+RESEND_API_KEY = get_env("RESEND_API_KEY")
 SENDER_EMAIL = (
-    os.environ.get("SENDER_EMAIL")
-    or os.environ.get("RESEND_FROM_EMAIL")  # legacy name
+    get_env("SENDER_EMAIL")
+    or get_env("RESEND_FROM_EMAIL")  # legacy name
     or "LexiSense <onboarding@resend.dev>"
 )
-APP_URL = os.environ.get("APP_URL", "")
+APP_URL = get_env("APP_URL", "")
 if not APP_URL:
     logger.warning("APP_URL is not set - links in outgoing emails will be relative/broken")
 

@@ -10,9 +10,11 @@ from celery.signals import task_prerun, task_postrun
 from celery.schedules import crontab
 from kombu import Queue
 
+from utils.env import get_database_url, get_env
+
 # Configuration
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL") or os.environ.get("REDIS_URL")
-CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND") or os.environ.get("REDIS_URL")
+CELERY_BROKER_URL = get_env("CELERY_BROKER_URL") or get_env("REDIS_URL")
+CELERY_RESULT_BACKEND = get_env("CELERY_RESULT_BACKEND") or get_env("REDIS_URL")
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +216,7 @@ _task_mongo_clients = {}
 
 
 def _db_name_from(url: str) -> str:
-    name = os.environ.get("DB_NAME")
+    name = get_env("DB_NAME")
     if name:
         return name
     try:
@@ -226,7 +228,7 @@ def _db_name_from(url: str) -> str:
 
 @task_prerun.connect
 def _wire_task_database(task_id=None, **_):
-    url = os.environ.get("DATABASE_URL") or os.environ.get("MONGO_URL")
+    url = get_database_url()
     if not url:
         logger.error("DATABASE_URL/MONGO_URL not set - tasks cannot reach the database")
         return

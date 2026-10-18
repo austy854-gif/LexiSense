@@ -1,4 +1,3 @@
-import os
 import uuid
 import asyncio
 import logging
@@ -6,11 +5,13 @@ from typing import Optional
 import boto3
 from botocore.exceptions import ClientError
 
+from utils.env import get_env
+
 logger = logging.getLogger(__name__)
 
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_ACCESS_KEY_ID = get_env("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = get_env("AWS_SECRET_ACCESS_KEY")
+AWS_REGION = get_env("AWS_REGION", "us-east-1")
 
 
 def get_bucket_name() -> Optional[str]:
@@ -19,7 +20,7 @@ def get_bucket_name() -> Optional[str]:
     Single source of truth for storage *and* the /health probe. Read at call
     time so both always agree.
     """
-    return os.environ.get("AWS_S3_BUCKET") or os.environ.get("S3_BUCKET_NAME") or None
+    return get_env("AWS_S3_BUCKET") or get_env("S3_BUCKET_NAME") or None
 
 
 #: Back-compat alias (value at import time). Prefer :func:`get_bucket_name`.

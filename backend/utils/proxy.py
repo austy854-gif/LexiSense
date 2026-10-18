@@ -9,16 +9,15 @@ accepting only http/https. Many load balancers/CDNs *overwrite*
 X-Forwarded-Proto instead of appending, so with a CDN + LB set
 ``FORWARDED_PROTO_HOP=1`` even though ``TRUSTED_PROXY_COUNT=2``.
 """
-import os
-
+from utils.env import get_env
 from utils.rbac import _trusted_proxy_count
 
 _ALLOWED = {"http", "https"}
 
 
 def _forwarded_proto_hop() -> int:
-    raw = os.environ.get("FORWARDED_PROTO_HOP")
-    if raw is None or raw.strip() == "":
+    raw = get_env("FORWARDED_PROTO_HOP")
+    if raw is None:
         return _trusted_proxy_count()
     try:
         value = int(raw)

@@ -320,9 +320,9 @@ def make_org_limiter(max_requests: int, window_seconds: float, prefix: str, *, f
     ``fail_closed`` only applies when Redis is configured: with no Redis URL
     the limiter is per-process by design and never fails closed.
     """
-    import os
+    from utils.env import get_env
 
-    url = os.environ.get("RATE_LIMIT_REDIS_URL") or os.environ.get("REDIS_URL")
+    url = get_env("RATE_LIMIT_REDIS_URL") or get_env("REDIS_URL")
     if url and url.startswith(("redis://", "rediss://")):
         return RedisRateLimiter(url, max_requests, window_seconds, prefix=prefix, fail_closed=fail_closed)
     return _InMemoryAsyncLimiter(max_requests, window_seconds)
