@@ -128,3 +128,14 @@ async def test_deactivated_account_is_refused(client, db, org_id, users):
 
     assert response.status_code == 403
     assert (await db.users.find_one({"id": "u-off"}))["organizationId"] == "org-other"
+
+
+async def test_existing_account_join_works_with_a_legacy_plaintext_invite(client, db, org_id, users):
+    user = make_user("org-other", user_id="u-leg", email="leg@example.com")
+    await _seed(db, org_id, users, user, token="tok-leg", legacy_plaintext=True, role="manager")
+
+    response = await client.post(ACCEPT_URL, json={"token": "tok-leg", "password": PASSWORD})
+
+    assert response.status_code == 200
+    stored = await db.users.find_one({"id": "u-leg"})
+    assert stored["organizationId"] == org_id and stored["role"] == "manager"

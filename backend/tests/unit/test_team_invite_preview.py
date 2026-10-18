@@ -114,3 +114,21 @@ async def test_reports_when_the_invitee_already_has_an_account(client, db, org_i
     await db.users.insert_one(make_user("org-other", email=inv["email"]))
     response = await client.post(PREVIEW_URL, json={"token": "tok-acct"})
     assert response.json()["accountExists"] is True
+
+
+async def test_looks_up_by_token_hash_and_never_returns_it(client, db, org_id, users):
+    inv = await _seed(db, org_id, users, token="tok-hash")
+    assert "token" not in inv and inv["tokenHash"]  # only the hash is stored
+    response = await client.post(PREVIEW_URL, json={"token": "tok-hash"})
+    assert response.status_code == 200
+    assert "tokenHash" not in response.json()
+    # The stored hash itself is not a valid token.
+    assert (await client.post(PREVIEW_URL, json={"token": inv["tokenHash"]})).status_code == 404
+
+
+async def test_legacy_plaintext_invitation_is_found_and_migrated(client, db, org_id, users):
+    inv = await _seed(db, org_id, users, token="tok-legacy", legacy_plaintext=True)
+    response = await client.post(PREVIEW_URL, json={"token": "tok-legacy"})
+    assert response.status_code == 200
+    stored = await db.invitations.find_one({"id": inv["id"]})
+    assert "token" not in stored and stored["tokenHash"]
