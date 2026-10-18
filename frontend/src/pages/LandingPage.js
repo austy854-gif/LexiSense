@@ -47,12 +47,12 @@ const FEATURES = [
   {
     icon: Search,
     title: 'Find any contract in seconds',
-    body: 'Search by title, then narrow it down by counterparty, status or tag.',
+    body: 'Search by title or counterparty, then filter by status, risk level or expiry date.',
   },
   {
     icon: CalendarClock,
     title: 'Renewals at a glance',
-    body: "The dashboard shows which contracts expire in the next 7, 30 or 90 days, so you can deal with them while there's still time.",
+    body: "See which contracts expire in the next 7, 30 or 90 days, so you can deal with them while there's still time.",
   },
   {
     icon: FileSearch,
@@ -82,7 +82,7 @@ const STEPS = [
   },
   {
     title: "Stay on top of what's next",
-    body: 'Check the dashboard for upcoming renewals, find any contract in seconds, and send contracts for approval when they need sign-off.',
+    body: "Check what's expiring soon, find any contract in seconds, and send contracts for approval when they need sign-off.",
   },
 ];
 
@@ -101,7 +101,7 @@ const FAQS = [
   },
   {
     q: 'How does LexiSense help with renewals?',
-    a: 'The dashboard shows which contracts expire in the next 7, 30 or 90 days, so upcoming renewals and end dates are always in view instead of buried in a PDF.',
+    a: "LexiSense shows which contracts expire in the next 7, 30 or 90 days, and the Dashboard keeps a count of what's expiring soon, so upcoming renewals and end dates are always in view instead of buried in a PDF.",
   },
   {
     q: 'How do approvals work?',
@@ -396,8 +396,8 @@ export default function LandingPage() {
               </p>
               <p className="text-foreground">
                 LexiSense gives you a simple system instead. Every contract goes in one place. LexiSense reads each one
-                and tells you what&rsquo;s in it. And one dashboard shows what&rsquo;s expiring soon, so renewals stop
-                sneaking up on you.
+                and tells you what&rsquo;s in it. And you can see what&rsquo;s expiring soon at a glance, so renewals
+                stop sneaking up on you.
               </p>
             </div>
           </div>
@@ -432,7 +432,7 @@ export default function LandingPage() {
         <section id="how-it-works" aria-labelledby="how-heading" className="border-y border-border bg-card">
           <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
             <h2 id="how-heading" className="text-3xl font-bold tracking-[-0.01em] sm:text-4xl">
-              Up and running in one sitting
+              Get started in 3 steps
             </h2>
             <ol className="mt-12 grid gap-6 md:grid-cols-3">
               {STEPS.map((step, i) => (
@@ -486,7 +486,7 @@ export default function LandingPage() {
               Get your contracts out of the shared drive
             </h2>
             <p className="mx-auto mt-4 max-w-xl text-lg leading-relaxed text-white/90">
-              Upload a few contracts and see what LexiSense finds. Most teams can get set up in one sitting.
+              Upload a few contracts and see what LexiSense finds.
             </p>
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link

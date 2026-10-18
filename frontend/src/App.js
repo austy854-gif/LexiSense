@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { HomeRoute } from './components/HomeRoute';
+import { RouteHead } from './components/RouteHead';
 
 import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
@@ -29,6 +30,8 @@ function App() {
       <AuthProvider>
         <BrowserRouter>
           <Toaster position="top-right" richColors closeButton />
+          {/* Canonical on '/', robots noindex everywhere else */}
+          <RouteHead />
           <Routes>
             {/* Public routes */}
             <Route path="/login" element={<LoginPage />} />
