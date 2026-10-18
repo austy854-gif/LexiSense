@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, exportAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationBar } from '../components/PaginationBar';
 import { canWriteContracts, getErrorInfo, parseTotalCount } from '../lib/apiHelpers.mjs';
+import { bulkUploadFeedback, singleUploadFeedback } from '../lib/uploadFeedback';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -103,6 +104,7 @@ const CONTRACT_TYPES = [
 
 export default function ContractsPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const canWrite = canWriteContracts(user?.role);
   const [contracts, setContracts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -175,8 +177,12 @@ export default function ContractsPage() {
     formData.append('contractType', uploadData.contractType);
 
     try {
-      await contractsAPI.upload(formData);
-      toast.success('Contract uploaded and analyzed successfully!');
+      const response = await contractsAPI.upload(formData);
+      const created = response && response.data;
+      const feedback = singleUploadFeedback(created);
+      toast[feedback.type](feedback.message, created && created.id ? {
+        action: { label: 'View contract', onClick: () => navigate(`/contracts/${created.id}`) },
+      } : undefined);
       setUploadOpen(false);
       setUploadData({ title: '', counterparty: '', contractType: 'General', file: null });
       fetchContracts();
@@ -213,13 +219,17 @@ export default function ContractsPage() {
 
     try {
       const response = await contractsAPI.bulkUpload(formData);
-      const { successful, failed } = response.data;
-      toast.success(`${successful} uploaded, ${failed} failed`);
-      setBulkUploadOpen(false);
-      setBulkFiles([]);
+      const feedback = bulkUploadFeedback(response.data);
+      toast[feedback.type](feedback.message);
+      // Keep the dialog and selection when nothing uploaded, so the user can
+      // fix the files and retry without re-selecting them.
+      if (feedback.type !== 'error') {
+        setBulkUploadOpen(false);
+        setBulkFiles([]);
+      }
       fetchContracts();
     } catch (error) {
-      toast.error('Bulk upload failed');
+      toast.error(getErrorInfo(error).message);
     } finally {
       setBulkUploading(false);
     }

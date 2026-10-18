@@ -34,6 +34,13 @@ db = None
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_MIME_TYPES = ["application/pdf", "text/plain"]
 
+# User-facing analysis outcomes. These strings are stored on the contract and
+# shown verbatim in the UI, so they must never carry exception text; the
+# technical detail goes to the server log only.
+ANALYSIS_UNAVAILABLE_MESSAGE = "The analysis didn't run this time. Re-upload the contract to try again."
+ANALYSIS_FAILED_MESSAGE = "The analysis didn't finish. Re-upload the contract to try again."
+BULK_FILE_FAILED_MESSAGE = "We couldn't add this file. Please try again."
+
 
 def _escape_regex(value: str) -> str:
     """Escape user input before embedding it in a MongoDB ``$regex``.
@@ -277,18 +284,19 @@ async def upload_contract(
             ai_analysis = await analyze_contract(extracted_text)
             if ai_analysis is None:
                 # AI provider unavailable / not configured -- surface as recoverable state
-                ai_error = "AI analysis unavailable. Please retry from the contract detail page."
+                ai_error = ANALYSIS_UNAVAILABLE_MESSAGE
             else:
                 if ai_analysis.get("error"):
-                    ai_error = ai_analysis.get("error")
+                    logger.warning("AI analysis returned an error for %r: %s", title, ai_analysis.get("error"))
+                    ai_error = ANALYSIS_FAILED_MESSAGE
                 risk_level = ai_analysis.get("riskLevel")
                 dates = ai_analysis.get("dates", {}) or {}
                 effective_date = dates.get("effectiveDate")
                 expiry_date = dates.get("expiryDate")
                 contract_value = ai_analysis.get("value")
-        except Exception as e:
-            logger.error(f"AI analysis failed: {e}")
-            ai_error = f"AI analysis failed: {str(e)[:200]}"
+        except Exception:
+            logger.exception("AI analysis failed for %r", title)
+            ai_error = ANALYSIS_FAILED_MESSAGE
 
         contract = Contract(
             organizationId=current_user["organizationId"],
@@ -449,18 +457,21 @@ async def bulk_upload_contracts(
                 try:
                     ai_analysis = await analyze_contract(extracted_text)
                     if ai_analysis is None:
-                        ai_error = "AI analysis unavailable."
+                        ai_error = ANALYSIS_UNAVAILABLE_MESSAGE
                     else:
                         if ai_analysis.get("error"):
-                            ai_error = ai_analysis.get("error")
+                            logger.warning(
+                                "AI analysis returned an error for %r: %s", file.filename, ai_analysis.get("error")
+                            )
+                            ai_error = ANALYSIS_FAILED_MESSAGE
                         risk_level = ai_analysis.get("riskLevel")
                         dates = ai_analysis.get("dates", {}) or {}
                         effective_date = dates.get("effectiveDate")
                         expiry_date = dates.get("expiryDate")
                         contract_value = ai_analysis.get("value")
-                except Exception as e:
-                    logger.error(f"AI analysis failed for {file.filename}: {e}")
-                    ai_error = f"AI analysis failed: {str(e)[:200]}"
+                except Exception:
+                    logger.exception("AI analysis failed for %r", file.filename)
+                    ai_error = ANALYSIS_FAILED_MESSAGE
 
                 contract = Contract(
                     organizationId=current_user["organizationId"],
@@ -500,11 +511,11 @@ async def bulk_upload_contracts(
                 if not file_upload_ok:
                     await release_trial_upload(current_user["organizationId"])
 
-        except Exception as e:
-            logger.error(f"Bulk upload failed for {file.filename}: {e}")
+        except Exception:
+            logger.exception("Bulk upload failed for %r", file.filename)
             results["failed"].append({
                 "filename": file.filename,
-                "error": str(e)
+                "error": BULK_FILE_FAILED_MESSAGE
             })
     
     return {

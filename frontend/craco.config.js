@@ -93,6 +93,18 @@ let webpackConfig = {
   },
 };
 
+// Jest does not read the webpack alias above, so mirror it here; without this
+// any test that renders a page using the shadcn `@/lib/utils` import fails.
+webpackConfig.jest = {
+  configure: (jestConfig) => ({
+    ...jestConfig,
+    moduleNameMapper: {
+      ...(jestConfig.moduleNameMapper || {}),
+      '^@/(.*)$': '<rootDir>/src/$1',
+    },
+  }),
+};
+
 webpackConfig.devServer = (devServerConfig) => {
   // Add health check endpoints if enabled
   if (config.enableHealthCheck && setupHealthEndpoints && healthPluginInstance) {
