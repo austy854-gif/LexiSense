@@ -86,11 +86,17 @@ def _reset_rate_limiters():
     to do with the behaviour under test. Dedicated rate-limit tests drive the
     limiter directly instead.
     """
-    rbac_module.AUTH_RATE_LIMITER.reset()
-    rbac_module.INVITE_RATE_LIMITER.reset()
+    limiters = (
+        rbac_module.AUTH_RATE_LIMITER,
+        rbac_module.INVITE_RATE_LIMITER,
+        contracts_route.CHAT_USER_LIMITER,
+        contracts_route.CHAT_ORG_LIMITER,
+    )
+    for limiter in limiters:
+        limiter.reset()
     yield
-    rbac_module.AUTH_RATE_LIMITER.reset()
-    rbac_module.INVITE_RATE_LIMITER.reset()
+    for limiter in limiters:
+        limiter.reset()
 
 
 @pytest.fixture
