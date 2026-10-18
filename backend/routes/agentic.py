@@ -21,6 +21,7 @@ from models.agentic import (
 )
 from utils.auth import get_current_user, require_role
 from utils.rbac import make_org_limiter, org_rate_limit
+from routes.billing import ensure_ai_access
 from fastapi.concurrency import run_in_threadpool
 # Importing the Celery app makes it the current app, so @shared_task .delay()
 # uses the configured Redis broker instead of Celery's amqp://localhost default.
@@ -205,6 +206,9 @@ async def trigger_agent(
 ):
     """Manually trigger an agent execution."""
     from services.agent_tasks import execute_contract_agent
+
+    # Agent runs call the LLM (services.agent_tasks), so gate them like chat.
+    await ensure_ai_access(current_user["organizationId"])
     
     agent = await db.contract_agents.find_one(
         {"id": agent_id, "organizationId": current_user["organizationId"]},
@@ -499,6 +503,10 @@ async def analyze_with_playbook(
 ):
     """Analyze a contract against a playbook."""
     from services.playbook_tasks import analyze_contract_with_playbook
+
+    # Billing/entitlement gate: expired trials and lapsed subscriptions may not
+    # run AI analysis.
+    await ensure_ai_access(current_user["organizationId"])
     
     # Verify contract and playbook belong to organization
     contract = await db.contracts.find_one(

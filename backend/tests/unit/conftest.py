@@ -49,6 +49,7 @@ from mongomock_motor import AsyncMongoMockClient  # noqa: E402
 
 from models.contract import Contract  # noqa: E402
 from models.invitation import Invitation  # noqa: E402
+from routes import billing as billing_route  # noqa: E402
 from routes import contracts as contracts_route  # noqa: E402
 from routes import team as team_route  # noqa: E402
 from services import audit_service, email_service  # noqa: E402
@@ -108,6 +109,7 @@ def app(db, monkeypatch):
     """
     contracts_route.init_db(db)
     team_route.init_db(db)
+    billing_route.init_db(db)
     audit_service.init_db(db)
 
     async def _no_send_email(*args, **kwargs):

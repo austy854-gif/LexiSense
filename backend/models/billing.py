@@ -3,6 +3,12 @@ from typing import Optional
 from datetime import datetime, timezone
 import uuid
 
+from utils.plans import get_trial_config
+
+
+def _trial_upload_limit() -> int:
+    return get_trial_config().upload_limit
+
 
 class SubscriptionTier(str):
     TRIAL = "trial"
@@ -36,7 +42,9 @@ class OrganizationBilling(BaseModel):
     cancelAtPeriodEnd: bool = False
     cancelledAt: Optional[str] = None
     trialContractsUsed: int = 0
-    trialContractsLimit: int = 3
+    trialContractsLimit: int = Field(default_factory=_trial_upload_limit)
+    #: Paid plan id (see utils.plans); None while on the trial.
+    planId: Optional[str] = None
     createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -46,7 +54,10 @@ class OrganizationBillingCreate(BaseModel):
 
 
 class CheckoutSessionRequest(BaseModel):
-    priceId: str
+    # Either may be sent; both are validated against the server-side plan
+    # config. Neither -> the default paid plan's default price.
+    priceId: Optional[str] = None
+    planId: Optional[str] = None
     successUrl: str
     cancelUrl: str
 
@@ -71,9 +82,12 @@ class SubscriptionInfo(BaseModel):
     currentPeriodEnd: Optional[str] = None
     cancelAtPeriodEnd: bool = False
     trialContractsUsed: int = 0
-    trialContractsLimit: int = 3
+    trialContractsLimit: int = Field(default_factory=_trial_upload_limit)
     stripeCustomerId: Optional[str] = None
     stripeSubscriptionId: Optional[str] = None
+    planId: Optional[str] = None
+    #: Member cap for the org's current plan; None = unlimited.
+    memberLimit: Optional[int] = None
 
 
 class WebhookEvent(BaseModel):

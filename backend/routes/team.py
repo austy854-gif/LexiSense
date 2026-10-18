@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from typing import List
+from typing import List, Optional
 from datetime import datetime, timezone
 import logging
 
@@ -22,6 +22,7 @@ from utils.rbac import (
 )
 from services.email_service import send_invitation_email
 from services.audit_service import log_action
+from routes.billing import get_entitlement
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/team", tags=["Team"])
@@ -35,6 +36,52 @@ db = None
 def init_db(database):
     global db
     db = database
+
+
+def _is_expired(iso_value) -> bool:
+    if not iso_value:
+        return False
+    try:
+        when = datetime.fromisoformat(str(iso_value).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when < datetime.now(timezone.utc)
+
+
+async def _count_active_members(org_id: str) -> int:
+    """Members holding a seat: every account in the org not explicitly deactivated."""
+    return await db.users.count_documents({"organizationId": org_id, "isActive": {"$ne": False}})
+
+
+async def _count_open_invitations(org_id: str, exclude_id: Optional[str] = None) -> int:
+    """Pending, unexpired invitations -- each reserves a seat."""
+    pending = await db.invitations.find(
+        {"organizationId": org_id, "status": "pending"},
+        {"_id": 0, "id": 1, "expiresAt": 1},
+    ).to_list(10_000)
+    return sum(
+        1 for inv in pending
+        if inv.get("id") != exclude_id and not _is_expired(inv.get("expiresAt"))
+    )
+
+
+def _seat_limit_detail(limit: int) -> str:
+    return (
+        f"Your plan allows up to {limit} team members (pending invitations count "
+        "toward the limit). Remove a member or cancel an invitation to invite someone new."
+    )
+
+
+async def _enforce_seat_limit_for_invite(org_id: str) -> None:
+    """Reject a new invitation when members + open invitations reach the plan cap."""
+    limit = (await get_entitlement(org_id)).member_limit
+    if limit is None:
+        return
+    used = await _count_active_members(org_id) + await _count_open_invitations(org_id)
+    if used >= limit:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_seat_limit_detail(limit))
 
 
 @router.get("/members", response_model=List[UserResponse])
@@ -92,6 +139,9 @@ async def invite_member(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invitation already sent to this email"
         )
+
+    # Plan member cap (members + open invitations), from the plan config.
+    await _enforce_seat_limit_for_invite(current_user["organizationId"])
 
     invitation = Invitation(
         organizationId=current_user["organizationId"],
@@ -218,6 +268,16 @@ async def accept_invitation(payload: AcceptInvitationRequest):
             {"$set": {"status": "accepted"}}
         )
         return {"message": "Account created successfully", "email": invitation["email"]}
+
+    # Re-check the member cap at acceptance (defence in depth: the cap may have
+    # been lowered, or members added, since the invitation was issued). Only
+    # existing accounts count here -- this invitation already held its seat.
+    limit = (await get_entitlement(invitation["organizationId"])).member_limit
+    if limit is not None and await _count_active_members(invitation["organizationId"]) >= limit:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This team has reached its member limit. Ask an admin to free a seat, then try again.",
+        )
 
     # Atomically claim the invitation (single-use guarantee).
     claim = await db.invitations.update_one(

@@ -7,7 +7,7 @@ import uuid
 
 from models.contract import Contract, ContractCreate, ContractResponse, ContractUpdate, ChatMessage, ChatResponse
 from models.contract_version import ContractVersion, ContractVersionResponse
-from utils.auth import get_current_user
+from utils.auth import get_current_user, require_role
 from utils.pagination import normalize_date_bound, resolve_pagination
 from utils.rbac import ROLE_ADMIN, ROLE_MANAGER, WRITE_ROLES
 from services.ai_service import analyze_contract, get_chat_response
@@ -23,12 +23,17 @@ from services.workflow_service import (
     validate_transition,
 )
 from routes.billing import (
+    ensure_ai_access,
     reserve_trial_upload_atomic,
     release_trial_upload,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contracts", tags=["Contracts"])
+
+#: Uploading creates contracts (and spends trial quota / AI credits), so it is
+#: limited to the shared write roles -- viewers are read-only.
+_require_writer = require_role(*WRITE_ROLES)
 
 db = None
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -223,7 +228,7 @@ async def upload_contract(
     title: str = Form(...),
     counterparty: Optional[str] = Form(None),
     contractType: str = Form("General"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(_require_writer)
 ):
     """Upload and analyze a new contract."""
     if file.content_type not in ALLOWED_MIME_TYPES:
@@ -375,7 +380,7 @@ async def upload_contract(
 async def bulk_upload_contracts(
     files: List[UploadFile] = File(...),
     contractType: str = Form("General"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(_require_writer)
 ):
     """Bulk upload multiple contracts at once."""
     if len(files) > 10:
@@ -522,6 +527,9 @@ async def chat_with_contract(
     current_user: dict = Depends(get_current_user)
 ):
     """Ask a question about a contract."""
+    # Chat spends AI credits: only an active trial or a paid subscription may use it.
+    await ensure_ai_access(current_user["organizationId"])
+
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
         {"_id": 0}
