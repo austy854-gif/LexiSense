@@ -197,7 +197,7 @@ async def send_email(
         )
         return {
             "status": "success",
-            "message": f"Email sent to {to_email}",
+            "message": f"Email sent to ***@{domain}",
             "email_id": email.get("id")
         }
         
