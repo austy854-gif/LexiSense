@@ -71,7 +71,9 @@ export function getErrorInfo(error) {
     message =
       asMessage(envelope && envelope.message) ||
       asMessage(data && data.detail) ||
-      asPlainTextMessage(data) ||
+      // Bare-string bodies on 5xx come from the server or a proxy
+      // ("Internal Server Error", gateway pages), never from our handlers.
+      (status < 500 ? asPlainTextMessage(data) : null) ||
       GENERIC_ERROR_MESSAGE;
   }
   const requestId = (data && typeof data.requestId === 'string' && data.requestId) || null;

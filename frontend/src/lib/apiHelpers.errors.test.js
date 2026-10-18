@@ -51,6 +51,10 @@ describe('getErrorInfo never leaks technical text', () => {
     );
   });
 
+  test('a plain-text 5xx body is not shown', () => {
+    expect(getErrorInfo({ response: { status: 500, data: 'Internal Server Error' } }).message).toBe(GENERIC_ERROR_MESSAGE);
+  });
+
   test('a short plain-text body is still shown', () => {
     expect(getErrorInfo({ response: { status: 400, data: 'Title is required' } }).message).toBe('Title is required');
   });

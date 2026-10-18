@@ -42,6 +42,22 @@ ANALYSIS_FAILED_MESSAGE = "The analysis didn't finish. Re-upload the contract to
 BULK_FILE_FAILED_MESSAGE = "We couldn't add this file. Please try again."
 
 
+def _public_analysis_error(stored: Optional[str]) -> Optional[str]:
+    """Return the analysis error safe to show users.
+
+    Contracts saved before the friendly copy existed may hold raw exception
+    text ("AI analysis failed: <exception>") or provider strings; replace
+    anything that is not one of our own messages.
+    """
+    if not stored:
+        return stored
+    if stored in (ANALYSIS_UNAVAILABLE_MESSAGE, ANALYSIS_FAILED_MESSAGE):
+        return stored
+    if stored.startswith("AI analysis unavailable"):
+        return ANALYSIS_UNAVAILABLE_MESSAGE
+    return ANALYSIS_FAILED_MESSAGE
+
+
 def _escape_regex(value: str) -> str:
     """Escape user input before embedding it in a MongoDB ``$regex``.
 
@@ -169,7 +185,7 @@ async def list_contracts(
             riskLevel=c.get("riskLevel"),
             aiAnalysis=c.get("aiAnalysis"),
             aiAnalysisStatus=c.get("aiAnalysisStatus"),
-            aiAnalysisError=c.get("aiAnalysisError"),
+            aiAnalysisError=_public_analysis_error(c.get("aiAnalysisError")),
             fileName=c.get("fileName"),
             fileSize=c.get("fileSize"),
             tags=c.get("tags", []),
@@ -214,7 +230,7 @@ async def get_contract(
         riskLevel=contract.get("riskLevel"),
         aiAnalysis=contract.get("aiAnalysis"),
         aiAnalysisStatus=contract.get("aiAnalysisStatus"),
-        aiAnalysisError=contract.get("aiAnalysisError"),
+        aiAnalysisError=_public_analysis_error(contract.get("aiAnalysisError")),
         fileName=contract.get("fileName"),
         fileSize=contract.get("fileSize"),
         tags=contract.get("tags", []),

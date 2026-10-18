@@ -148,6 +148,40 @@ class TestBulkUpload:
         assert any(rec.exc_info for rec in caplog.records)
 
 
+class TestLegacyStoredErrors:
+    @pytest.mark.parametrize(
+        "stored,expected",
+        [
+            (f"AI analysis failed: {SECRET}", "ANALYSIS_FAILED_MESSAGE"),
+            ("AI analysis unavailable. Please retry from the contract detail page.", "ANALYSIS_UNAVAILABLE_MESSAGE"),
+            ("AI analysis unavailable.", "ANALYSIS_UNAVAILABLE_MESSAGE"),
+            ("Could not parse structured analysis", "ANALYSIS_FAILED_MESSAGE"),
+        ],
+    )
+    def test_legacy_values_are_replaced(self, stored, expected):
+        assert contracts_route._public_analysis_error(stored) == getattr(contracts_route, expected)
+
+    def test_none_passes_through(self):
+        assert contracts_route._public_analysis_error(None) is None
+
+    async def test_get_contract_hides_legacy_raw_error(self, client, db, org_id, uploader):
+        from tests.unit.conftest import make_contract
+
+        doc = make_contract(org_id, uploader["id"])
+        doc["aiAnalysisStatus"] = "failed"
+        doc["aiAnalysisError"] = f"AI analysis failed: {SECRET}"
+        await db.contracts.insert_one(doc)
+        await db.users.insert_one(dict(uploader))
+        r = await client.get(f"{API_PREFIX}/contracts/{doc['id']}", headers=auth_headers(uploader))
+        assert r.status_code == 200, r.text
+        assert SECRET not in r.text
+        assert r.json()["aiAnalysisError"] == contracts_route.ANALYSIS_FAILED_MESSAGE
+
+        listed = await client.get(f"{API_PREFIX}/contracts", headers=auth_headers(uploader))
+        assert listed.status_code == 200, listed.text
+        assert SECRET not in listed.text
+
+
 class TestTrialCopy:
     @pytest.fixture
     def billing_db(self, db):
