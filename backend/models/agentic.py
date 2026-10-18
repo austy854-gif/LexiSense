@@ -37,6 +37,15 @@ class AgentStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class AgentRunStatus(str, Enum):
+    """Status of a single agent run (distinct from the agent's lifecycle status)."""
+    QUEUED = "queued"
+    COMPLETED = "completed"
+    ERROR = "error"
+    #: Not executed (e.g. the org has no AI entitlement); see ``skip_reason``.
+    SKIPPED = "skipped"
+
+
 class RiskCategory(str, Enum):
     """Risk categories for scoring."""
     FINANCIAL = "financial"
@@ -138,7 +147,7 @@ class AgentExecutionLog(BaseModel):
     actions_taken: List[Dict[str, Any]] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
     duration_ms: int = 0
-    status: AgentStatus = AgentStatus.COMPLETED
+    status: AgentRunStatus = AgentRunStatus.COMPLETED
 
 
 class ContractAgent(BaseModel):
@@ -814,7 +823,7 @@ class TriggerAgentRunRequest(BaseModel):
 class AgentRunResponse(BaseModel):
     agentId: str
     executionId: str
-    status: AgentStatus
+    status: AgentRunStatus
     contracts_checked: int
     alerts_generated: int
     started_at: str

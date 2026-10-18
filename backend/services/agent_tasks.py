@@ -138,7 +138,7 @@ async def _execute_contract_agent_async(agent_id: str):
     """Async implementation of agent execution."""
     from services.ai_service import analyze_contract, get_chat_response
     from services.audit_service import log_action, send_notification
-    from models.agentic import AgentStatus, AgentExecutionLog
+    from models.agentic import AgentRunStatus, AgentExecutionLog
 
     db = get_db()
     if db is None:
@@ -225,7 +225,7 @@ async def _execute_contract_agent_async(agent_id: str):
             actions_taken=actions_taken,
             errors=errors,
             duration_ms=duration_ms,
-            status=AgentStatus.COMPLETED if not errors else AgentStatus.ERROR
+            status=AgentRunStatus.COMPLETED if not errors else AgentRunStatus.ERROR
         )
 
         await db.contract_agents.update_one(
@@ -282,7 +282,7 @@ async def _execute_contract_agent_async(agent_id: str):
                         actions_taken=[],
                         errors=[str(e)],
                         duration_ms=int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000),
-                        status=AgentStatus.ERROR
+                        status=AgentRunStatus.ERROR
                     ).model_dump()
                 }
             }

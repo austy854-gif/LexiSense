@@ -19,7 +19,7 @@ from .billing import (
 )
 from .agentic import (
     # Agents
-    AgentType, AgentStatus, AgentConfig, AgentExecutionLog,
+    AgentType, AgentStatus, AgentRunStatus, AgentConfig, AgentExecutionLog,
     ContractAgent, ContractAgentCreate, ContractAgentUpdate, ContractAgentResponse,
     # Risk Scoring
     RiskCategory, RiskFactor, RiskScoreBreakdown, RiskAssessment, RiskAssessmentResponse,

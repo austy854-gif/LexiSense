@@ -359,9 +359,7 @@ async def agentic_client(db):
     api = APIRouter(prefix=API_PREFIX)
     api.include_router(agentic_route.build_router({"redline", "agents"}))
     app.include_router(api)
-    # raise_app_exceptions=False: see test_agent_trigger_gated (pre-existing
-    # response-model bug on main makes a successful trigger return 500).
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
 
@@ -389,14 +387,36 @@ async def test_agent_trigger_gated(agentic_client, agentic_seed, queued, db, org
     await db.organization_billing.insert_one(billing_doc(org_id, **state))
     resp = await agentic_client.post(f"{API_PREFIX}/agentic/agents/ag-1/trigger", headers=auth_headers(users["admin"]))
     if allowed:
-        # Gate passed and the run was queued. (The handler then fails building
-        # AgentRunResponse(status="queued") -- a pre-existing bug on main,
-        # unrelated to billing, so only "not 403" is asserted here.)
-        assert resp.status_code != 403
+        assert resp.status_code == 200, resp.text
         assert len(queued) == 1
     else:
         assert resp.status_code == 403
         assert queued == []
+
+
+async def test_agent_trigger_success_returns_queued(agentic_client, agentic_seed, queued, db, org_id, users):
+    """Regression: the response used status='queued', which AgentStatus rejected (500)."""
+    await db.organization_billing.insert_one(billing_doc(org_id, **PAID))
+    resp = await agentic_client.post(f"{API_PREFIX}/agentic/agents/ag-1/trigger", headers=auth_headers(users["admin"]))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "queued" and body["agentId"] == "ag-1" and body["executionId"] == "task-1"
+    assert (body["contracts_checked"], body["alerts_generated"]) == (0, 0)
+    assert datetime.fromisoformat(body["started_at"]).tzinfo is not None
+
+
+async def test_agent_trigger_other_orgs_agent_is_404(agentic_client, agentic_seed, queued, db, other_org_id):
+    await db.organization_billing.insert_one(billing_doc(other_org_id, **PAID))
+    outsider = make_user(other_org_id, role="admin", user_id="outsider")
+    resp = await agentic_client.post(f"{API_PREFIX}/agentic/agents/ag-1/trigger", headers=auth_headers(outsider))
+    assert resp.status_code == 404
+    assert queued == []
+
+
+def test_agent_execution_log_accepts_run_statuses():
+    from models.agentic import AgentExecutionLog, AgentStatus
+    assert AgentExecutionLog(status="skipped").status == "skipped"
+    assert AgentExecutionLog(status=AgentStatus.ERROR).status == "error"  # legacy values still valid
 
 
 # --------------------------------------------------------------------------

@@ -16,7 +16,7 @@ from models.agentic import (
     RedlineSession, RedlineSuggestion, AnalyzeContractWithPlaybookRequest, ApplyRedlinesRequest,
     ContractIntake, ContractIntakeResponse, ProcessIntakeRequest,
     ExtractedObligation, ObligationAlert, ExtractObligationsRequest, UpdateObligationStatusRequest,
-    AgentRunResponse, TriggerAgentRunRequest,
+    AgentRunResponse, AgentRunStatus, TriggerAgentRunRequest,
     COLLECTIONS, RECOMMENDED_INDEXES,
 )
 from utils.auth import get_current_user, require_role
@@ -223,7 +223,7 @@ async def trigger_agent(
     return AgentRunResponse(
         agentId=agent_id,
         executionId=task.id,
-        status="queued",
+        status=AgentRunStatus.QUEUED,
         contracts_checked=0,
         alerts_generated=0,
         started_at=datetime.now(timezone.utc).isoformat()
