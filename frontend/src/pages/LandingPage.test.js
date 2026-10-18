@@ -99,6 +99,11 @@ test('risk is described per contract, never per clause', () => {
   expect(container.textContent).toMatch(/flags higher-risk contracts/);
 });
 
+test('page copy uses straight apostrophes throughout', () => {
+  render(home());
+  expect(container.textContent).not.toMatch(/[\u2018\u2019]/);
+});
+
 test('landing copy never claims OCR or scanned-document support', () => {
   render(home());
   const text = container.textContent;

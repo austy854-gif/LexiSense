@@ -358,7 +358,7 @@ export default function LandingPage() {
                 See every renewal coming. Stop digging for contracts.
               </h1>
               <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted-foreground">
-                LexiSense keeps your contracts in one place, reads them for you, and shows what&rsquo;s expiring in the
+                LexiSense keeps your contracts in one place, reads them for you, and shows what's expiring in the
                 next 7, 30 or 90 days. Built for small agencies and service firms without a legal department.
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -382,21 +382,21 @@ export default function LandingPage() {
         <section id="benefits" aria-labelledby="benefits-heading" className="border-y border-border bg-card">
           <div className="mx-auto grid max-w-6xl gap-10 px-4 py-20 sm:px-6 lg:grid-cols-[1fr_1.3fr] lg:gap-16">
             <h2 id="benefits-heading" className="text-3xl font-bold tracking-[-0.01em] sm:text-4xl">
-              Contracts shouldn&rsquo;t live in one person&rsquo;s head
+              Contracts shouldn't live in one person's head
             </h2>
             <div className="space-y-5 text-lg leading-relaxed text-muted-foreground">
               <p>
                 Most small firms keep contracts the same way: some in inboxes, some in a shared drive, and a few PDFs saved to
-                someone&rsquo;s desktop. It works until a vendor agreement rolls over for another year, or
+                someone's desktop. It works until a vendor agreement rolls over for another year, or
                 someone spends half an hour hunting for the signed version of a client contract.
               </p>
               <p>
-                Nobody&rsquo;s being careless. You just don&rsquo;t have a contracts manager, and everyone&rsquo;s
+                Nobody's being careless. You just don't have a contracts manager, and everyone's
                 already doing five jobs.
               </p>
               <p className="text-foreground">
                 LexiSense gives you a simple system instead. Every contract goes in one place. LexiSense reads each one
-                and tells you what&rsquo;s in it. And you can see what&rsquo;s expiring soon at a glance, so renewals
+                and tells you what's in it. And you can see what's expiring soon at a glance, so renewals
                 stop sneaking up on you.
               </p>
             </div>
