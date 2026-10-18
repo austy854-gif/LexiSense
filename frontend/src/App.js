@@ -3,7 +3,9 @@ import { Toaster } from 'sonner';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { HomeRoute } from './components/HomeRoute';
 
+import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
@@ -34,15 +36,14 @@ function App() {
             {/* Approval email links (token is the credential; no login needed) */}
             <Route path="/approvals/respond" element={<ApprovalRespondPage />} />
 
-            {/* Protected routes */}
+            {/* Home: marketing landing page for logged-out visitors,
+                the dashboard for signed-in users (same URL as before). */}
             <Route
               path="/"
-              element={
-                <ProtectedRoute>
-                  <DashboardPage />
-                </ProtectedRoute>
-              }
+              element={<HomeRoute landing={<LandingPage />} dashboard={<DashboardPage />} />}
             />
+
+            {/* Protected routes */}
             <Route
               path="/contracts"
               element={
