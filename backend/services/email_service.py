@@ -27,7 +27,15 @@ if RESEND_API_KEY:
 
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "email_templates"
-_TEMPLATE_NOTES = re.compile(r"<!-- TEMPLATE-NOTES.*?-->\n?", re.DOTALL)
+#: Brand account-email template (lexisense-brand/email-templates), copied verbatim.
+INVITE_HTML_TEMPLATE = "lexisense-account-invite.html"
+INVITE_TEXT_TEMPLATE = "lexisense-account-invite.txt"
+
+#: Developer comments in the brand templates (provenance, SLOT markers, the
+#: placeholder legend). Stripped before sending. Outlook conditional comments
+#: (``<!--[if ...]>``, ``<!--<![endif]-->``, and the ``<!-->`` that closes a
+#: downlevel-revealed ``<!--[if !mso]><!-->``) are kept.
+_DEV_COMMENT = re.compile(r"<!--(?!\[if|<!\[endif\]|>).*?-->[ \t]*\n?", re.DOTALL)
 _PLACEHOLDER = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
 
 #: Sentence-case role labels for emails (not ``role.upper()``).
@@ -39,9 +47,8 @@ ROLE_LABELS = {
 }
 
 
-def _load_template(name: str) -> str:
-    """Read a template, dropping its developer-only provenance comment."""
-    return _TEMPLATE_NOTES.sub("", (_TEMPLATE_DIR / name).read_text(encoding="utf-8"))
+def _read_template(name: str) -> str:
+    return (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
 
 
 def _fill(template: str, values: dict, *, escape: bool) -> str:
@@ -55,6 +62,21 @@ def _fill(template: str, values: dict, *, escape: bool) -> str:
         return html_lib.escape(value, quote=True) if escape else value
 
     return _PLACEHOLDER.sub(_sub, template)
+
+
+def _split_text_template(text: str) -> tuple[str, str, str]:
+    """Split a brand ``.txt`` template into ``(subject, preview, body)``.
+
+    The files start with ``Subject:`` and ``Preview:`` header lines, then a
+    blank line, then the plain-text body.
+    """
+    header, _, body = text.partition("\n\n")
+    fields = {}
+    for line in header.splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            fields[key.strip().lower()] = value.strip()
+    return fields["subject"], fields.get("preview", ""), body
 
 
 def _one_line(value) -> str:
@@ -74,9 +96,10 @@ def build_accept_url(token: str, app_url: Optional[str] = None) -> str:
 def render_invitation_email(data: dict) -> tuple[str, str, str]:
     """Render the team-invite email: ``(subject, html, text)``.
 
-    Copy: lexisense-copy/transactional-emails.md section 1 (team invite).
-    Layout: services/email_templates/account_invite.html, an account-email
-    variant of the brand transactional template without unsubscribe rows.
+    Copy (Quinn, lexisense-copy/transactional-emails.md) and layout (Jackson,
+    lexisense-account-invite.html/.txt) come from the brand templates, which
+    are copied verbatim into ``services/email_templates``. Subject and preview
+    are the ``Subject:``/``Preview:`` lines of the ``.txt`` file.
     """
     inviter_name = _one_line(data.get("inviter_name")) or "A teammate"
     organization_name = _one_line(data.get("organization_name")) or "your team"
@@ -88,13 +111,11 @@ def render_invitation_email(data: dict) -> tuple[str, str, str]:
         "invitee_email": data.get("invitee_email") or "you",
         "accept_url": build_accept_url(data.get("token", "")),
     }
-    subject = f"{inviter_name} invited you to LexiSense"
-    values["subject"] = subject
-    values["preview"] = (
-        f"Join {organization_name} and see your team's contracts in one place."
-    )
-    html = _fill(_load_template("account_invite.html"), values, escape=True)
-    text = _fill(_load_template("account_invite.txt"), values, escape=False)
+    subject_tpl, _preview_tpl, text_tpl = _split_text_template(_read_template(INVITE_TEXT_TEMPLATE))
+    subject = _one_line(_fill(subject_tpl, values, escape=False))
+    html_tpl = _DEV_COMMENT.sub("", _read_template(INVITE_HTML_TEMPLATE))
+    html = _fill(html_tpl, values, escape=True)
+    text = _fill(text_tpl, values, escape=False)
     return subject, html, text
 
 

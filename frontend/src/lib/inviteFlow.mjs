@@ -6,10 +6,12 @@
  *
  * Backend contract (backend/routes/team.py):
  *   POST /team/accept-invite/preview {token}
- *     200 {email, organizationName, inviterName, role, expiresAt}
+ *     200 {email, accountExists, organizationName, inviterName, role, expiresAt}
  *     404 unknown/cancelled  400 expired  409 already accepted  429 rate limited
  *   POST /team/accept-invite {token, password, firstName?, lastName?}
- *     200 {message, email}  404 invalid/used  400 expired  422 bad body
+ *     200 {message, email, existingAccount?, alreadyMember?}
+ *     404 invalid/used  400 expired  403 wrong password for an existing
+ *     account  409 sole admin of another team  422 bad body
  */
 import { getErrorInfo, normalizeRole } from './apiHelpers.mjs';
 
@@ -35,6 +37,9 @@ export const INVITE_COPY = {
   successToast: "You're in. Welcome to LexiSense.",
   successSignInToast: 'Your account is ready. Sign in to continue.',
   acceptFailed: "We couldn't create your account. Please try again.",
+  existingAccountIntro: 'You already have a LexiSense account with this email. Enter your password to join the team.',
+  joinedToast: "You're in. Welcome to the team.",
+  alreadyMemberToast: "You're already a member of this team.",
 };
 
 const ROLE_LABELS = { admin: 'Admin', manager: 'Manager', user: 'User', viewer: 'Viewer' };
@@ -52,7 +57,10 @@ export function readInviteToken(search) {
 
 /**
  * Map an axios error from either invite endpoint to a page state.
- * @returns {'invalid'|'expired'|'used'|'rate_limited'|'validation'|'error'}
+ * Note: 409 from the *preview* means "already used"; on *accept* the page
+ * shows the server message instead (sole-admin refusal). 403 only comes
+ * from accept (wrong password / switched-off account).
+ * @returns {'invalid'|'expired'|'used'|'forbidden'|'rate_limited'|'validation'|'error'}
  */
 export function classifyInviteError(error) {
   const { status } = getErrorInfo(error);
@@ -63,6 +71,8 @@ export function classifyInviteError(error) {
       return 'expired';
     case 409:
       return 'used';
+    case 403:
+      return 'forbidden';
     case 429:
       return 'rate_limited';
     case 422:
@@ -86,18 +96,22 @@ function sameEmail(a, b) {
  * @param {object|null} s.preview   preview response body
  * @param {string|null} s.errorKind result of classifyInviteError
  * @returns {'missing'|'loading'|'invalid'|'expired'|'used'|'rate_limited'|'error'
- *           |'signed_in_same'|'signed_in_other'|'form'}
+ *           |'signed_in_other'|'form'}
  */
 export function inviteViewState({ token, authLoading, user, preview, errorKind }) {
   if (!token) return 'missing';
-  if (errorKind && errorKind !== 'validation') return errorKind;
+  if (errorKind && errorKind !== 'validation' && errorKind !== 'forbidden') return errorKind;
   if (authLoading || !preview) return 'loading';
-  if (user) return sameEmail(user.email, preview.email) ? 'signed_in_same' : 'signed_in_other';
+  // Signed in as the invitee (e.g. their account is in another team): show
+  // the form; they confirm with their password and the server joins them.
+  if (user && !sameEmail(user.email, preview.email)) return 'signed_in_other';
   return 'form';
 }
 
 /** Client-side password checks; returns a message or null when valid. */
-export function validateInvitePassword(password, confirmPassword) {
+export function validateInvitePassword(password, confirmPassword, { existingAccount = false } = {}) {
+  // Existing accounts confirm with the password they already have.
+  if (existingAccount) return password ? null : 'Enter your LexiSense password.';
   if ((password || '').length < MIN_PASSWORD_LENGTH) return INVITE_COPY.passwordTooShort;
   if (password !== confirmPassword) return INVITE_COPY.passwordsDontMatch;
   return null;

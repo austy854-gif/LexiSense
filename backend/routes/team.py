@@ -12,7 +12,7 @@ from models.invitation import (
     InvitationResponse,
     MemberRoleUpdate,
 )
-from utils.auth import get_current_user, hash_password, require_role
+from utils.auth import get_current_user, hash_password, require_role, verify_password
 from utils.rbac import (
     ADMIN_ROLES,
     DEFAULT_MEMBER_ROLE,
@@ -188,6 +188,118 @@ def _invitation_is_expired(invitation: dict) -> bool:
     return expires_at < datetime.now(timezone.utc)
 
 
+def _invite_role(invitation: dict) -> str:
+    # The invitation role was validated when it was issued; normalise anyway so
+    # a legacy record with an unknown role cannot grant elevated access.
+    return invitation["role"] if is_valid_role(invitation.get("role")) else DEFAULT_MEMBER_ROLE
+
+
+async def _claim_invitation(invitation: dict) -> None:
+    """Atomically move ``pending -> accepted`` (single-use guarantee)."""
+    claim = await db.invitations.update_one(
+        {"id": invitation["id"], "status": "pending"},
+        {"$set": {
+            "status": "accepted",
+            "acceptedAt": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    if claim.modified_count == 0:
+        # Lost the race to a concurrent acceptance of the same token.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invalid or expired invitation"
+        )
+
+
+async def _release_invitation(invitation: dict) -> None:
+    await db.invitations.update_one(
+        {"id": invitation["id"], "status": "accepted"},
+        {"$set": {"status": "pending"}, "$unset": {"acceptedAt": ""}},
+    )
+
+
+async def _join_existing_account(invitation: dict, user: dict, password: str) -> dict:
+    """Accept an invite for an address that already has a LexiSense account.
+
+    * Already in the inviting team: idempotent. The invite is consumed and
+      nothing about the account changes (no role change, no password change).
+    * In another team: the caller must prove they own the account with its
+      current password (the endpoint is unauthenticated and the token alone
+      must not be enough to move someone's account). The account then moves to
+      the inviting team with the invite's role. Accounts belong to exactly one
+      organization (``users.organizationId``), so this leaves the old team.
+      Refused when it would leave the old team with members but no admin.
+    """
+    org_id = invitation["organizationId"]
+
+    if user.get("organizationId") == org_id:
+        await _claim_invitation(invitation)
+        return {
+            "message": "You're already a member of this team",
+            "email": user["email"],
+            "existingAccount": True,
+            "alreadyMember": True,
+        }
+
+    if not user.get("isActive", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is switched off. Ask your LexiSense admin to turn it back on.",
+        )
+    # 403, not 401: the frontend treats every 401 as an expired session.
+    if not verify_password(password, user.get("passwordHash", "")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="That password doesn't match your LexiSense account. Use the password you sign in with.",
+        )
+
+    old_org_id = user.get("organizationId")
+    if old_org_id and user.get("role") == "admin":
+        other_members = await db.users.count_documents(
+            {"organizationId": old_org_id, "id": {"$ne": user["id"]}, "isActive": {"$ne": False}}
+        )
+        other_admins = await db.users.count_documents(
+            {"organizationId": old_org_id, "id": {"$ne": user["id"]}, "role": "admin", "isActive": {"$ne": False}}
+        )
+        if other_members and not other_admins:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You're the only admin of your current team. Make someone else an admin there, then accept this invite.",
+            )
+
+    role = _invite_role(invitation)
+    await _claim_invitation(invitation)
+    try:
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {
+                "organizationId": org_id,
+                "role": role,
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    except Exception:
+        await _release_invitation(invitation)
+        raise
+
+    await log_action(
+        organization_id=org_id,
+        user_id=user["id"],
+        user_email=user["email"],
+        action="team_invite_accepted",
+        resource_type="team",
+        resource_id=invitation["id"],
+        resource_title=user["email"],
+        details={"role": role, "existingAccount": True, "previousOrganizationId": old_org_id},
+    )
+    return {
+        "message": "Joined team",
+        "email": user["email"],
+        "existingAccount": True,
+        "alreadyMember": False,
+    }
+
+
 @router.post(
     "/accept-invite/preview",
     dependencies=[Depends(rate_limit(INVITE_RATE_LIMITER, "team:accept-invite-preview"))],
@@ -229,10 +341,14 @@ async def preview_invitation(payload: InvitationPreviewRequest):
         {"_id": 0, "firstName": 1, "lastName": 1},
     ) or {}
     inviter_name = f"{inviter.get('firstName') or ''} {inviter.get('lastName') or ''}".strip() or None
-    role = invitation["role"] if is_valid_role(invitation.get("role")) else DEFAULT_MEMBER_ROLE
+    role = _invite_role(invitation)
+    # Lets the page ask for the existing password instead of a new one. The
+    # token holder already knows the address, so this reveals nothing new.
+    account_exists = await db.users.find_one({"email": invitation["email"]}, {"_id": 0, "id": 1}) is not None
 
     return {
         "email": invitation["email"],
+        "accountExists": account_exists,
         "organizationName": (org or {}).get("name"),
         "inviterName": inviter_name,
         "role": role,
@@ -269,35 +385,16 @@ async def accept_invitation(payload: AcceptInvitationRequest):
             detail="Invitation has expired"
         )
 
-    # Another invite for the same address may have been accepted first.
-    # Return the generic message so the endpoint cannot be used to enumerate
-    # which addresses already have accounts.
+    # The address may already have an account (signed up on their own after
+    # the invite went out, or joined via another invite). Join that account
+    # to the team instead of silently consuming the invite.
     existing_user = await db.users.find_one({"email": invitation["email"]})
     if existing_user:
-        await db.invitations.update_one(
-            {"id": invitation["id"], "status": "pending"},
-            {"$set": {"status": "accepted"}}
-        )
-        return {"message": "Account created successfully", "email": invitation["email"]}
+        return await _join_existing_account(invitation, existing_user, payload.password)
 
     # Atomically claim the invitation (single-use guarantee).
-    claim = await db.invitations.update_one(
-        {"id": invitation["id"], "status": "pending"},
-        {"$set": {
-            "status": "accepted",
-            "acceptedAt": datetime.now(timezone.utc).isoformat(),
-        }},
-    )
-    if claim.modified_count == 0:
-        # Lost the race to a concurrent acceptance of the same token.
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Invalid or expired invitation"
-        )
-
-    # The invitation role was validated when it was issued; normalise anyway so
-    # a legacy record with an unknown role cannot grant elevated access.
-    role = invitation["role"] if is_valid_role(invitation.get("role")) else DEFAULT_MEMBER_ROLE
+    await _claim_invitation(invitation)
+    role = _invite_role(invitation)
 
     user = User(
         email=invitation["email"],

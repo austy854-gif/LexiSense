@@ -26,6 +26,7 @@ test('classifyInviteError maps backend status codes', () => {
   assert.equal(classifyInviteError(err(404)), 'invalid');
   assert.equal(classifyInviteError(err(400)), 'expired');
   assert.equal(classifyInviteError(err(409)), 'used');
+  assert.equal(classifyInviteError(err(403)), 'forbidden');
   assert.equal(classifyInviteError(err(429)), 'rate_limited');
   assert.equal(classifyInviteError(err(422)), 'validation');
   assert.equal(classifyInviteError(err(500)), 'error');
@@ -51,14 +52,16 @@ test('inviteViewState: logged out shows the form', () => {
   assert.equal(inviteViewState({ token: 't', authLoading: false, user: null, preview, errorKind: null }), 'form');
 });
 
-test('inviteViewState: a 422 on submit keeps the form', () => {
+test('inviteViewState: a 422 or 403 on submit keeps the form', () => {
   assert.equal(inviteViewState({ token: 't', authLoading: false, user: null, preview, errorKind: 'validation' }), 'form');
+  assert.equal(inviteViewState({ token: 't', authLoading: false, user: null, preview, errorKind: 'forbidden' }), 'form');
 });
 
 test('inviteViewState: signed in as the invitee vs someone else', () => {
   const same = { email: 'NEW@example.com ' };
   const other = { email: 'boss@example.com' };
-  assert.equal(inviteViewState({ token: 't', authLoading: false, user: same, preview, errorKind: null }), 'signed_in_same');
+  // Signed in as the invitee: show the form (they confirm with their password).
+  assert.equal(inviteViewState({ token: 't', authLoading: false, user: same, preview, errorKind: null }), 'form');
   assert.equal(inviteViewState({ token: 't', authLoading: false, user: other, preview, errorKind: null }), 'signed_in_other');
 });
 
@@ -67,6 +70,9 @@ test('validateInvitePassword', () => {
   assert.equal(validateInvitePassword('longenough', 'different1'), INVITE_COPY.passwordsDontMatch);
   assert.equal(validateInvitePassword('longenough', 'longenough'), null);
   assert.equal(validateInvitePassword('12345678', '12345678'), null);
+  // Existing accounts: any non-empty current password, no confirm field.
+  assert.equal(validateInvitePassword('short', '', { existingAccount: true }), null);
+  assert.equal(validateInvitePassword('', '', { existingAccount: true }), 'Enter your LexiSense password.');
 });
 
 test('buildAcceptPayload trims names and omits blanks', () => {

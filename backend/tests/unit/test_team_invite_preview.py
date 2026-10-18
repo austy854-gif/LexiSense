@@ -25,6 +25,7 @@ async def test_pending_invitation_returns_details(client, db, org_id, users):
     body = response.json()
     assert body == {
         "email": inv["email"],
+        "accountExists": False,
         "organizationName": "Acme Studio",
         "inviterName": "Test User",
         "role": "manager",
@@ -105,3 +106,11 @@ async def test_is_rate_limited(client, db):
         for i in range(12)
     ]
     assert 429 in codes
+
+
+async def test_reports_when_the_invitee_already_has_an_account(client, db, org_id, users):
+    from tests.unit.conftest import make_user
+    inv = await _seed(db, org_id, users, token="tok-acct", email="has-account@example.com")
+    await db.users.insert_one(make_user("org-other", email=inv["email"]))
+    response = await client.post(PREVIEW_URL, json={"token": "tok-acct"})
+    assert response.json()["accountExists"] is True

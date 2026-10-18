@@ -32,6 +32,9 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+// Trial length and upload limits are deliberately not shown to users (copy
+// rule); only the trial's end date from the backend, when known.
+import { isTrialActive, trialEndsLabel } from '../lib/billingHelpers.mjs';
 
 const StatusBadge = ({ status }) => {
   const configs = {
@@ -138,11 +141,6 @@ export default function BillingPage() {
     return new Date(dateStr).toLocaleDateString();
   };
 
-  // Trial length and upload limits are deliberately not shown to users (copy
-  // rule: no trial lengths or limits). We only need to know if it's still on.
-  const isTrialActive = (trialEndDate) =>
-    Boolean(trialEndDate) && new Date(trialEndDate) > new Date();
-
   if (loading) {
     return (
       <Layout>
@@ -158,6 +156,7 @@ export default function BillingPage() {
   }
 
   const trialActive = isTrialActive(subscription?.trialEndDate);
+  const trialEnds = trialActive ? trialEndsLabel(subscription?.trialEndDate) : null;
   const isTrial = subscription?.subscriptionTier === 'trial';
   const isTeam = subscription?.subscriptionTier === 'team';
 
@@ -200,7 +199,11 @@ export default function BillingPage() {
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">
                     {isTrial ? (
-                      trialActive ? 'Free trial active' : 'Free trial ended'
+                      trialActive ? (
+                        <span data-testid="trial-status">{trialEnds || 'Free trial active'}</span>
+                      ) : (
+                        <span data-testid="trial-status">Free trial ended</span>
+                      )
                     ) : isTeam ? (
                       subscription?.currentPeriodEnd
                         ? `Renews on ${formatDate(subscription.currentPeriodEnd)}`

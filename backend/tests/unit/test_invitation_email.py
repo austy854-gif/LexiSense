@@ -40,7 +40,7 @@ class TestInviteCopy:
         assert subject == "Ada Lovelace invited you to LexiSense"
         assert "You're invited" in html
         assert "Accept invite" in html
-        assert "Join Acme Studio and see your team&#x27;s contracts in one place." in html
+        assert "Join Acme Studio and see your team's contracts in one place." in html
         assert "where your team keeps its contracts in one place" in html
         assert "This invite expires in 7 days." in html
         assert "invited new@example.com to LexiSense" in html
@@ -140,8 +140,41 @@ class TestSendEmailPassesPlainText:
         assert "super-secret-token" not in caplog.text
 
 
-def test_developer_notes_are_not_sent_to_recipients():
+def test_developer_comments_are_not_sent_to_recipients():
     _, html, _ = render_invitation_email(DATA)
-    assert "TEMPLATE-NOTES" not in html
-    assert "INTERIM" not in html
-    assert "<!--[if mso]>" in html  # Outlook conditionals are kept
+    for internal in ("DRAFT", "BLOCKER", "SLOT:", "Cindy", "Placeholders:", "README"):
+        assert internal not in html
+    # Outlook conditional comments are kept intact.
+    assert "<!--[if mso]>" in html
+    assert "<!--[if !mso]><!-->" in html
+    assert "<!--<![endif]-->" in html
+    assert html.count("lexisense-email-header-dark@2x.png") == 1
+
+
+def test_uses_the_brand_account_invite_template_verbatim():
+    from pathlib import Path
+    tpl = Path(email_service._TEMPLATE_DIR)
+    assert email_service.INVITE_HTML_TEMPLATE == "lexisense-account-invite.html"
+    assert (tpl / "lexisense-account-invite.html").is_file()
+    assert (tpl / "lexisense-account-invite.txt").is_file()
+    assert not (tpl / "account_invite.html").exists()  # interim file removed
+
+
+def test_plain_text_has_no_header_lines_and_matches_copy():
+    subject, _, text = render_invitation_email(DATA)
+    assert not text.startswith("Subject:")
+    assert "Preview:" not in text
+    assert text.startswith("Hi there,")
+    assert "See how it works: https://lexisense.net/#how-it-works" in text
+    assert subject == "Ada Lovelace invited you to LexiSense"
+
+
+def test_every_referenced_header_image_is_served_by_the_frontend():
+    import re
+    from pathlib import Path
+    html = (Path(email_service._TEMPLATE_DIR) / "lexisense-account-invite.html").read_text()
+    public = Path(__file__).resolve().parents[3] / "frontend" / "public"
+    srcs = set(re.findall(r'src="https://lexisense\.net(/[^"]+)"', html))
+    assert srcs, "template should reference hosted header images"
+    for src in srcs:
+        assert (public / src.lstrip("/")).is_file(), src

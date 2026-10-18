@@ -4,6 +4,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import AcceptInvitePage from './AcceptInvitePage';
 import { AuthProvider } from '../contexts/AuthContext';
 import { teamAPI, authAPI } from '../api';
+import { toast } from 'sonner';
 
 jest.mock('../api', () => ({
   __esModule: true,
@@ -160,11 +161,61 @@ test('signed in as someone else: offers to sign out instead of showing the form'
   expect(localStorage.getItem('token')).toBeNull();
 });
 
-test('signed in as the invitee: no form, link to the dashboard', async () => {
+test('signed in as the invitee: shows the password form so they can join', async () => {
   localStorage.setItem('token', 'jwt');
-  localStorage.setItem('user', JSON.stringify({ id: 'n', email: 'new@example.com', role: 'manager' }));
-  authAPI.getMe.mockResolvedValue({ data: { id: 'n', email: 'new@example.com', role: 'manager' } });
-  teamAPI.previewInvite.mockResolvedValue({ data: PREVIEW });
+  localStorage.setItem('user', JSON.stringify({ id: 'n', email: 'new@example.com', role: 'admin' }));
+  authAPI.getMe.mockResolvedValue({ data: { id: 'n', email: 'new@example.com', role: 'admin' } });
+  teamAPI.previewInvite.mockResolvedValue({ data: { ...PREVIEW, accountExists: true } });
   await renderAt('?token=tok-123');
-  expect(q('accept-invite-signed_in_same')).not.toBeNull();
+  expect(q('accept-invite-existing-account')).not.toBeNull();
+  expect(q('accept-invite-password')).not.toBeNull();
+});
+
+async function submit(password) {
+  await act(async () => { type(q('accept-invite-password'), password); });
+  await act(async () => {
+    q('accept-invite-submit').closest('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
+  await flush();
+}
+
+test('existing account: asks only for the current password, joins and signs in', async () => {
+  teamAPI.previewInvite.mockResolvedValue({ data: { ...PREVIEW, accountExists: true } });
+  teamAPI.acceptInvite.mockResolvedValue({ data: { email: 'new@example.com', existingAccount: true, alreadyMember: false } });
+  authAPI.login.mockResolvedValue({
+    data: { access_token: 'jwt', user: { id: 'u1', email: 'new@example.com', role: 'manager' } },
+  });
+  await renderAt('?token=tok-123');
+  expect(q('accept-invite-confirm-password')).toBeNull();
+  expect(container.querySelector('#invite-first-name')).toBeNull();
+
+  await submit('old-pass');
+
+  expect(teamAPI.acceptInvite).toHaveBeenCalledWith({ token: 'tok-123', password: 'old-pass' });
+  expect(authAPI.login).toHaveBeenCalledWith('new@example.com', 'old-pass');
+  expect(toast.success).toHaveBeenCalledWith("You're in. Welcome to the team.");
+  expect(q('dashboard')).not.toBeNull();
+});
+
+test('existing account: wrong password keeps the form and shows the server message', async () => {
+  teamAPI.previewInvite.mockResolvedValue({ data: { ...PREVIEW, accountExists: true } });
+  teamAPI.acceptInvite.mockRejectedValue(
+    Object.assign(new Error('x'), { response: { status: 403, data: { detail: "That password doesn't match your LexiSense account." } } }),
+  );
+  await renderAt('?token=tok-123');
+  await submit('wrong-pass');
+  expect(toast.error).toHaveBeenCalledWith("That password doesn't match your LexiSense account.");
+  expect(q('accept-invite-password')).not.toBeNull();
+  expect(authAPI.login).not.toHaveBeenCalled();
+});
+
+test('sole-admin refusal (409 on accept) shows the message instead of "already used"', async () => {
+  teamAPI.previewInvite.mockResolvedValue({ data: { ...PREVIEW, accountExists: true } });
+  teamAPI.acceptInvite.mockRejectedValue(
+    Object.assign(new Error('x'), { response: { status: 409, data: { detail: "You're the only admin of your current team." } } }),
+  );
+  await renderAt('?token=tok-123');
+  await submit('old-pass');
+  expect(toast.error).toHaveBeenCalledWith("You're the only admin of your current team.");
+  expect(q('accept-invite-used')).toBeNull();
 });

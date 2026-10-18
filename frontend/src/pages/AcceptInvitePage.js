@@ -86,12 +86,13 @@ export default function AcceptInvitePage() {
   }, [token]);
 
   const state = inviteViewState({ token, authLoading, user, preview, errorKind });
+  const existingAccount = Boolean(preview?.accountExists);
 
   const set = (field) => (e) => setForm({ ...form, [field]: e.target.value });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const problem = validateInvitePassword(form.password, form.confirmPassword);
+    const problem = validateInvitePassword(form.password, form.confirmPassword, { existingAccount });
     if (problem) {
       toast.error(problem);
       return;
@@ -103,8 +104,12 @@ export default function AcceptInvitePage() {
       accepted = res.data;
     } catch (err) {
       const kind = classifyInviteError(err);
-      if (kind === 'invalid' || kind === 'expired' || kind === 'used') {
+      if (kind === 'invalid' || kind === 'expired') {
         setErrorKind(kind);
+      } else if (kind === 'forbidden' || kind === 'used') {
+        // 403: wrong password / switched-off account. 409 on accept: the
+        // server refused the move (sole admin of another team). Show its text.
+        toast.error(getErrorInfo(err).message);
       } else if (kind === 'rate_limited') {
         toast.error(INVITE_COPY.rateLimitedBody);
       } else if (kind === 'validation') {
@@ -119,7 +124,13 @@ export default function AcceptInvitePage() {
     // Account created: sign straight in with the password just chosen.
     try {
       await login(accepted?.email || preview.email, form.password);
-      toast.success(INVITE_COPY.successToast);
+      toast.success(
+        accepted?.alreadyMember
+          ? INVITE_COPY.alreadyMemberToast
+          : accepted?.existingAccount
+            ? INVITE_COPY.joinedToast
+            : INVITE_COPY.successToast,
+      );
       navigate('/', { replace: true });
     } catch {
       toast.success(INVITE_COPY.successSignInToast);
@@ -164,17 +175,6 @@ export default function AcceptInvitePage() {
     const body = state === 'rate_limited' ? INVITE_COPY.rateLimitedBody : INVITE_COPY.errorBody;
     return <Message state={state} title={INVITE_COPY.invalidTitle} body={body} />;
   }
-  if (state === 'signed_in_same') {
-    return (
-      <Message
-        state={state}
-        title="You're already signed in"
-        body={`You're signed in as ${user.email}, so there's nothing else to do here.`}
-      >
-        {dashboardButton}
-      </Message>
-    );
-  }
   if (state === 'signed_in_other') {
     return (
       <Message
@@ -204,7 +204,11 @@ export default function AcceptInvitePage() {
         <CardDescription>
           {preview.inviterName ? `${preview.inviterName} invited you to join ` : 'You were invited to join '}
           <strong>{team}</strong> on LexiSense as {roleLabel(preview.role) === 'Admin' ? 'an' : 'a'} {roleLabel(preview.role)}.
-          Create your account to get started.
+          {existingAccount ? (
+            <span className="block mt-2" data-testid="accept-invite-existing-account">{INVITE_COPY.existingAccountIntro}</span>
+          ) : (
+            ' Create your account to get started.'
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -213,6 +217,7 @@ export default function AcceptInvitePage() {
             <Label htmlFor="invite-email">Email</Label>
             <Input id="invite-email" type="email" value={preview.email} readOnly disabled data-testid="accept-invite-email" />
           </div>
+          {!existingAccount && (
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="invite-first-name">First name</Label>
@@ -223,16 +228,17 @@ export default function AcceptInvitePage() {
               <Input id="invite-last-name" placeholder="Doe" value={form.lastName} onChange={set('lastName')} autoComplete="family-name" />
             </div>
           </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor="invite-password">Password</Label>
             <div className="relative">
               <Input
                 id="invite-password"
                 type={showPassword ? 'text' : 'password'}
-                placeholder="At least 8 characters"
+                placeholder={existingAccount ? 'Your LexiSense password' : 'At least 8 characters'}
                 value={form.password}
                 onChange={set('password')}
-                autoComplete="new-password"
+                autoComplete={existingAccount ? 'current-password' : 'new-password'}
                 required
                 data-testid="accept-invite-password"
               />
@@ -248,6 +254,7 @@ export default function AcceptInvitePage() {
               </Button>
             </div>
           </div>
+          {!existingAccount && (
           <div className="space-y-2">
             <Label htmlFor="invite-confirm-password">Confirm password</Label>
             <Input
@@ -261,6 +268,7 @@ export default function AcceptInvitePage() {
               data-testid="accept-invite-confirm-password"
             />
           </div>
+          )}
           <Button type="submit" className="w-full" disabled={submitting} data-testid="accept-invite-submit">
             {submitting ? (
               <>
@@ -272,12 +280,6 @@ export default function AcceptInvitePage() {
             )}
           </Button>
         </form>
-        <div className="mt-6 text-center text-sm">
-          <span className="text-muted-foreground">Already have an account? </span>
-          <Link to="/login" className="text-primary hover:underline font-medium">
-            Sign in
-          </Link>
-        </div>
       </CardContent>
     </Shell>
   );
