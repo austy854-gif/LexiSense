@@ -52,6 +52,18 @@ def init_db(database):
 #: so a customer who has entered a card is never treated as an unpaid trial.
 PAID_BILLING_STATUSES = frozenset({BillingStatus.ACTIVE, BillingStatus.TRIALING})
 
+#: Statuses of a subscription that still exists and bills the customer. An org
+#: in one of these may not start a second checkout, and webhooks for any other
+#: subscription id must not overwrite it.
+LIVE_BILLING_STATUSES = frozenset({BillingStatus.ACTIVE, BillingStatus.TRIALING, BillingStatus.PAST_DUE})
+#: Same, as Stripe subscription statuses (``unpaid`` maps to past_due).
+LIVE_STRIPE_STATUSES = frozenset({"active", "trialing", "past_due", "unpaid"})
+
+MSG_ALREADY_SUBSCRIBED = (
+    "Your organization already has a subscription. Use the billing portal to "
+    "manage or change it."
+)
+
 ACCESS_PAID = "paid"
 ACCESS_TRIAL = "trial"
 ACCESS_TRIAL_EXPIRED = "trial_expired"
@@ -202,6 +214,14 @@ def compute_entitlement(billing: Union[OrganizationBilling, dict, None], now: Op
     return Entitlement(ACCESS_TRIAL, None, True, False, trial.upload_limit, trial.max_members)
 
 
+def has_live_subscription(billing) -> bool:
+    """True when the billing record holds an active/trialing/past_due Team subscription."""
+    return (
+        _billing_get(billing, "subscriptionTier") == SubscriptionTier.TEAM
+        and _billing_get(billing, "billingStatus") in LIVE_BILLING_STATUSES
+    )
+
+
 def _trial_limit_message(limit: int) -> str:
     return f"You've reached the trial limit of {limit} contract uploads. Please upgrade to continue."
 
@@ -343,6 +363,11 @@ STRIPE_PORTAL_ERROR_MESSAGE = (
 )
 
 
+def _stripe_has_live_subscription(customer_id: str) -> bool:
+    subs = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
+    return any(sub.get("status") in LIVE_STRIPE_STATUSES for sub in (subs.get("data") or []))
+
+
 def _log_stripe_error(operation: str, org_id: str, exc: Exception) -> None:
     """Log full Stripe error details server-side; users only see a generic message."""
     logger.error(
@@ -435,8 +460,17 @@ async def create_checkout_session(
 
     org_id = current_user["organizationId"]
     billing = await get_or_create_billing(org_id)
+
+    # One subscription per org: a second checkout would bill the customer twice.
+    if has_live_subscription(billing):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MSG_ALREADY_SUBSCRIBED)
     
     try:
+        # Webhooks can lag behind a just-completed checkout, so also ask Stripe
+        # whether this customer already has a live subscription.
+        if billing.stripeCustomerId and _stripe_has_live_subscription(billing.stripeCustomerId):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MSG_ALREADY_SUBSCRIBED)
+
         # Create or get Stripe customer (inside the try so a Stripe failure here
         # also gets the friendly message instead of a raw 500).
         if not billing.stripeCustomerId:
@@ -668,10 +702,38 @@ async def handle_subscription_updated(subscription, event_at: Optional[int] = No
     await update_billing_from_subscription(org_id, subscription, customer_id, event_at)
 
 
+def _invoice_subscription_id(invoice) -> Optional[str]:
+    """Subscription an invoice belongs to (pre- and post-2025 Stripe API shapes)."""
+    sub = invoice.get("subscription")
+    if not sub:
+        parent = invoice.get("parent") or {}
+        sub = ((parent.get("subscription_details") or {}).get("subscription")) if parent else None
+    if sub is not None and not isinstance(sub, str):  # expanded object
+        sub = sub.get("id")
+    return sub or None
+
+
+def _is_foreign_subscription(billing: dict, subscription_id: Optional[str]) -> bool:
+    """True when ``subscription_id`` is not the org's current subscription."""
+    current = billing.get("stripeSubscriptionId")
+    return bool(subscription_id and current and subscription_id != current)
+
+
 async def handle_subscription_deleted(subscription, event_at: Optional[int] = None):
     """Handle subscription cancellation"""
     org_id = await _org_for_subscription(subscription)
     if not org_id:
+        return
+    billing = await db.organization_billing.find_one({"organizationId": org_id})
+    if not billing:
+        return
+    # Only the org's *current* subscription ending cancels the org. Deleting a
+    # duplicate (or an abandoned incomplete one) must leave the org untouched.
+    if subscription.get("id") != billing.get("stripeSubscriptionId"):
+        logger.warning(
+            "Ignoring deletion of subscription %s for org %s: current subscription is %s",
+            subscription.get("id"), org_id, billing.get("stripeSubscriptionId"),
+        )
         return
 
     now = datetime.now(timezone.utc).isoformat()
@@ -697,6 +759,12 @@ async def handle_payment_failed(invoice, event_at: Optional[int] = None):
     # and must not be shown as a past-due subscriber.
     if billing.get("subscriptionTier") != SubscriptionTier.TEAM:
         return
+    if _is_foreign_subscription(billing, _invoice_subscription_id(invoice)):
+        logger.warning(
+            "Ignoring payment failure for subscription %s (org %s, current %s)",
+            _invoice_subscription_id(invoice), billing["organizationId"], billing.get("stripeSubscriptionId"),
+        )
+        return
 
     await _apply_state(billing["organizationId"], {
         "billingStatus": BillingStatus.PAST_DUE,
@@ -711,6 +779,12 @@ async def handle_invoice_paid(invoice, event_at: Optional[int] = None):
         return
     billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
     if not billing:
+        return
+    if _is_foreign_subscription(billing, _invoice_subscription_id(invoice)):
+        logger.warning(
+            "Ignoring paid invoice for subscription %s (org %s, current %s)",
+            _invoice_subscription_id(invoice), billing["organizationId"], billing.get("stripeSubscriptionId"),
+        )
         return
     
     # If was past_due, restore to active and end the grace period. The tier is
@@ -740,6 +814,26 @@ async def update_billing_from_subscription(
     stripe_status = subscription.get("status", "incomplete")
     billing_status = status_map.get(stripe_status, BillingStatus.INCOMPLETE)
     current = await db.organization_billing.find_one({"organizationId": org_id})
+    if current is None:
+        logger.warning("Subscription %s references org %s with no billing record", subscription.get("id"), org_id)
+        return
+    # Org scoping: the subscription's customer must be the org's customer.
+    if current.get("stripeCustomerId") and customer_id and customer_id != current["stripeCustomerId"]:
+        logger.error(
+            "Subscription %s (customer %s) does not belong to org %s (customer %s); not applied",
+            subscription.get("id"), customer_id, org_id, current["stripeCustomerId"],
+        )
+        return
+    # Duplicate guard: while the org has a live subscription, events for any
+    # other subscription id must not overwrite it. (A new subscription is
+    # accepted once the current one is incomplete / cancelled / deleted.)
+    if _is_foreign_subscription(current, subscription.get("id")) and has_live_subscription(current):
+        logger.error(
+            "Duplicate subscription %s for org %s (current %s is %s); not applied -- "
+            "cancel/refund it in Stripe",
+            subscription.get("id"), org_id, current.get("stripeSubscriptionId"), current.get("billingStatus"),
+        )
+        return
     
     # Determine tier. A past-due / unpaid subscriber is still a Team customer
     # with a payment problem -- it is NOT a free trial. Only a subscription
@@ -866,6 +960,7 @@ __all__ = [
     "router",
     "check_trial_access",
     "compute_entitlement",
+    "has_live_subscription",
     "ensure_ai_access",
     "get_entitlement",
     "Entitlement",

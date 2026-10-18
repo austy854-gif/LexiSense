@@ -100,7 +100,7 @@ async def http(full_app):
 @pytest.fixture
 def fake_stripe(monkeypatch):
     """Replace every Stripe call used by checkout/portal with a recorder."""
-    calls = {"customer": [], "checkout": [], "portal": []}
+    calls = {"customer": [], "checkout": [], "portal": [], "sub_list": [], "existing_subs": []}
 
     def customer_create(**kwargs):
         calls["customer"].append(kwargs)
@@ -114,7 +114,12 @@ def fake_stripe(monkeypatch):
         calls["portal"].append(kwargs)
         return SimpleNamespace(url="https://billing.stripe.test/p")
 
+    def subscription_list(**kwargs):
+        calls["sub_list"].append(kwargs)
+        return {"data": list(calls["existing_subs"])}
+
     monkeypatch.setattr(billing_route, "stripe_api_key", "sk_test_fake")
+    monkeypatch.setattr(stripe.Subscription, "list", staticmethod(subscription_list))
     monkeypatch.setattr(stripe.Customer, "create", staticmethod(customer_create))
     monkeypatch.setattr(stripe.checkout.Session, "create", staticmethod(checkout_create))
     monkeypatch.setattr(stripe.billing_portal.Session, "create", staticmethod(portal_create))
@@ -896,3 +901,128 @@ async def test_subscription_deleted_clears_past_due(db, org_id):
     await billing_route.handle_subscription_deleted(_subscription("canceled"))
     doc = await _doc(db, org_id)
     assert doc["billingStatus"] == "cancelled" and doc["pastDueSince"] is None
+
+
+# --------------------------------------------------------------------------
+# Duplicate subscriptions
+# --------------------------------------------------------------------------
+LIVE_STATES = {"active": PAID, "trialing": STRIPE_TRIALING, "past_due": GRACE, "past_due_blocked": GRACE_OVER}
+
+
+@pytest.mark.parametrize("name", list(LIVE_STATES))
+async def test_checkout_409_when_org_already_subscribed(http, db, org_id, users, fake_stripe, name):
+    await db.organization_billing.insert_one(billing_doc(org_id, stripeSubscriptionId="sub_1", **LIVE_STATES[name]))
+    resp = await http.post(f"{API_PREFIX}/billing/checkout", json=CHECKOUT_URLS, headers=auth_headers(users["admin"]))
+    assert resp.status_code == 409
+    assert "billing portal" in resp.json()["detail"]
+    assert fake_stripe["checkout"] == [] and fake_stripe["customer"] == []
+
+
+@pytest.mark.parametrize("state", [{}, EXPIRED_TRIAL, CANCELLED,
+                                   dict(subscriptionTier=SubscriptionTier.TRIAL, billingStatus=BillingStatus.INCOMPLETE,
+                                        stripeCustomerId="cus_1", stripeSubscriptionId="sub_old")])
+async def test_checkout_allowed_without_live_subscription(http, db, org_id, users, fake_stripe, state):
+    await db.organization_billing.insert_one(billing_doc(org_id, **state))
+    resp = await http.post(f"{API_PREFIX}/billing/checkout", json=CHECKOUT_URLS, headers=auth_headers(users["admin"]))
+    assert resp.status_code == 200, resp.text
+    assert len(fake_stripe["checkout"]) == 1
+
+
+async def test_checkout_409_when_stripe_has_live_subscription_before_webhook(http, db, org_id, users, fake_stripe):
+    """Webhook lag: DB still says trial, but Stripe already has the subscription."""
+    await db.organization_billing.insert_one(billing_doc(org_id, stripeCustomerId="cus_1"))
+    fake_stripe["existing_subs"].extend([{"id": "sub_x", "status": "incomplete_expired"},
+                                         {"id": "sub_1", "status": "active"}])
+    resp = await http.post(f"{API_PREFIX}/billing/checkout", json=CHECKOUT_URLS, headers=auth_headers(users["admin"]))
+    assert resp.status_code == 409
+    assert fake_stripe["sub_list"][0]["customer"] == "cus_1"
+    assert fake_stripe["checkout"] == []
+
+
+async def test_checkout_stripe_list_error_is_friendly(http, db, org_id, users, fake_stripe, monkeypatch):
+    await db.organization_billing.insert_one(billing_doc(org_id, stripeCustomerId="cus_1"))
+
+    def boom(**kwargs):
+        raise stripe.APIConnectionError(RAW_STRIPE_TEXT)
+
+    monkeypatch.setattr(stripe.Subscription, "list", staticmethod(boom))
+    resp = await http.post(f"{API_PREFIX}/billing/checkout", json=CHECKOUT_URLS, headers=auth_headers(users["admin"]))
+    assert resp.status_code == 502
+    assert fake_stripe["checkout"] == []
+
+
+async def _seed_current_sub(db, org_id, **extra):
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(org_id, stripeSubscriptionId="sub_1", **dict(PAID, **extra)))
+
+
+async def test_events_for_other_subscription_do_not_overwrite_current(db, org_id):
+    await _seed_current_sub(db, org_id)
+    dup = _subscription("past_due", sub_id="sub_2")
+    await billing_route.handle_subscription_created(dup)
+    await billing_route.handle_subscription_updated(dup)
+    await billing_route.update_billing_from_subscription(org_id, _subscription("incomplete", sub_id="sub_2"), "cus_1")
+    doc = await _doc(db, org_id)
+    assert (doc["stripeSubscriptionId"], doc["billingStatus"], doc["subscriptionTier"]) == ("sub_1", "active", "team")
+
+
+async def test_deleting_duplicate_subscription_keeps_org_active(db, org_id):
+    await _seed_current_sub(db, org_id)
+    await billing_route.handle_subscription_deleted(_subscription("canceled", sub_id="sub_2"))
+    doc = await _doc(db, org_id)
+    assert (doc["stripeSubscriptionId"], doc["billingStatus"]) == ("sub_1", "active")
+    # Deleting the current one does cancel.
+    await billing_route.handle_subscription_deleted(_subscription("canceled", sub_id="sub_1"))
+    assert (await _doc(db, org_id))["billingStatus"] == "cancelled"
+
+
+async def test_stale_deletion_does_not_cancel_in_app_trial(db, org_id):
+    """An abandoned checkout's subscription expiring must not end the trial."""
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(org_id, stripeCustomerId="cus_1"))
+    await billing_route.handle_subscription_deleted(_subscription("incomplete_expired", sub_id="sub_old"))
+    doc = await _doc(db, org_id)
+    assert (doc["subscriptionTier"], doc["billingStatus"]) == ("trial", "trialing")
+
+
+@pytest.mark.parametrize("shape", ["legacy", "parent"])
+async def test_invoices_for_other_subscription_are_ignored(db, org_id, shape):
+    await _seed_current_sub(db, org_id)
+    if shape == "legacy":
+        invoice = {"customer": "cus_1", "subscription": "sub_2"}
+    else:
+        invoice = {"customer": "cus_1", "parent": {"subscription_details": {"subscription": "sub_2"}}}
+    await billing_route.handle_payment_failed(invoice)
+    assert (await _doc(db, org_id))["billingStatus"] == "active"
+    await billing_route.handle_payment_failed(dict(invoice, subscription="sub_1"))
+    assert (await _doc(db, org_id))["billingStatus"] == "past_due"
+    await billing_route.handle_invoice_paid(invoice)
+    assert (await _doc(db, org_id))["billingStatus"] == "past_due"
+    await billing_route.handle_invoice_paid({"customer": "cus_1", "subscription": {"id": "sub_1"}})
+    assert (await _doc(db, org_id))["billingStatus"] == "active"
+
+
+async def test_new_subscription_accepted_when_current_is_not_live(db, org_id):
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(
+        org_id, stripeCustomerId="cus_1", stripeSubscriptionId="sub_old", billingStatus=BillingStatus.INCOMPLETE))
+    await billing_route.update_billing_from_subscription(org_id, _subscription("active", sub_id="sub_2"), "cus_1")
+    doc = await _doc(db, org_id)
+    assert (doc["stripeSubscriptionId"], doc["billingStatus"]) == ("sub_2", "active")
+
+
+async def test_subscription_for_another_customer_is_not_applied(db, org_id):
+    await _seed_current_sub(db, org_id)
+    await billing_route.update_billing_from_subscription(org_id, _subscription("canceled", sub_id="sub_1"), "cus_other")
+    doc = await _doc(db, org_id)
+    assert (doc["billingStatus"], doc["stripeCustomerId"]) == ("active", "cus_1")
+
+
+async def test_checkout_completed_for_duplicate_is_ignored(db, org_id, monkeypatch):
+    await _seed_current_sub(db, org_id)
+    monkeypatch.setattr(stripe.Subscription, "retrieve",
+                        staticmethod(lambda sid: _subscription("active", price=PRICE_ANNUAL, sub_id=sid)))
+    await billing_route.handle_checkout_completed(
+        {"metadata": {"organizationId": org_id}, "subscription": "sub_2", "customer": "cus_1"})
+    doc = await _doc(db, org_id)
+    assert (doc["stripeSubscriptionId"], doc["stripePriceId"]) == ("sub_1", PRICE_MONTHLY)
