@@ -40,6 +40,7 @@ BILLING_ENV = (
     "BILLING_TRIAL_MAX_MEMBERS",
     "BILLING_TEAM_MAX_MEMBERS",
     "BILLING_TEAM_PRICE_MONTHLY",
+    "BILLING_PAST_DUE_GRACE_DAYS",
     "STRIPE_TEAM_PRICE_ID",
     "STRIPE_TEAM_PRICE_IDS",
 )
@@ -129,7 +130,7 @@ CHECKOUT_URLS = {"successUrl": "https://app.test/ok", "cancelUrl": "https://app.
 def test_plan_config_defaults_match_current_pricing():
     trial = plans_module.get_trial_config()
     team = plans_module.get_paid_plans()["team"]
-    assert (trial.days, trial.upload_limit, trial.max_members) == (7, 3, 10)
+    assert (trial.days, trial.upload_limit, trial.max_members) == (7, 3, 3)
     assert team.max_members == 10 and team.price_monthly == 49 and team.max_uploads is None
     assert team.stripe_price_ids == (PRICE_MONTHLY, PRICE_ANNUAL)
     assert team.default_price_id == PRICE_MONTHLY
@@ -143,7 +144,7 @@ def test_plan_config_env_overrides(billing_env):
     trial = plans_module.get_trial_config()
     team = plans_module.get_paid_plans()["team"]
     assert (trial.days, trial.upload_limit) == (14, 25)
-    assert trial.max_members == 15  # trial cap follows the team cap unless set
+    assert trial.max_members == 3  # trial cap is independent of the team cap
     assert team.max_members == 15 and team.price_monthly == 129
 
 
@@ -602,6 +603,33 @@ async def test_trial_org_uses_trial_member_cap(http, db, org_id, users, billing_
     await db.organization_billing.insert_one(billing_doc(org_id))
     await db.users.insert_one(dict(users["admin"]))
     assert (await _invite(http, users["admin"], "a@example.com")).status_code == 403
+
+
+async def test_trial_member_cap_defaults_to_three(http, db, org_id, users):
+    await db.organization_billing.insert_one(billing_doc(org_id))
+    await db.users.insert_one(dict(users["admin"]))
+    await db.users.insert_one(dict(users["user"]))
+    assert (await _invite(http, users["admin"], "third@example.com")).status_code == 200
+    resp = await _invite(http, users["admin"], "fourth@example.com")
+    assert resp.status_code == 403
+    assert "up to 3 team members" in resp.json()["detail"]
+
+
+async def test_trial_member_cap_is_config_driven(http, db, org_id, users, billing_env):
+    billing_env.setenv("BILLING_TRIAL_MAX_MEMBERS", "0")  # 0 = unlimited
+    await db.organization_billing.insert_one(billing_doc(org_id))
+    for i in range(5):
+        await db.users.insert_one(make_user(org_id, user_id=f"t-{i}"))
+    assert (await _invite(http, users["admin"], "sixth@example.com")).status_code == 200
+    billing_env.setenv("BILLING_TRIAL_MAX_MEMBERS", "6")
+    assert (await _invite(http, users["admin"], "seventh@example.com")).status_code == 403
+
+
+def test_trial_cap_does_not_follow_team_cap(billing_env):
+    billing_env.setenv("BILLING_TEAM_MAX_MEMBERS", "25")
+    assert plans_module.get_trial_config().max_members == 3
+    assert billing_route.compute_entitlement(billing_doc("o")).member_limit == 3
+    assert billing_route.compute_entitlement(billing_doc("o", **PAID)).member_limit == 25
 
 
 async def test_default_cap_is_ten(http, db, org_id, users):

@@ -9,10 +9,12 @@ Environment variables (all optional except the Stripe price ID in production):
 
 ``BILLING_TRIAL_DAYS``            in-app trial length in days (default 7)
 ``BILLING_TRIAL_UPLOAD_LIMIT``    contract uploads allowed during the trial (default 3)
-``BILLING_TRIAL_MAX_MEMBERS``     member cap while on the trial
-                                  (default: same as ``BILLING_TEAM_MAX_MEMBERS``)
+``BILLING_TRIAL_MAX_MEMBERS``     member cap while on the trial (default 3)
 ``BILLING_TEAM_MAX_MEMBERS``      member cap on the paid Team plan (default 10)
 ``BILLING_TEAM_PRICE_MONTHLY``    display price for the Team plan (default 49)
+``BILLING_PAST_DUE_GRACE_DAYS``   days a past-due subscriber keeps access after
+                                  the first failed payment (default 7; 0 = block
+                                  immediately)
 ``STRIPE_TEAM_PRICE_ID``          default Stripe price for the Team plan
 ``STRIPE_TEAM_PRICE_IDS``         optional comma-separated *additional* Stripe
                                   prices that also map to the Team plan
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Dict, Optional, Tuple
 
 from utils.env import get_env
@@ -40,8 +43,10 @@ DEFAULT_PAID_PLAN_ID = "team"
 _DEFAULTS = {
     "BILLING_TRIAL_DAYS": 7,
     "BILLING_TRIAL_UPLOAD_LIMIT": 3,
+    "BILLING_TRIAL_MAX_MEMBERS": 3,
     "BILLING_TEAM_MAX_MEMBERS": 10,
     "BILLING_TEAM_PRICE_MONTHLY": 49,
+    "BILLING_PAST_DUE_GRACE_DAYS": 7,
 }
 
 
@@ -90,14 +95,23 @@ class PlanConfig:
 
 
 def get_trial_config() -> TrialConfig:
-    team_members = _env_int("BILLING_TEAM_MAX_MEMBERS", _DEFAULTS["BILLING_TEAM_MAX_MEMBERS"])
     return TrialConfig(
         days=_env_int("BILLING_TRIAL_DAYS", _DEFAULTS["BILLING_TRIAL_DAYS"], minimum=0),
         upload_limit=_env_int(
             "BILLING_TRIAL_UPLOAD_LIMIT", _DEFAULTS["BILLING_TRIAL_UPLOAD_LIMIT"], minimum=0
         ),
-        max_members=_limit(_env_int("BILLING_TRIAL_MAX_MEMBERS", team_members)),
+        max_members=_limit(
+            _env_int("BILLING_TRIAL_MAX_MEMBERS", _DEFAULTS["BILLING_TRIAL_MAX_MEMBERS"])
+        ),
     )
+
+
+def get_past_due_grace_period() -> timedelta:
+    """How long a past-due subscriber keeps access after payment first failed."""
+    days = _env_int(
+        "BILLING_PAST_DUE_GRACE_DAYS", _DEFAULTS["BILLING_PAST_DUE_GRACE_DAYS"], minimum=0
+    )
+    return timedelta(days=days)
 
 
 def _team_price_ids() -> Tuple[str, ...]:
@@ -152,6 +166,7 @@ __all__ = [
     "PlanConfig",
     "TrialConfig",
     "get_trial_config",
+    "get_past_due_grace_period",
     "get_paid_plans",
     "get_paid_plan",
     "plan_for_price_id",
