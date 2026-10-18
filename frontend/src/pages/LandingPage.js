@@ -1,13 +1,16 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowRight,
   CalendarClock,
   FileSearch,
+  Flag,
   FolderOpen,
   ListChecks,
+  Menu,
   Search,
   UserCheck,
+  X,
 } from 'lucide-react';
 
 // Public marketing page shown at "/" to logged-out visitors.
@@ -29,9 +32,12 @@ const NAV_LINKS = [
   { href: '#faq', label: 'FAQ' },
 ];
 
-// Copy: /workspace/lexisense-copy/landing-page-copy.md (final draft), used
-// verbatim except that OCR / scanned-PDF lines are left out: OCR is not
-// implemented (uploads are text-based PDF and .txt only; see README).
+// Copy: /workspace/lexisense-copy/landing-page-copy.md (hero option A), verbatim.
+// Copy rules (brand guide, section 2): never claim OCR or scanned-PDF support
+// (text is read from text-based PDF and .txt files only), risk is
+// contract-level only (riskLevel; never clause-level), never promise
+// automatic reminder or approval emails, and no invented stats, testimonials
+// or pricing.
 const FEATURES = [
   {
     icon: FolderOpen,
@@ -51,7 +57,12 @@ const FEATURES = [
   {
     icon: FileSearch,
     title: 'AI contract analysis',
-    body: "Upload a contract and LexiSense tells you what's in it: the key terms, the dates that matter, and the clauses worth a second look.",
+    body: "Upload a contract and LexiSense tells you what's in it: the key terms and the dates that matter.",
+  },
+  {
+    icon: Flag,
+    title: 'Know which contracts need a closer look',
+    body: 'LexiSense flags higher-risk contracts, so you can see which ones need attention and which are fine as they are.',
   },
   {
     icon: UserCheck,
@@ -63,11 +74,11 @@ const FEATURES = [
 const STEPS = [
   {
     title: 'Upload your contracts',
-    body: 'Add your PDFs.',
+    body: 'Add your contracts as PDF files.',
   },
   {
     title: "See what's in them",
-    body: 'LexiSense pulls out the key terms and flags the clauses worth a closer look.',
+    body: 'LexiSense pulls out the key terms and flags higher-risk contracts.',
   },
   {
     title: "Stay on top of what's next",
@@ -86,7 +97,7 @@ const FAQS = [
   },
   {
     q: 'What kinds of files can I upload?',
-    a: 'PDFs and plain-text files.',
+    a: "PDFs with selectable text, like the ones you export from Word or Google Docs or get back from an e-signature tool. Scanned images of paper contracts can't be read.",
   },
   {
     q: 'How does LexiSense help with renewals?',
@@ -107,6 +118,128 @@ function Logo({ className = 'h-8 w-auto' }) {
       height="32"
       className={className}
     />
+  );
+}
+
+const MOBILE_MENU_ID = 'landing-mobile-menu';
+// Matches Tailwind's `md` breakpoint, where the inline nav takes over.
+const DESKTOP_QUERY = '(min-width: 768px)';
+
+const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
+function SiteHeader() {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const toggleRef = useRef(null);
+
+  const closeMenu = useCallback(({ restoreFocus = false } = {}) => {
+    setMenuOpen(false);
+    if (restoreFocus) toggleRef.current?.focus();
+  }, []);
+
+  // Escape closes the menu and returns focus to the toggle; growing past the
+  // md breakpoint closes it so it can't linger behind the desktop nav.
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') closeMenu({ restoreFocus: true });
+    };
+    const mql = window.matchMedia ? window.matchMedia(DESKTOP_QUERY) : null;
+    const onChange = (event) => {
+      if (event.matches) closeMenu();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    mql?.addEventListener?.('change', onChange);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      mql?.removeEventListener?.('change', onChange);
+    };
+  }, [menuOpen, closeMenu]);
+
+  return (
+    <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
+        <a href="#top" className={`flex shrink-0 items-center rounded-md ${focusRing}`} onClick={() => closeMenu()}>
+          <Logo className="h-7 w-auto sm:h-8" />
+        </a>
+        <nav aria-label="Main" className="hidden md:block">
+          <ul className="flex items-center gap-7 text-sm font-medium text-muted-foreground">
+            {NAV_LINKS.map((link) => (
+              <li key={link.href}>
+                <a href={link.href} className={`rounded transition-colors hover:text-foreground ${focusRing}`}>
+                  {link.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <div className="flex items-center gap-2 sm:gap-4">
+          <Link
+            to={LOGIN_PATH}
+            className={`hidden rounded-md px-2 py-2 text-sm font-semibold text-foreground hover:text-primary md:inline-flex ${focusRing}`}
+          >
+            Log in
+          </Link>
+          <Link
+            to={SIGNUP_PATH}
+            className={`hidden items-center rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:bg-[hsl(216_85%_29%)] min-[380px]:inline-flex ${focusRing} focus-visible:ring-offset-2`}
+          >
+            Try LexiSense free
+          </Link>
+          <button
+            ref={toggleRef}
+            type="button"
+            className={`inline-flex h-10 w-10 items-center justify-center rounded-md border border-[hsl(var(--input))] bg-card text-foreground hover:bg-accent md:hidden ${focusRing} focus-visible:ring-offset-2`}
+            aria-expanded={menuOpen}
+            aria-controls={MOBILE_MENU_ID}
+            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            {menuOpen ? <X className="h-5 w-5" aria-hidden="true" /> : <Menu className="h-5 w-5" aria-hidden="true" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Mobile menu (below 768px). `hidden` keeps it out of the tab order and
+          the accessibility tree while closed. */}
+      <nav
+        id={MOBILE_MENU_ID}
+        aria-label="Main"
+        hidden={!menuOpen}
+        className="border-t border-border bg-background md:hidden"
+      >
+        <ul className="mx-auto max-w-6xl space-y-1 px-4 py-3 sm:px-6">
+          {NAV_LINKS.map((link) => (
+            <li key={link.href}>
+              <a
+                href={link.href}
+                onClick={() => closeMenu()}
+                className={`block rounded-md px-3 py-3 text-base font-medium text-foreground hover:bg-accent ${focusRing}`}
+              >
+                {link.label}
+              </a>
+            </li>
+          ))}
+          <li className="border-t border-border pt-2">
+            <Link
+              to={LOGIN_PATH}
+              onClick={() => closeMenu()}
+              className={`block rounded-md px-3 py-3 text-base font-semibold text-foreground hover:bg-accent ${focusRing}`}
+            >
+              Log in
+            </Link>
+          </li>
+          <li>
+            <Link
+              to={SIGNUP_PATH}
+              onClick={() => closeMenu()}
+              className={`block rounded-md bg-primary px-3 py-3 text-center text-base font-semibold text-primary-foreground hover:bg-[hsl(216_85%_29%)] ${focusRing} focus-visible:ring-offset-2`}
+            >
+              Try LexiSense free
+            </Link>
+          </li>
+        </ul>
+      </nav>
+    </header>
   );
 }
 
@@ -170,7 +303,7 @@ function HeroIllustration() {
       <div className="absolute -bottom-6 -left-4 hidden w-56 rounded-xl border border-border bg-card p-4 shadow-lg sm:block">
         <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
           <ListChecks className="h-4 w-4 text-primary" />
-          Worth a second look
+          Needs a closer look
         </div>
         <div className="mt-3 space-y-1.5">
           <div className="h-2 w-full rounded-full bg-muted-foreground/25" />
@@ -211,39 +344,7 @@ export default function LandingPage() {
         Skip to content
       </a>
 
-      {/* Header */}
-      <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-          <a href="#top" className="flex shrink-0 items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <Logo className="h-7 w-auto sm:h-8" />
-          </a>
-          <nav aria-label="Main" className="hidden md:block">
-            <ul className="flex items-center gap-7 text-sm font-medium text-muted-foreground">
-              {NAV_LINKS.map((link) => (
-                <li key={link.href}>
-                  <a href={link.href} className="rounded transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    {link.label}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </nav>
-          <div className="flex items-center gap-2 sm:gap-4">
-            <Link
-              to={LOGIN_PATH}
-              className="rounded-md px-2 py-2 text-sm font-semibold text-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              Log in
-            </Link>
-            <Link
-              to={SIGNUP_PATH}
-              className="inline-flex items-center rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:bg-[hsl(216_85%_29%)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            >
-              Try LexiSense free
-            </Link>
-          </div>
-        </div>
-      </header>
+      <SiteHeader />
 
       <main id="main">
         {/* Hero */}
@@ -285,8 +386,8 @@ export default function LandingPage() {
             </h2>
             <div className="space-y-5 text-lg leading-relaxed text-muted-foreground">
               <p>
-                Most small firms keep contracts the same way: some in inboxes, some in a shared drive, and a few scanned
-                PDFs on someone&rsquo;s desktop. It works until a vendor agreement rolls over for another year, or
+                Most small firms keep contracts the same way: some in inboxes, some in a shared drive, and a few PDFs saved to
+                someone&rsquo;s desktop. It works until a vendor agreement rolls over for another year, or
                 someone spends half an hour hunting for the signed version of a client contract.
               </p>
               <p>
@@ -415,16 +516,16 @@ export default function LandingPage() {
           <nav aria-label="Footer">
             <ul className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm font-medium text-muted-foreground">
               <li>
-                <a href="#features" className="hover:text-foreground">Features</a>
+                <a href="#features" className={`rounded hover:text-foreground ${focusRing}`}>Features</a>
               </li>
               <li>
-                <a href="#faq" className="hover:text-foreground">FAQ</a>
+                <a href="#faq" className={`rounded hover:text-foreground ${focusRing}`}>FAQ</a>
               </li>
               <li>
-                <Link to={LOGIN_PATH} className="hover:text-foreground">Log in</Link>
+                <Link to={LOGIN_PATH} className={`rounded hover:text-foreground ${focusRing}`}>Log in</Link>
               </li>
               <li>
-                <Link to={SIGNUP_PATH} className="hover:text-foreground">Sign up</Link>
+                <Link to={SIGNUP_PATH} className={`rounded hover:text-foreground ${focusRing}`}>Sign up</Link>
               </li>
             </ul>
           </nav>
@@ -433,7 +534,7 @@ export default function LandingPage() {
           <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-5 text-sm text-muted-foreground sm:flex-row sm:justify-between sm:px-6">
             <p>&copy; {new Date().getFullYear()} LexiSense</p>
             <p>
-              <a href="https://lexisense.net" className="underline-offset-2 hover:text-foreground hover:underline">
+              <a href="https://lexisense.net" className={`rounded underline-offset-2 hover:text-foreground hover:underline ${focusRing}`}>
                 lexisense.net
               </a>
             </p>

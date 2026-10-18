@@ -114,6 +114,20 @@ webpackConfig.devServer = (devServerConfig) => {
   return devServerConfig;
 };
 
+// Jest 27 (react-scripts 5) ignores package.json "exports", so it can't
+// resolve the `react-router/dom` subpath that react-router-dom v7 imports.
+// Point it at the CommonJS build so components using react-router can be
+// rendered in tests.
+webpackConfig.jest = {
+  configure: (jestConfig) => ({
+    ...jestConfig,
+    moduleNameMapper: {
+      ...(jestConfig.moduleNameMapper || {}),
+      '^react-router/dom$': '<rootDir>/node_modules/react-router/dist/development/dom-export.js',
+    },
+  }),
+};
+
 // Wrap with visual edits (automatically adds babel plugin, dev server, and overlay in dev mode)
 if (isDevServer) {
   try {

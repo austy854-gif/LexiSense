@@ -5,7 +5,8 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Scale, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Eye, EyeOff } from 'lucide-react';
+import { BrandLockup } from '../components/BrandLockup';
 import { toast } from 'sonner';
 
 export default function LoginPage() {
@@ -37,8 +38,8 @@ export default function LoginPage() {
       
       <Card className="w-full max-w-md relative bg-card/95 backdrop-blur border-border/50 shadow-2xl">
         <CardHeader className="text-center pb-2">
-          <div className="mx-auto mb-4 p-3 bg-primary rounded-xl w-fit">
-            <Scale className="h-8 w-8 text-primary-foreground" />
+          <div className="mb-4 flex justify-center">
+            <BrandLockup className="h-10 w-auto" />
           </div>
           <CardTitle className="text-2xl font-bold">Welcome to LexiSense</CardTitle>
           <CardDescription>Sign in to your account to continue</CardDescription>
