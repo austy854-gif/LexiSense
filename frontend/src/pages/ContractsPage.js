@@ -113,6 +113,9 @@ const isSet = (value) => Boolean(value) && value !== 'all';
 
 // Only API-provided messages for client errors (e.g. a size or type limit)
 // are shown as the second line; nothing is invented for other failures.
+export const UPLOAD_FAILED_BODY =
+  'LexiSense reads digital PDFs with selectable text (like ones exported from Word or Google Docs) and .txt files. Check the file and try again.';
+
 export function uploadErrorDetails(error) {
   const info = getErrorInfo(error);
   const isClientError = info.status !== null && info.status >= 400 && info.status < 500;
@@ -478,10 +481,7 @@ export default function ContractsPage() {
                     </Button>
                   }
                 >
-                  <p>
-                    LexiSense reads PDFs with selectable text, like ones exported from Word or Google Docs. Check the
-                    file and try again.
-                  </p>
+                  <p>{UPLOAD_FAILED_BODY}</p>
                   {uploadError.apiMessage && <p data-testid="upload-failed-detail">{uploadError.apiMessage}</p>}
                 </EmptyState>
               ) : (

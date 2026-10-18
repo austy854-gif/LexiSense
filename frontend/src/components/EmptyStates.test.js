@@ -9,7 +9,7 @@ import {
   UploadFailedIllustration,
 } from './illustrations/Illustrations';
 import { ErrorFallback } from './ErrorFallback';
-import { ContractsEmptyState, uploadErrorDetails } from '../pages/ContractsPage';
+import { ContractsEmptyState, UPLOAD_FAILED_BODY, uploadErrorDetails } from '../pages/ContractsPage';
 
 jest.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: null, loading: false }) }));
 jest.mock('../api', () => ({ contractsAPI: {}, exportAPI: {} }));
@@ -119,6 +119,14 @@ describe('ContractsEmptyState', () => {
     renderState({ filters: { ...base, expiringFilter: '60' } });
     expect(container.textContent).toContain('Nothing expiring soon');
     expect(container.textContent).toContain('No contracts expire in the next 60 days.');
+  });
+});
+
+describe('upload failed copy', () => {
+  test('names both supported formats (PDF and .txt)', () => {
+    expect(UPLOAD_FAILED_BODY).toBe(
+      'LexiSense reads digital PDFs with selectable text (like ones exported from Word or Google Docs) and .txt files. Check the file and try again.',
+    );
   });
 });
 
