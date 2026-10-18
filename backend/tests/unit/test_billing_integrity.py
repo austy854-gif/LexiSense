@@ -206,7 +206,6 @@ async def test_checkout_accepts_allowlisted_price_without_stripe_trial(http, use
     (call,) = fake_stripe["checkout"]
     assert call["line_items"] == [{"price": price, "quantity": 1}]
     assert "trial_period_days" not in call["subscription_data"]
-    assert "trial_end" not in call["subscription_data"]
     assert call["subscription_data"]["metadata"] == {"organizationId": users["admin"]["organizationId"], "planId": "team"}
 
 
@@ -1026,3 +1025,52 @@ async def test_checkout_completed_for_duplicate_is_ignored(db, org_id, monkeypat
         {"metadata": {"organizationId": org_id}, "subscription": "sub_2", "customer": "cus_1"})
     doc = await _doc(db, org_id)
     assert (doc["stripeSubscriptionId"], doc["stripePriceId"]) == ("sub_1", PRICE_MONTHLY)
+
+
+# --------------------------------------------------------------------------
+# Card added mid-trial: remaining in-app trial -> subscription_data.trial_end
+# --------------------------------------------------------------------------
+async def _checkout(http, users):
+    return await http.post(f"{API_PREFIX}/billing/checkout", json=CHECKOUT_URLS, headers=auth_headers(users["admin"]))
+
+
+async def test_checkout_mid_trial_passes_remaining_trial_as_trial_end(http, db, org_id, users, fake_stripe):
+    end = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=4, hours=3)
+    await db.organization_billing.insert_one(billing_doc(org_id, trialEndDate=end.isoformat()))
+    assert (await _checkout(http, users)).status_code == 200
+    sub_data = fake_stripe["checkout"][0]["subscription_data"]
+    assert sub_data["trial_end"] == int(end.timestamp())
+    assert "trial_period_days" not in sub_data
+    assert sub_data["metadata"]["organizationId"] == org_id
+
+
+async def test_checkout_fresh_org_trial_end_matches_in_app_trial(http, db, users, fake_stripe):
+    assert (await _checkout(http, users)).status_code == 200
+    doc = await db.organization_billing.find_one({"organizationId": users["admin"]["organizationId"]})
+    expected = int(datetime.fromisoformat(doc["trialEndDate"]).timestamp())
+    assert fake_stripe["checkout"][0]["subscription_data"]["trial_end"] == expected
+
+
+@pytest.mark.parametrize("remaining", [timedelta(hours=47, minutes=59), timedelta(hours=48), timedelta(hours=2)])
+async def test_checkout_skips_trial_end_under_stripe_minimum(http, db, org_id, users, fake_stripe, remaining):
+    end = datetime.now(timezone.utc) + remaining
+    await db.organization_billing.insert_one(billing_doc(org_id, trialEndDate=end.isoformat()))
+    assert (await _checkout(http, users)).status_code == 200
+    assert "trial_end" not in fake_stripe["checkout"][0]["subscription_data"]
+
+
+@pytest.mark.parametrize("state", [EXPIRED_TRIAL, CANCELLED])
+async def test_checkout_without_active_trial_has_no_trial_end(http, db, org_id, users, fake_stripe, state):
+    await db.organization_billing.insert_one(billing_doc(org_id, **state))
+    assert (await _checkout(http, users)).status_code == 200
+    assert "trial_end" not in fake_stripe["checkout"][0]["subscription_data"]
+
+
+def test_checkout_trial_end_timezone_math():
+    now = datetime(2026, 10, 18, 7, 0, tzinfo=timezone.utc)
+    # Stored with a -06:00 offset: 2026-10-21T01:00-06:00 == 2026-10-21T07:00Z (72h away).
+    doc = billing_doc("o", trialEndDate="2026-10-21T01:00:00-06:00")
+    assert billing_route.checkout_trial_end(doc, now) == int(datetime(2026, 10, 21, 7, 0, tzinfo=timezone.utc).timestamp())
+    naive = billing_doc("o", trialEndDate="2026-10-20T07:02:00")  # naive = UTC, 48h02m away
+    assert billing_route.checkout_trial_end(naive, now) is not None
+    assert billing_route.checkout_trial_end(billing_doc("o", trialEndDate=None), now) is None

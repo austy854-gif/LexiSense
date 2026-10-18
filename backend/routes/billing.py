@@ -443,6 +443,34 @@ def resolve_checkout_price(request: CheckoutSessionRequest) -> Tuple[PlanConfig,
     return plan, plan.default_price_id
 
 
+#: Stripe Checkout rejects a ``subscription_data.trial_end`` less than 48 hours
+#: in the future.
+STRIPE_MIN_TRIAL_END = timedelta(hours=48)
+#: Headroom so latency / clock skew between us and Stripe can't push a
+#: borderline trial_end under Stripe's minimum.
+_TRIAL_END_SAFETY_MARGIN = timedelta(minutes=1)
+
+
+def checkout_trial_end(billing, now: Optional[datetime] = None) -> Optional[int]:
+    """Unix ``trial_end`` that carries the remaining in-app trial into Stripe.
+
+    Adding a card mid-trial must not charge the customer before the in-app
+    trial would have ended, so the subscription starts trialing until that
+    same moment (one trial, no extra ``trial_period_days``). ``None`` when
+    the org isn't on an active in-app trial, or when less than Stripe's
+    48-hour minimum is left (the customer is then billed at checkout).
+    """
+    now = now or datetime.now(timezone.utc)
+    if compute_entitlement(billing, now).state != ACCESS_TRIAL:
+        return None
+    trial_end = _parse_iso(_billing_get(billing, "trialEndDate"))
+    if trial_end is None:
+        return None
+    if trial_end - now < STRIPE_MIN_TRIAL_END + _TRIAL_END_SAFETY_MARGIN:
+        return None
+    return int(trial_end.timestamp())
+
+
 @router.post("/checkout", response_model=CheckoutSessionResponse)
 async def create_checkout_session(
     request: CheckoutSessionRequest,
@@ -484,6 +512,13 @@ async def create_checkout_session(
                 {"$set": {"stripeCustomerId": customer.id, "updatedAt": datetime.now(timezone.utc).isoformat()}}
             )
 
+        # Single trial: no trial_period_days. A card added mid-trial only
+        # defers the first charge to the end of the in-app trial.
+        subscription_data = {"metadata": {"organizationId": org_id, "planId": plan.id}}
+        trial_end = checkout_trial_end(billing)
+        if trial_end is not None:
+            subscription_data["trial_end"] = trial_end
+
         session = stripe.checkout.Session.create(
             customer=billing.stripeCustomerId,
             payment_method_types=["card"],
@@ -494,11 +529,7 @@ async def create_checkout_session(
             mode="subscription",
             success_url=request.successUrl,
             cancel_url=request.cancelUrl,
-            # No Stripe trial: the in-app trial already covered evaluation, so
-            # the customer is billed (and entitled) from checkout onwards.
-            subscription_data={
-                "metadata": {"organizationId": org_id, "planId": plan.id}
-            },
+            subscription_data=subscription_data,
             metadata={"organizationId": org_id, "planId": plan.id}
         )
         return CheckoutSessionResponse(sessionId=session.id, url=session.url)
