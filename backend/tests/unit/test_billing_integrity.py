@@ -21,7 +21,6 @@ from models.billing import BillingStatus, SubscriptionTier
 from routes import agentic as agentic_route
 from routes import billing as billing_route
 from routes import contracts as contracts_route
-from routes import team as team_route
 from utils import plans as plans_module
 from tests.unit.conftest import (
     API_PREFIX,
