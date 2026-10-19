@@ -32,12 +32,15 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+// Trial length and upload limits are deliberately not shown to users (copy
+// rule); only the trial's end date from the backend, when known.
+import { isTrialActive, trialCardStatus, trialEndsLabel } from '../lib/billingHelpers.mjs';
 
 const StatusBadge = ({ status }) => {
   const configs = {
     active: { color: 'bg-green-500/10 text-green-500', icon: CheckCircle, label: 'Active' },
     trialing: { color: 'bg-blue-500/10 text-blue-500', icon: Clock, label: 'Trialing' },
-    past_due: { color: 'bg-orange-500/10 text-orange-500', icon: Clock, label: 'Past Due' },
+    past_due: { color: 'bg-orange-500/10 text-orange-500', icon: Clock, label: 'Past due' },
     cancelled: { color: 'bg-gray-500/10 text-gray-500', icon: XCircle, label: 'Cancelled' },
     incomplete: { color: 'bg-yellow-500/10 text-yellow-500', icon: Clock, label: 'Incomplete' },
   };
@@ -53,8 +56,8 @@ const StatusBadge = ({ status }) => {
 
 const TierBadge = ({ tier }) => {
   const configs = {
-    trial: { color: 'bg-gray-500/10 text-gray-500', icon: Clock, label: 'Free Trial' },
-    team: { color: 'bg-purple-500/10 text-purple-500', icon: Crown, label: 'Team Plan' },
+    trial: { color: 'bg-gray-500/10 text-gray-500', icon: Clock, label: 'Free trial' },
+    team: { color: 'bg-purple-500/10 text-purple-500', icon: Crown, label: 'Team plan' },
     cancelled: { color: 'bg-gray-500/10 text-gray-500', icon: XCircle, label: 'Cancelled' },
   };
   const config = configs[tier] || configs.trial;
@@ -97,7 +100,7 @@ export default function BillingPage() {
       setSubscription(subRes.data);
       setPlans(plansRes.data.plans);
     } catch (error) {
-      toast.error('Failed to load billing information');
+      toast.error("We couldn't load your billing details. Refresh the page to try again.");
       console.error(error);
     } finally {
       setLoading(false);
@@ -138,14 +141,6 @@ export default function BillingPage() {
     return new Date(dateStr).toLocaleDateString();
   };
 
-  const getTrialDaysLeft = (trialEndDate) => {
-    if (!trialEndDate) return 0;
-    const end = new Date(trialEndDate);
-    const now = new Date();
-    const diff = end - now;
-    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
-  };
-
   if (loading) {
     return (
       <Layout>
@@ -160,9 +155,13 @@ export default function BillingPage() {
     );
   }
 
-  const trialDaysLeft = subscription?.trialEndDate ? getTrialDaysLeft(subscription.trialEndDate) : 0;
+  const trialActive = isTrialActive(subscription?.trialEndDate);
+  const trialEnds = trialActive ? trialEndsLabel(subscription?.trialEndDate) : null;
   const isTrial = subscription?.subscriptionTier === 'trial';
   const isTeam = subscription?.subscriptionTier === 'team';
+  // B6: the trial card is informational only (no CTA) and is hidden for paid or cancelled orgs.
+  const trialCard = trialCardStatus(subscription?.subscriptionTier, subscription?.trialEndDate);
+  const visiblePlans = plans?.filter((plan) => plan.id !== 'trial' || trialCard);
 
   return (
     <Layout>
@@ -170,9 +169,9 @@ export default function BillingPage() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold">Billing & Subscription</h1>
+            <h1 className="text-3xl font-bold">Billing & subscription</h1>
             <p className="text-muted-foreground mt-1">
-              Manage your plan, payment method, and view billing history
+              Your plan, payment method and billing history
             </p>
           </div>
         </div>
@@ -182,7 +181,7 @@ export default function BillingPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <CreditCard className="h-5 w-5" />
-              Current Plan
+              Current plan
             </CardTitle>
             <CardDescription>Your organization's current subscription status</CardDescription>
           </CardHeader>
@@ -203,9 +202,11 @@ export default function BillingPage() {
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">
                     {isTrial ? (
-                      trialDaysLeft > 0
-                        ? `${trialDaysLeft} day${trialDaysLeft !== 1 ? 's' : ''} left in trial`
-                        : 'Trial ended'
+                      trialActive ? (
+                        <span data-testid="trial-status">{trialEnds || 'Free trial active'}</span>
+                      ) : (
+                        <span data-testid="trial-status">Free trial ended</span>
+                      )
                     ) : isTeam ? (
                       subscription?.currentPeriodEnd
                         ? `Renews on ${formatDate(subscription.currentPeriodEnd)}`
@@ -217,22 +218,6 @@ export default function BillingPage() {
                 </div>
               </div>
               
-              {isTrial && trialDaysLeft > 0 && (
-                <div className="text-right">
-                  <p className="text-sm text-muted-foreground">
-                    {subscription?.trialContractsUsed || 0} / {subscription?.trialContractsLimit || 3} contracts used
-                  </p>
-                  <div className="w-48 h-2 bg-muted rounded-full overflow-hidden mt-1">
-                    <div
-                      className="h-full bg-primary transition-all"
-                      style={{
-                        width: `${((subscription?.trialContractsUsed || 0) / (subscription?.trialContractsLimit || 3)) * 100}%`
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
-
               {isTeam && subscription?.cancelAtPeriodEnd && (
                 <div className="flex items-center gap-2 text-orange-500">
                   <XCircle className="h-4 w-4" />
@@ -241,14 +226,14 @@ export default function BillingPage() {
               )}
             </div>
 
-            {isTrial && trialDaysLeft > 0 && (
+            {isTrial && trialActive && (
               <div className="p-4 border border-yellow-500/20 bg-yellow-500/5 rounded-lg">
                 <div className="flex items-center gap-3">
                   <Clock className="h-5 w-5 text-yellow-500" />
                   <div>
-                    <p className="font-medium text-yellow-800">Free Trial Active</p>
+                    <p className="font-medium text-yellow-800">You're on the free trial</p>
                     <p className="text-sm text-yellow-700">
-                      Your trial ends in {trialDaysLeft} day{trialDaysLeft !== 1 ? 's' : ''}. Upgrade to Team plan for unlimited contracts and full features.
+                      Your free trial includes a limited number of contract uploads. Upgrade to the Team plan to keep adding contracts.
                     </p>
                   </div>
                 </div>
@@ -264,7 +249,7 @@ export default function BillingPage() {
                     className="gap-2"
                   >
                     <Crown className="h-4 w-4" />
-                    Upgrade to Team Plan
+                    Upgrade to Team plan
                   </Button>
                 </>
               )}
@@ -277,7 +262,7 @@ export default function BillingPage() {
                     className="gap-2"
                   >
                     <CreditCard className="h-4 w-4" />
-                    Manage Subscription
+                    Manage subscription
                   </Button>
                   {subscription?.cancelAtPeriodEnd && (
                     <Button 
@@ -287,7 +272,7 @@ export default function BillingPage() {
                       className="gap-2 bg-green-500/10 text-green-500 border-green-500/20 hover:bg-green-500/20"
                     >
                       <ArrowRight className="h-4 w-4" />
-                      Resume Subscription
+                      Resume subscription
                     </Button>
                   )}
                 </>
@@ -299,7 +284,7 @@ export default function BillingPage() {
                   className="gap-2"
                 >
                   <Crown className="h-4 w-4" />
-                  Reactivate Team Plan
+                  Reactivate Team plan
                 </Button>
               )}
             </div>
@@ -311,15 +296,16 @@ export default function BillingPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Crown className="h-5 w-5" />
-              Available Plans
+              Available plans
             </CardTitle>
             <CardDescription>Choose the plan that fits your team</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {plans?.map((plan) => (
+              {visiblePlans?.map((plan) => (
                 <div
                   key={plan.id}
+                  data-testid={`plan-card-${plan.id}`}
                   className={`relative p-6 border rounded-xl ${
                     plan.id === 'team' ? 'border-primary/30 bg-primary/5' : 'border-muted'
                   } ${subscription?.subscriptionTier === plan.id ? 'ring-2 ring-primary' : ''}`}
@@ -327,7 +313,7 @@ export default function BillingPage() {
                   {plan.id === 'team' && (
                     <div className="absolute -top-3 left-1/2 -translate-x-1/2">
                       <Badge className="bg-primary text-primary-foreground px-3 py-1">
-                        Most Popular
+                        Most popular
                       </Badge>
                     </div>
                   )}
@@ -349,6 +335,19 @@ export default function BillingPage() {
                     ))}
                   </ul>
 
+                  {plan.id === 'trial' ? (
+                    <p
+                      className="flex w-full items-center justify-center gap-2 rounded-md border border-muted py-2 text-sm font-medium text-muted-foreground"
+                      data-testid="trial-plan-status"
+                    >
+                      {trialCard === 'Current plan' ? (
+                        <CheckCircle className="h-4 w-4" aria-hidden="true" />
+                      ) : (
+                        <Clock className="h-4 w-4" aria-hidden="true" />
+                      )}
+                      {trialCard}
+                    </p>
+                  ) : (
                   <Button
                     className="w-full gap-2"
                     variant={subscription?.subscriptionTier === plan.id ? 'outline' : 'default'}
@@ -358,12 +357,7 @@ export default function BillingPage() {
                     {subscription?.subscriptionTier === plan.id ? (
                       <>
                         <CheckCircle className="h-4 w-4" />
-                        Current Plan
-                      </>
-                    ) : plan.cta === 'Start Free Trial' ? (
-                      <>
-                        <Clock className="h-4 w-4" />
-                        {plan.cta}
+                        Current plan
                       </>
                     ) : (
                       <>
@@ -372,16 +366,17 @@ export default function BillingPage() {
                       </>
                     )}
                   </Button>
+                  )}
                 </div>
               ))}
             </div>
           </CardContent>
         </Card>
 
-        {/* Feature Comparison */}
+        {/* Feature comparison */}
         <Card>
           <CardHeader>
-            <CardTitle>Feature Comparison</CardTitle>
+            <CardTitle>Feature comparison</CardTitle>
             <CardDescription>See what's included in each tier</CardDescription>
           </CardHeader>
           <CardContent>
@@ -390,14 +385,14 @@ export default function BillingPage() {
                 <thead>
                   <tr className="border-b text-sm text-muted-foreground">
                     <th className="pb-3 font-medium w-64">Feature</th>
-                    <th className="pb-3 font-medium text-center">Free Trial</th>
-                    <th className="pb-3 font-medium text-center">Team Plan</th>
+                    <th className="pb-3 font-medium text-center">Free trial</th>
+                    <th className="pb-3 font-medium text-center">Team plan</th>
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y">
                   <tr>
                     <td className="py-3 font-medium">Contract uploads</td>
-                    <td className="py-3 text-center text-muted-foreground">3 per trial</td>
+                    <td className="py-3 text-center text-muted-foreground">Limited</td>
                     <td className="py-3 text-center text-green-500">
                       <CheckCircle className="h-4 w-4 mx-auto" />
                     </td>
@@ -413,15 +408,6 @@ export default function BillingPage() {
                   </tr>
                   <tr>
                     <td className="py-3 font-medium">Contract repository</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Renewal alerts</td>
                     <td className="py-3 text-center text-green-500">
                       <CheckCircle className="h-4 w-4 mx-auto" />
                     </td>
@@ -496,7 +482,7 @@ export default function BillingPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <HelpCircle className="h-5 w-5" />
-              Frequently Asked Questions
+              Frequently asked questions
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -507,7 +493,7 @@ export default function BillingPage() {
                   What happens when my trial ends?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  When your 7-day trial ends or you reach the 3-contract limit, you'll need to upgrade to the Team plan to continue using LexiSense. Your contracts and data will be preserved.
+                  When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to the Team plan.
                 </p>
               </details>
               <details className="group border rounded-lg p-4">
@@ -531,7 +517,7 @@ export default function BillingPage() {
               <details className="group border rounded-lg p-4">
                 <summary className="flex items-center gap-2 cursor-pointer font-medium">
                   <HelpCircle className="h-4 w-4 text-muted-foreground" />
-                  Is there a per-seat pricing?
+                  Is there per-seat pricing?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
                   No, the Team plan is a flat $49/month for your entire team (up to 10 members). No per-seat fees.
@@ -543,7 +529,7 @@ export default function BillingPage() {
                   How do I update my payment method?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  Click "Manage Subscription" to open the Stripe Billing Portal where you can update payment methods, view invoices, and manage your subscription.
+                  Click "Manage subscription" to open the Stripe Billing Portal where you can update payment methods, view invoices, and manage your subscription.
                 </p>
               </details>
             </div>

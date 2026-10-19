@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "@/index.css";
 import App from "@/App";
+import { ErrorFallback } from "@/components/ErrorFallback";
 
 // Initialize Sentry
 import * as Sentry from "@sentry/react";
@@ -30,7 +31,7 @@ if (sentryDsn && !sentryDsn.startsWith("your-")) {
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(
   <React.StrictMode>
-    <Sentry.ErrorBoundary fallback={<p>Something went wrong</p>}>
+    <Sentry.ErrorBoundary fallback={({ resetError }) => <ErrorFallback resetError={resetError} />}>
       <App />
     </Sentry.ErrorBoundary>
   </React.StrictMode>
