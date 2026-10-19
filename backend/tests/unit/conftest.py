@@ -76,6 +76,24 @@ def _build_app() -> FastAPI:
 
 
 @pytest.fixture(autouse=True)
+def _no_stripe_price_network(monkeypatch):
+    """Never call Stripe's Price API from tests; start every test with an empty cache.
+
+    Tests that exercise price reconciliation (B9) install their own fake.
+    """
+    import stripe
+    from services import stripe_prices
+
+    def _unexpected(*args, **kwargs):
+        raise AssertionError("stripe.Price.retrieve called without a test fake")
+
+    stripe_prices.clear_price_cache()
+    monkeypatch.setattr(stripe.Price, "retrieve", staticmethod(_unexpected))
+    yield
+    stripe_prices.clear_price_cache()
+
+
+@pytest.fixture(autouse=True)
 def _reset_rate_limiters():
     """Reset the process-global rate limiters around every test.
 

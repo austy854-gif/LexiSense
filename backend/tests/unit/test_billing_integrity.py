@@ -47,6 +47,7 @@ BILLING_ENV = (
     "STRIPE_TEAM_PRICE_IDS",
     "BILLING_TEAM_PRICE_ANNUAL",
     "BILLING_CURRENCY",
+    "BILLING_UI_ENABLED",
 )
 
 
@@ -57,6 +58,9 @@ def billing_env(monkeypatch):
     monkeypatch.setenv("STRIPE_TEAM_PRICE_ID", PRICE_MONTHLY)
     monkeypatch.setenv("STRIPE_TEAM_PRICE_ID_ANNUAL", PRICE_ANNUAL)
     monkeypatch.setenv("STRIPE_TEAM_PRICE_IDS", PRICE_LEGACY_EXTRA)
+    # These tests describe billing with the Billing UI visible; the flag-off
+    # behaviour has its own tests (test_billing_ui_flag.py).
+    monkeypatch.setenv("BILLING_UI_ENABLED", "true")
     return monkeypatch
 
 
@@ -183,6 +187,7 @@ async def test_plans_endpoint_renders_from_config(http, billing_env):
     billing_env.setenv("BILLING_TRIAL_UPLOAD_LIMIT", "25")
     billing_env.setenv("BILLING_TEAM_MAX_MEMBERS", "15")
     billing_env.setenv("BILLING_TEAM_PRICE_MONTHLY", "129")
+    billing_env.setenv("BILLING_TEAM_PRICE_ANNUAL", "1290")
     body = (await http.get(f"{API_PREFIX}/billing/plans")).json()
     trial, team = body["plans"]
     assert "14-day free trial" in trial["features"]
@@ -190,6 +195,8 @@ async def test_plans_endpoint_renders_from_config(http, billing_env):
     assert team["price"] == 129
     assert "priceId" not in team and "price_" not in str(body)  # no Stripe IDs reach the client
     assert team["intervals"] == ["monthly", "annual"]
+    # No Stripe key in this test: config display prices, marked unverified.
+    assert team["prices"]["annual"] == {"amount": 1290, "currency": "usd", "interval": "year", "verified": False}
     assert "Team collaboration (up to 15 members)" in team["features"]
 
 
