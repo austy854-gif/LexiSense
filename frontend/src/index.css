@@ -192,17 +192,3 @@ code {
     scroll-margin-top: 4.5rem;
   }
 }
-
-/*
- * App.css has an unlayered `* { margin: 0; padding: 0 }` reset. Unlayered rules
- * beat every Tailwind v4 utility (those live in @layer utilities), so all
- * p-*, m-*, mx-auto, space-y-* classes are ignored. For the landing page only,
- * roll margin/padding back to the layered cascade so the utilities apply again.
- * (Deliberately unlayered; scoped to .lexi-landing so app pages are unchanged.)
- */
-.lexi-landing *,
-.lexi-landing *::before,
-.lexi-landing *::after {
-  margin: revert-layer;
-  padding: revert-layer;
-}
