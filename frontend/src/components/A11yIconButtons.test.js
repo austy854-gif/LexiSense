@@ -10,6 +10,7 @@ import ContractDetailPage from '../pages/ContractDetailPage';
 import TemplatesPage from '../pages/TemplatesPage';
 import TeamPage from '../pages/TeamPage';
 import { contractsAPI, versionsAPI, workflowAPI, templatesAPI, teamAPI } from '../api';
+import { ThemeProvider } from '../contexts/ThemeContext';
 
 jest.mock('../api', () => ({
   contractsAPI: { get: jest.fn(), chat: jest.fn(), delete: jest.fn() },
@@ -67,12 +68,14 @@ afterEach(() => {
 async function render(ui, path = '/') {
   await act(async () => {
     root.render(
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/contracts/:id" element={ui} />
-          <Route path="*" element={ui} />
-        </Routes>
-      </MemoryRouter>,
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/contracts/:id" element={ui} />
+            <Route path="*" element={ui} />
+          </Routes>
+        </MemoryRouter>
+      </ThemeProvider>,
     );
   });
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });

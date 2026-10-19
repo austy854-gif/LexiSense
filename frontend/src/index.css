@@ -154,3 +154,55 @@ code {
     border-bottom-color: inherit;
   }
 }
+
+/*
+ * Marketing landing page (src/pages/LandingPage.js).
+ * Always light, whatever theme the app is in: these "Steady Blue" light tokens
+ * (brand guide, Direction 1) are re-declared on the landing page subtree only,
+ * so ThemeContext and the app's .dark/.light tokens are left untouched.
+ */
+@layer base {
+  .lexi-landing {
+    color-scheme: light;
+    --background: 40 33% 98%;
+    --foreground: 220 30% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 30% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 30% 14%;
+    --primary: 216 85% 35%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 220 30% 14%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 10% 38%;
+    --accent: 216 60% 94%;
+    --accent-foreground: 216 85% 30%;
+    --destructive: 358 68% 44%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 88%;
+    --input: 220 12% 52%;
+    --ring: 216 85% 35%;
+    --highlight: 32 90% 48%;
+    --highlight-foreground: 220 30% 14%;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    scroll-behavior: smooth;
+  }
+  .lexi-landing section[id] {
+    scroll-margin-top: 4.5rem;
+  }
+}
+
+/*
+ * App.css has an unlayered `* { margin: 0; padding: 0 }` reset. Unlayered rules
+ * beat every Tailwind v4 utility (those live in @layer utilities), so all
+ * p-*, m-*, mx-auto, space-y-* classes are ignored. For the landing page only,
+ * roll margin/padding back to the layered cascade so the utilities apply again.
+ * (Deliberately unlayered; scoped to .lexi-landing so app pages are unchanged.)
+ */
+.lexi-landing *,
+.lexi-landing *::before,
+.lexi-landing *::after {
+  margin: revert-layer;
+  padding: revert-layer;
+}
