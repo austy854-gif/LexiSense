@@ -18,75 +18,12 @@ code, pre, .font-mono {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-@layer base {
-  :root {
-    --background: 220 15% 8%;
-    --foreground: 0 0% 95%;
-
-    --card: 220 13% 12%;
-    --card-foreground: 0 0% 95%;
-
-    --popover: 220 13% 12%;
-    --popover-foreground: 0 0% 95%;
-
-    --primary: 216 85% 35%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 220 12% 16%;
-    --secondary-foreground: 0 0% 95%;
-
-    --muted: 220 12% 16%;
-    --muted-foreground: 0 0% 55%;
-
-    --accent: 270 70% 60%;
-    --accent-foreground: 0 0% 100%;
-
-    --destructive: 358 75% 55%;
-    --destructive-foreground: 0 0% 100%;
-
-    --border: 220 10% 20%;
-    --input: 220 10% 20%;
-    --ring: 216 85% 35%;
-
-    --radius: 0.5rem;
-
-    /* Semantic colors */
-    --success: 145 65% 45%;
-    --warning: 38 90% 55%;
-    --error: 358 75% 55%;
-    --info: 200 85% 55%;
-  }
-
-  .light {
-    --background: 0 0% 100%;
-    --foreground: 220 15% 8%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 220 15% 8%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 220 15% 8%;
-
-    --primary: 216 85% 35%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 220 15% 96%;
-    --secondary-foreground: 220 15% 8%;
-
-    --muted: 220 15% 96%;
-    --muted-foreground: 220 10% 45%;
-
-    --accent: 270 70% 60%;
-    --accent-foreground: 0 0% 100%;
-
-    --destructive: 358 75% 55%;
-    --destructive-foreground: 0 0% 100%;
-
-    --border: 220 15% 90%;
-    --input: 220 15% 90%;
-    --ring: 216 85% 35%;
-  }
-}
+/*
+ * Theme tokens (--background, --primary, ...) live in index.css only: :root (= light, the
+ * default), .light and .dark. This file used to redefine :root (dark values) and .light after
+ * index.css; with no .dark block here, its :root won over index.css's .dark and dark mode got
+ * the light-theme primary #0D4AA5 for links and text-primary (about 2:1 on the dark surfaces).
+ */
 
 @layer base {
   * {
@@ -158,28 +95,66 @@ code, pre, .font-mono {
   @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
 }
 
-/* Badge colors */
-.bg-green-500\/10 { background-color: hsl(145 65% 45% / 0.1); }
-.text-green-500 { color: hsl(145 65% 45%); }
-.border-green-500\/20 { border-color: hsl(145 65% 45% / 0.2); }
+/* Badge / status colors (risk, status, stat chips). Semantic hues kept; text is darker in light
+   mode and lighter in dark mode so every badge is WCAG AA (>= 4.5:1) on its own tint over the
+   card, page and muted surfaces. Light green/amber/red follow the brand risk palette. The
+   ":root" values are the dark theme (the app default). */
+:root,
+.dark {
+  --ls-tone-green: 71 194 137; /* #47C289 */
+  --ls-tone-yellow: 244 164 52; /* #F4A434 */
+  --ls-tone-red: 246 140 144; /* #F68C90 (was #F47E82: 4.4:1 on the brand dark --muted) */
+  --ls-tone-gray: 164 170 183; /* #A4AAB7 */
+  --ls-tone-blue: 127 175 247; /* #7FAFF7 */
+  --ls-tone-orange: 245 145 82; /* #F59152 */
+  --ls-tone-emerald: 69 199 158; /* #45C79E */
+  --ls-tone-purple: 185 151 242; /* #B997F2 */
+  --ls-tone-tint: 0.14;
+}
 
-.bg-yellow-500\/10 { background-color: hsl(38 90% 55% / 0.1); }
-.text-yellow-500 { color: hsl(38 90% 55%); }
-.border-yellow-500\/20 { border-color: hsl(38 90% 55% / 0.2); }
+.light {
+  --ls-tone-green: 29 106 70; /* #1D6A46 */
+  --ls-tone-yellow: 138 76 7; /* #8A4C07 */
+  --ls-tone-red: 188 36 41; /* #BC2429 */
+  --ls-tone-gray: 87 94 107; /* #575E6B */
+  --ls-tone-blue: 31 91 176; /* #1F5BB0 */
+  --ls-tone-orange: 163 72 11; /* #A3480B */
+  --ls-tone-emerald: 28 110 80; /* #1C6E50 */
+  --ls-tone-purple: 112 64 168; /* #7040A8 */
+  --ls-tone-tint: 0.1;
+}
 
-.bg-red-500\/10 { background-color: hsl(358 75% 55% / 0.1); }
-.text-red-500 { color: hsl(358 75% 55%); }
-.border-red-500\/20 { border-color: hsl(358 75% 55% / 0.2); }
+.bg-green-500\/10 { background-color: rgb(var(--ls-tone-green) / var(--ls-tone-tint)); }
+.text-green-500 { color: rgb(var(--ls-tone-green)); }
+.border-green-500\/20 { border-color: rgb(var(--ls-tone-green) / 0.3); }
 
-.bg-blue-500\/10 { background-color: hsl(200 85% 55% / 0.1); }
-.text-blue-500 { color: hsl(200 85% 55%); }
+.bg-yellow-500\/10 { background-color: rgb(var(--ls-tone-yellow) / var(--ls-tone-tint)); }
+.text-yellow-500 { color: rgb(var(--ls-tone-yellow)); }
+.border-yellow-500\/20 { border-color: rgb(var(--ls-tone-yellow) / 0.3); }
 
-.bg-purple-500\/10 { background-color: hsl(270 70% 60% / 0.1); }
-.text-purple-500 { color: hsl(270 70% 60%); }
-.border-purple-500\/20 { border-color: hsl(270 70% 60% / 0.2); }
+.bg-red-500\/10 { background-color: rgb(var(--ls-tone-red) / var(--ls-tone-tint)); }
+.text-red-500 { color: rgb(var(--ls-tone-red)); }
+.border-red-500\/20 { border-color: rgb(var(--ls-tone-red) / 0.3); }
 
-.bg-gray-500\/10 { background-color: hsl(220 10% 50% / 0.1); }
-.text-gray-500 { color: hsl(220 10% 50%); }
+.bg-gray-500\/10 { background-color: rgb(var(--ls-tone-gray) / var(--ls-tone-tint)); }
+.text-gray-500 { color: rgb(var(--ls-tone-gray)); }
+.border-gray-500\/20 { border-color: rgb(var(--ls-tone-gray) / 0.3); }
+
+.bg-blue-500\/10 { background-color: rgb(var(--ls-tone-blue) / var(--ls-tone-tint)); }
+.text-blue-500 { color: rgb(var(--ls-tone-blue)); }
+.border-blue-500\/20 { border-color: rgb(var(--ls-tone-blue) / 0.3); }
+
+.bg-orange-500\/10 { background-color: rgb(var(--ls-tone-orange) / var(--ls-tone-tint)); }
+.text-orange-500 { color: rgb(var(--ls-tone-orange)); }
+.border-orange-500\/20 { border-color: rgb(var(--ls-tone-orange) / 0.3); }
+
+.bg-emerald-500\/10 { background-color: rgb(var(--ls-tone-emerald) / var(--ls-tone-tint)); }
+.text-emerald-500 { color: rgb(var(--ls-tone-emerald)); }
+.border-emerald-500\/20 { border-color: rgb(var(--ls-tone-emerald) / 0.3); }
+
+.bg-purple-500\/10 { background-color: rgb(var(--ls-tone-purple) / var(--ls-tone-tint)); }
+.text-purple-500 { color: rgb(var(--ls-tone-purple)); }
+.border-purple-500\/20 { border-color: rgb(var(--ls-tone-purple) / 0.3); }
 
 /* Visual edits wrapper fix */
 @layer base {
@@ -187,6 +162,11 @@ code, pre, .font-mono {
     display: contents !important;
   }
 }
+
+/* Tailwind's stock yellow-700/800 text (billing trial card) is ~2-3:1 on the dark surfaces;
+   use the dark-theme yellow tone there. Light mode keeps Tailwind's (AA) values. */
+.dark .text-yellow-700,
+.dark .text-yellow-800 { color: rgb(var(--ls-tone-yellow)); }
 
 /* Grid pattern for auth pages */
 .bg-grid-pattern {
