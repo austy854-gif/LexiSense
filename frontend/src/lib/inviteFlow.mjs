@@ -71,7 +71,7 @@ export function readInviteToken(search) {
  * Map an axios error from either invite endpoint to a page state.
  * Note: 409 from the *preview* means "already used"; on *accept* the page
  * shows the server message instead (sole-admin refusal). 403 only comes
- * from accept (wrong password / switched-off account).
+ * from accept (wrong password / deactivated account).
  * @returns {'invalid'|'expired'|'used'|'forbidden'|'rate_limited'|'validation'|'error'}
  */
 export function classifyInviteError(error) {

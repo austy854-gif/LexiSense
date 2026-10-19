@@ -129,6 +129,8 @@ async def test_deactivated_account_is_refused(client, db, org_id, users):
     response = await client.post(ACCEPT_URL, json={"token": "tok-off", "password": PASSWORD})
 
     assert response.status_code == 403
+    # Quinn's approved UI-LOGIN-INACTIVE text; nothing about who or why.
+    assert response.json()["detail"] == "This account is deactivated. Contact your workspace admin."
     assert (await db.users.find_one({"id": "u-off"}))["organizationId"] == "org-other"
 
 

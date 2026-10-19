@@ -108,7 +108,7 @@ export default function AcceptInvitePage() {
       if (kind === 'invalid' || kind === 'expired') {
         setErrorKind(kind);
       } else if (kind === 'forbidden' || kind === 'used') {
-        // 403: wrong password / switched-off account. 409 on accept: the
+        // 403: wrong password / deactivated account. 409 on accept: the
         // server refused the move (sole admin of another team). Show its text.
         toast.error(getErrorInfo(err).message);
       } else if (kind === 'rate_limited') {
