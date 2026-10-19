@@ -133,6 +133,23 @@ export const ADMIN_ROLES = [ROLE_ADMIN];
 export const AUDIT_READER_ROLES = [ROLE_ADMIN, ROLE_MANAGER];
 /** Roles allowed to author/modify contracts (still subject to ownership). */
 export const WRITE_ROLES = [ROLE_USER, ROLE_MANAGER, ROLE_ADMIN];
+/**
+ * Roles allowed to approve, reject or activate a contract. Mirrors
+ * PRIVILEGED_TRANSITION_ROLES in backend/services/workflow_service.py and the
+ * action map in backend/routes/workflow.py (approve/reject/activate).
+ */
+export const APPROVER_ROLES = [ROLE_ADMIN, ROLE_MANAGER];
+
+/**
+ * Workflow actions per contract status and the roles the server permits for
+ * each (backend/routes/workflow.py `action_map`). Keep the two in sync.
+ */
+export const WORKFLOW_ACTIONS = {
+  submit_for_review: { from: 'draft', roles: WRITE_ROLES },
+  approve: { from: 'review', roles: APPROVER_ROLES },
+  reject: { from: 'review', roles: APPROVER_ROLES },
+  activate: { from: 'approved', roles: APPROVER_ROLES },
+};
 
 export function isValidRole(role) {
   return typeof role === 'string' && ROLES.includes(role);
@@ -162,4 +179,21 @@ export function canManageTeam(role) {
 
 export function canManageBilling(role) {
   return hasRole(role, ADMIN_ROLES);
+}
+
+export function canApproveContracts(role) {
+  return hasRole(role, APPROVER_ROLES);
+}
+
+/** True when `role` may perform workflow `action` on a contract in `status`. */
+export function canPerformWorkflowAction(role, action, status) {
+  const rule = WORKFLOW_ACTIONS[action];
+  return Boolean(rule) && rule.from === status && hasRole(role, rule.roles);
+}
+
+/** Workflow actions to show for `role` on a contract in `status`. */
+export function workflowActionsFor(role, status) {
+  return Object.keys(WORKFLOW_ACTIONS).filter((action) =>
+    canPerformWorkflowAction(role, action, status),
+  );
 }

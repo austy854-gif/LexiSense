@@ -21,6 +21,7 @@ import AuditLogPage from './pages/AuditLogPage';
 // import AgenticDashboardPage from './pages/AgenticDashboardPage';
 import BillingPage from './pages/BillingPage';
 import ApprovalRespondPage from './pages/ApprovalRespondPage';
+import AcceptInvitePage from './pages/AcceptInvitePage';
 
 import './App.css';
 
@@ -38,6 +39,8 @@ function App() {
             <Route path="/register" element={<RegisterPage />} />
             {/* Approval email links (token is the credential; no login needed) */}
             <Route path="/approvals/respond" element={<ApprovalRespondPage />} />
+            {/* Team invite email links (?token=...); works signed in or out */}
+            <Route path="/accept-invite" element={<AcceptInvitePage />} />
 
             {/* Home: marketing landing page for logged-out visitors,
                 the dashboard for signed-in users (same URL as before). */}
