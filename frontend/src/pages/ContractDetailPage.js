@@ -91,12 +91,6 @@ export default function ContractDetailPage() {
   const chatEndRef = useRef(null);
 
   useEffect(() => {
-    fetchContract();
-    fetchVersions();
-    fetchWorkflow();
-  }, [fetchContract, fetchVersions, fetchWorkflow]);
-
-  useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
@@ -132,6 +126,16 @@ export default function ContractDetailPage() {
       console.error('Failed to load workflow:', error);
     }
   }, [id]);
+
+  // Must come after the three useCallback fetchers above: the dependency array
+  // is evaluated during render, so referencing them earlier hits the const
+  // temporal dead zone ("Cannot access ... before initialization") and the
+  // whole page falls into the error boundary.
+  useEffect(() => {
+    fetchContract();
+    fetchVersions();
+    fetchWorkflow();
+  }, [fetchContract, fetchVersions, fetchWorkflow]);
 
   const handleWorkflowAction = async (action) => {
     setWorkflowLoading(true);
@@ -234,8 +238,8 @@ export default function ContractDetailPage() {
       <div className="space-y-6" data-testid="contract-detail-page">
         {/* Header */}
         <div className="flex items-start gap-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/contracts')} data-testid="back-btn">
-            <ArrowLeft className="h-5 w-5" />
+          <Button variant="ghost" size="icon" onClick={() => navigate('/contracts')} aria-label="Back to contracts" data-testid="back-btn">
+            <ArrowLeft className="h-5 w-5" aria-hidden="true" />
           </Button>
           <div className="flex-1">
             <div className="flex items-center gap-3 flex-wrap">
@@ -620,8 +624,8 @@ export default function ContractDetailPage() {
                   disabled={chatLoading}
                   data-testid="chat-input"
                 />
-                <Button type="submit" size="icon" disabled={chatLoading || !chatInput.trim()} data-testid="chat-send">
-                  <Send className="h-4 w-4" />
+                <Button type="submit" size="icon" disabled={chatLoading || !chatInput.trim()} aria-label="Send question" data-testid="chat-send">
+                  <Send className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </form>
             </div>
