@@ -7,6 +7,7 @@ import asyncio
 import aiohttp
 import json
 import os
+import sys
 from pathlib import Path
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
@@ -17,6 +18,42 @@ load_dotenv('/app/backend/.env')
 BASE_URL = "http://localhost:8001"
 MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 DB_NAME = os.environ.get('DB_NAME', 'lexisense')
+
+# The agentic routes are feature-flagged. Decide whether /agentic is a
+# forbidden path with the SAME helper server.py uses to decide whether to mount
+# them (utils.feature_flags.enabled_groups), so the two can never drift apart.
+_BACKEND_DIR = str(Path(__file__).resolve().parent / "backend")
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+from utils.feature_flags import enabled_groups as agentic_enabled_groups  # noqa: E402
+
+#: Paths that must never appear in the OpenAPI spec, whatever the flags.
+ALWAYS_FORBIDDEN_PATTERNS = ['/auth/2fa', '/tags', '/reports']
+#: Forbidden only while every agentic feature flag is off (server.py mounts
+#: the agentic router as soon as at least one group is enabled).
+AGENTIC_PATTERN = '/agentic'
+
+
+def forbidden_route_patterns(env_flag=None):
+    """Forbidden OpenAPI path substrings for the current agentic flag state.
+
+    ``env_flag`` is forwarded to ``enabled_groups``; the default reads the
+    process environment exactly like server.py does.
+    """
+    groups = agentic_enabled_groups() if env_flag is None else agentic_enabled_groups(env_flag)
+    if groups:
+        return list(ALWAYS_FORBIDDEN_PATTERNS)
+    return [AGENTIC_PATTERN] + ALWAYS_FORBIDDEN_PATTERNS
+
+
+def find_forbidden_paths(paths, patterns):
+    """Return the paths that contain any of ``patterns`` (in input order)."""
+    return [path for path in paths if any(pattern in path for pattern in patterns)]
+
+
+def describe_patterns(patterns):
+    return ", ".join(patterns[:-1]) + (", or " if len(patterns) > 1 else "") + patterns[-1]
+
 
 # Test credentials
 TEST_EMAIL = "demo@lexisense.com"
@@ -138,36 +175,28 @@ async def test_2_route_prefix_consistency(session):
                         openapi_data = await resp2.json()
                         paths = openapi_data.get('paths', {})
                         
-                        # Check for forbidden routes
-                        forbidden_patterns = ['/agentic', '/auth/2fa', '/tags', '/reports']
-                        found_forbidden = []
-                        for path in paths.keys():
-                            for pattern in forbidden_patterns:
-                                if pattern in path:
-                                    found_forbidden.append(path)
+                        # Check for forbidden routes (/agentic only while its flags are off)
+                        forbidden_patterns = forbidden_route_patterns()
+                        found_forbidden = find_forbidden_paths(paths.keys(), forbidden_patterns)
                         
                         if found_forbidden:
                             print_test("No forbidden routes in OpenAPI", False, f"Found: {found_forbidden}")
                             all_passed = False
                         else:
-                            print_test("No forbidden routes in OpenAPI", True, "No /agentic, /auth/2fa, /tags, or /reports routes")
+                            print_test("No forbidden routes in OpenAPI", True, f"No {describe_patterns(forbidden_patterns)} routes")
             else:
                 openapi_data = await resp.json()
                 paths = openapi_data.get('paths', {})
                 
-                # Check for forbidden routes
-                forbidden_patterns = ['/agentic', '/auth/2fa', '/tags', '/reports']
-                found_forbidden = []
-                for path in paths.keys():
-                    for pattern in forbidden_patterns:
-                        if pattern in path:
-                            found_forbidden.append(path)
+                # Check for forbidden routes (/agentic only while its flags are off)
+                forbidden_patterns = forbidden_route_patterns()
+                found_forbidden = find_forbidden_paths(paths.keys(), forbidden_patterns)
                 
                 if found_forbidden:
                     print_test("No forbidden routes in OpenAPI", False, f"Found: {found_forbidden}")
                     all_passed = False
                 else:
-                    print_test("No forbidden routes in OpenAPI", True, "No /agentic, /auth/2fa, /tags, or /reports routes")
+                    print_test("No forbidden routes in OpenAPI", True, f"No {describe_patterns(forbidden_patterns)} routes")
     except Exception as e:
         print_test("OpenAPI spec check", False, f"Exception: {str(e)}")
         all_passed = False
