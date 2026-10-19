@@ -134,6 +134,31 @@ async def test_deactivated_account_is_refused(client, db, org_id, users):
     assert (await db.users.find_one({"id": "u-off"}))["organizationId"] == "org-other"
 
 
+async def test_wrong_password_error_is_identical_for_active_and_deactivated(client, db, org_id, users):
+    """AD-FR-23: the password is checked before the active flag, so a wrong
+    password can't reveal whether the account is deactivated."""
+    active = make_user("org-other", user_id="u-on", email="on@example.com")
+    inactive = make_user("org-other", user_id="u-off2", email="off2@example.com")
+    inactive["isActive"] = False
+    await _seed(db, org_id, users, active, token="tok-on")
+    await _seed(db, org_id, users, inactive, token="tok-off2")
+
+    on = await client.post(ACCEPT_URL, json={"token": "tok-on", "password": "not-the-password"})
+    off = await client.post(ACCEPT_URL, json={"token": "tok-off2", "password": "not-the-password"})
+
+    assert on.status_code == off.status_code == 403
+    assert on.json() == off.json()
+    assert on.json()["detail"] == (
+        "That password doesn't match your LexiSense account. Use the password you sign in with."
+    )
+    assert "deactivated" not in off.text.lower()
+    # Nothing moved and both invites are still usable.
+    for uid in ("u-on", "u-off2"):
+        assert (await db.users.find_one({"id": uid}))["organizationId"] == "org-other"
+    pending = {"status": "pending", "email": {"$in": ["on@example.com", "off2@example.com"]}}
+    assert await db.invitations.count_documents(pending) == 2
+
+
 async def test_existing_account_join_works_with_a_legacy_plaintext_invite(client, db, org_id, users):
     user = make_user("org-other", user_id="u-leg", email="leg@example.com")
     await _seed(db, org_id, users, user, token="tok-leg", legacy_plaintext=True, role="manager")
