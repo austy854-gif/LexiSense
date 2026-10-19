@@ -54,6 +54,7 @@ from routes import team as team_route  # noqa: E402
 from services import audit_service, email_service  # noqa: E402
 from utils import rbac as rbac_module  # noqa: E402
 from utils.auth import create_access_token, hash_password  # noqa: E402
+from utils.invite_tokens import hash_invite_token  # noqa: E402
 
 API_PREFIX = "/api/v1"
 
@@ -190,15 +191,22 @@ def make_invitation(
     status="pending",
     role="user",
     email=None,
+    legacy_plaintext=False,
 ):
-    """Build an invitation document shaped like ``models.invitation.Invitation``."""
+    """Build an invitation document shaped like ``models.invitation.Invitation``.
+
+    ``token`` is the raw token; only its hash is stored. ``legacy_plaintext``
+    builds a pre-hashing record that stores the raw token in ``token``.
+    """
     invitation = Invitation(
         organizationId=org_id,
         email=email or "invitee@example.com",
         role=role,
         invitedBy=invited_by,
+        tokenHash=hash_invite_token(token or uuid.uuid4().hex),
     ).model_dump()
-    if token:
+    if token and legacy_plaintext:
+        del invitation["tokenHash"]
         invitation["token"] = token
     if expires_at:
         invitation["expiresAt"] = expires_at

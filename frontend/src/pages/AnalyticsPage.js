@@ -377,7 +377,7 @@ export default function AnalyticsPage() {
           <CardContent>
             <div className="flex flex-col sm:flex-row gap-4 mb-6">
               <Select value={compareContract1} onValueChange={setCompareContract1}>
-                <SelectTrigger className="w-full sm:w-64" data-testid="compare-contract-1">
+                <SelectTrigger className="w-full sm:w-64" data-testid="compare-contract-1" aria-label="First contract to compare">
                   <SelectValue placeholder="Select first contract" />
                 </SelectTrigger>
                 <SelectContent>
@@ -387,7 +387,7 @@ export default function AnalyticsPage() {
                 </SelectContent>
               </Select>
               <Select value={compareContract2} onValueChange={setCompareContract2}>
-                <SelectTrigger className="w-full sm:w-64" data-testid="compare-contract-2">
+                <SelectTrigger className="w-full sm:w-64" data-testid="compare-contract-2" aria-label="Second contract to compare">
                   <SelectValue placeholder="Select second contract" />
                 </SelectTrigger>
                 <SelectContent>

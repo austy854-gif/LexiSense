@@ -2,7 +2,6 @@ from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import uuid
-import secrets
 
 
 class InvitationCreate(BaseModel):
@@ -17,7 +16,9 @@ class Invitation(BaseModel):
     organizationId: str
     email: str
     role: str = "user"
-    token: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
+    # sha256 hex of the raw invite token (see utils.invite_tokens). The raw
+    # token is never stored; it only appears in the emailed accept link.
+    tokenHash: str
     status: str = "pending"
     invitedBy: str
     expiresAt: str = Field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=7)).isoformat())
@@ -34,6 +35,11 @@ class AcceptInvitationRequest(BaseModel):
     password: str = Field(min_length=8)
     firstName: Optional[str] = None
     lastName: Optional[str] = None
+
+
+class InvitationPreviewRequest(BaseModel):
+    """Body model for POST /team/accept-invite/preview (token stays out of URLs)."""
+    token: str = Field(min_length=1)
 
 
 class MemberRoleUpdate(BaseModel):

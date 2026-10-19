@@ -136,7 +136,7 @@ export default function AuditLogPage() {
             <p className="text-muted-foreground mt-1">Track all actions across your organization</p>
           </div>
           <Select value={resourceFilter} onValueChange={setResourceFilter}>
-            <SelectTrigger className="w-full sm:w-48" data-testid="audit-filter">
+            <SelectTrigger className="w-full sm:w-48" data-testid="audit-filter" aria-label="Filter by type">
               <SelectValue placeholder="Filter by type" />
             </SelectTrigger>
             <SelectContent>
