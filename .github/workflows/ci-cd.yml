@@ -257,6 +257,12 @@ jobs:
           cache: 'yarn'
           # The lockfile lives in frontend/, not at the repo root.
           cache-dependency-path: frontend/yarn.lock
+      - name: Run node:test unit tests (apiHelpers)
+        # src/lib/apiHelpers.test.mjs uses node's built-in test runner, and
+        # CRA's Jest testMatch does not pick up .mjs files, so `yarn test`
+        # never ran it. It imports nothing outside src/lib, so it runs before
+        # (and independently of) the yarn install.
+        run: node --test src/lib/apiHelpers.test.mjs
       - name: Install dependencies
         run: yarn install --frozen-lockfile
       - name: Run tests

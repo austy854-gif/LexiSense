@@ -24,11 +24,24 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Endpoints where a 401 means "wrong credentials", not "session expired".
+// The calling page shows its own error for these, so the interceptor must not
+// clear the session and hard-reload /login (that wiped the toast).
+const AUTH_ENDPOINT_PATTERN = /\/auth\/(login|register)\/?(\?.*)?$/;
+
+export function isAuthEndpoint(url) {
+  return typeof url === 'string' && AUTH_ENDPOINT_PATTERN.test(url);
+}
+
+export function shouldRedirectOnUnauthorized(error) {
+  return error?.response?.status === 401 && !isAuthEndpoint(error?.config?.url);
+}
+
 // Handle auth errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (shouldRedirectOnUnauthorized(error)) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';

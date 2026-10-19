@@ -21,6 +21,24 @@ function asMessage(value) {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+/** Friendly copy for failures that carry no usable server message. */
+export const NETWORK_ERROR_MESSAGE = "We couldn't reach LexiSense. Check your connection and try again.";
+export const TOO_LARGE_MESSAGE = 'That file is too large. Try a PDF or .txt file under 10 MB.';
+export const GENERIC_ERROR_MESSAGE = 'Something went wrong. Please try again.';
+
+/**
+ * A response body that is a bare string is only shown when it reads like a
+ * human sentence. Proxies and load balancers answer 413/502/504 with HTML
+ * pages, and those must never be rendered into a toast.
+ */
+function asPlainTextMessage(value) {
+  const text = asMessage(value);
+  if (!text) return null;
+  if (/<\/?[a-z!][^>]*>/i.test(text)) return null;
+  if (text.length > 300) return null;
+  return text;
+}
+
 /**
  * Normalise any axios error into a stable, UI-friendly shape.
  *
@@ -37,14 +55,32 @@ export function getErrorInfo(error) {
     (data && typeof data.code === 'string' && data.code) ||
     null;
 
-  const message =
-    asMessage(envelope && envelope.message) ||
-    asMessage(data && data.detail) ||
-    asMessage(data) ||
-    asMessage(error && error.message) ||
-    'Something went wrong. Please try again.';
-
   const status = response && typeof response.status === 'number' ? response.status : null;
+
+  // Never fall back to `error.message`: for axios errors it is technical text
+  // such as "Network Error" or "Request failed with status code 502".
+  let message;
+  if (!response) {
+    // No HTTP response at all: offline, DNS, CORS, timeout or aborted upload.
+    message = error && (error.request || error.isAxiosError || error.code)
+      ? NETWORK_ERROR_MESSAGE
+      : GENERIC_ERROR_MESSAGE;
+  } else if (status === 413) {
+    // Our API answers 413 with a JSON `detail`; show it. A proxy or load
+    // balancer answers with an HTML page (or nothing usable), so fall back.
+    message =
+      asPlainTextMessage(envelope && envelope.message) ||
+      asPlainTextMessage(data && typeof data === 'object' ? data.detail : null) ||
+      TOO_LARGE_MESSAGE;
+  } else {
+    message =
+      asMessage(envelope && envelope.message) ||
+      asMessage(data && data.detail) ||
+      // Bare-string bodies on 5xx come from the server or a proxy
+      // ("Internal Server Error", gateway pages), never from our handlers.
+      (status < 500 ? asPlainTextMessage(data) : null) ||
+      GENERIC_ERROR_MESSAGE;
+  }
   const requestId = (data && typeof data.requestId === 'string' && data.requestId) || null;
 
   const details = envelope && envelope.details;
