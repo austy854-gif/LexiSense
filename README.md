@@ -51,7 +51,7 @@ The following are deliberately **not** V1 requirements: OCR for scanned PDFs, an
 
 ### Prerequisites
 - Node.js 18+ and yarn
-- Python 3.12+
+- Python 3.13+
 - MongoDB (local or Atlas)
 - Emergent LLM Key (from [emergent.sh](https://emergent.sh))
 - Resend API Key (from [resend.com](https://resend.com))
