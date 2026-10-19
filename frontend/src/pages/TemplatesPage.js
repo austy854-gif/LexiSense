@@ -59,10 +59,6 @@ export default function TemplatesPage() {
     tags: '',
   });
 
-  useEffect(() => {
-    fetchTemplates();
-  }, [fetchTemplates]);
-
   const fetchTemplates = useCallback(async () => {
     try {
       const params = {};
@@ -77,6 +73,12 @@ export default function TemplatesPage() {
       setLoading(false);
     }
   }, [searchQuery, typeFilter]);
+
+  // Declared after the useCallback: reading a `const` in the deps array before
+  // its declaration throws (temporal dead zone) and crashes the page.
+  useEffect(() => {
+    fetchTemplates();
+  }, [fetchTemplates]);
 
   const handleCreate = async (e) => {
     e.preventDefault();
