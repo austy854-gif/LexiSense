@@ -31,3 +31,15 @@ export function trialEndsLabel(trialEndDate, { locale, timeZone } = {}) {
   });
   return `Trial ends ${formatted}`;
 }
+
+/**
+ * What the "Free trial" plan card shows (B6). The trial can't be bought or
+ * restarted (signup starts it for free), so the card never has a button:
+ * - null: hide the card (paid "team" or "cancelled" orgs, or tier unknown)
+ * - "Current plan": on the trial and it hasn't ended
+ * - "Trial ended": on the trial but the end date has passed or is unknown
+ */
+export function trialCardStatus(subscriptionTier, trialEndDate, now = new Date()) {
+  if (subscriptionTier !== 'trial') return null;
+  return isTrialActive(trialEndDate, now) ? 'Current plan' : 'Trial ended';
+}
