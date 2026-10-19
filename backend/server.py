@@ -323,14 +323,24 @@ def _probe_config(env_var: str) -> dict:
     return {"status": "degraded", "details": "Not configured"}
 
 
+_COMMIT_SHA_RE = re.compile(r"[0-9a-fA-F]{7,40}")
+
+
 def _commit_sha() -> str:
     """Short git SHA of the running build, from Railway's RAILWAY_GIT_COMMIT_SHA.
 
     Read at request time (like the config probes above), so it always reflects
     the process environment. Unset, empty or whitespace-only -> "unknown".
+    Anything that is not 7-40 hex characters (malformed) also -> "unknown",
+    and this never raises, so it cannot fail /health.
     """
-    sha = get_env("RAILWAY_GIT_COMMIT_SHA")
-    return sha[:7] if sha else "unknown"
+    try:
+        sha = get_env("RAILWAY_GIT_COMMIT_SHA")
+        if sha and _COMMIT_SHA_RE.fullmatch(sha):
+            return sha[:7].lower()
+    except Exception:  # pragma: no cover - defensive; /health must not fail
+        pass
+    return "unknown"
 
 
 # Health check endpoint with detailed checks. MUST be registered on

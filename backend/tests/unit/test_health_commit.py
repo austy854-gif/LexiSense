@@ -82,7 +82,7 @@ async def test_commit_is_read_per_request(health_server, monkeypatch):
 @pytest.mark.parametrize("value, expected", [
     (FULL_SHA, "b73dacb"),
     (f"  {FULL_SHA}\r\n", "b73dacb"),  # surrounding whitespace is stripped (utils.env.get_env)
-    ("abc12", "abc12"),                # shorter than 7 chars: returned as-is
+    (FULL_SHA.upper(), "b73dacb"),     # uppercase hex is normalised
 ])
 def test_commit_sha_helper(health_server, monkeypatch, value, expected):
     monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", value)
@@ -98,3 +98,30 @@ async def test_existing_health_fields_unchanged(health_server, monkeypatch):
     assert isinstance(body["timestamp"], float)
     assert set(body["checks"]) == {"database", "storage", "ai", "email"}
     assert body["checks"]["database"] == {"status": "healthy", "details": "Connected"}
+
+
+@pytest.mark.parametrize("value", [
+    "abc12",                      # too short
+    "not-a-sha",                  # not hex
+    "b73dacb0addb9575f34627bbb619f4bb67c1374a0",  # longer than 40
+    "b73dacb 0addb",              # embedded whitespace
+    "<script>alert(1)</script>",
+    "\u00e9" * 10,                # non-ASCII
+])
+async def test_commit_unknown_when_malformed(health_server, monkeypatch, value):
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", value)
+    assert health_server._commit_sha() == "unknown"
+    body = await _get_health(health_server)
+    assert body["commit"] == "unknown"
+
+
+async def test_commit_lookup_error_never_fails_health(health_server, monkeypatch):
+    class _BoomRe:
+        def fullmatch(self, *_a, **_k):
+            raise RuntimeError("sha check failed")
+
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", FULL_SHA)
+    monkeypatch.setattr(health_server, "_COMMIT_SHA_RE", _BoomRe())
+    assert health_server._commit_sha() == "unknown"
+    body = await _get_health(health_server)  # asserts 200
+    assert body["commit"] == "unknown"
