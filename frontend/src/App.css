@@ -168,6 +168,21 @@ code, pre, .font-mono {
 .dark .text-yellow-700,
 .dark .text-yellow-800 { color: rgb(var(--ls-tone-yellow)); }
 
+/* Indigo tone (Team "manager" role badge). Tailwind's stock indigo-500 is ~4.0:1 on its tint in
+   light and ~3.3:1 in dark; same treatment as the --ls-tone-* badges above. */
+:root,
+.dark {
+  --ls-tone-indigo: 170 166 250; /* #AAA6FA */
+}
+
+.light {
+  --ls-tone-indigo: 67 56 202; /* #4338CA */
+}
+
+.bg-indigo-500\/10 { background-color: rgb(var(--ls-tone-indigo) / var(--ls-tone-tint)); }
+.text-indigo-500 { color: rgb(var(--ls-tone-indigo)); }
+.border-indigo-500\/20 { border-color: rgb(var(--ls-tone-indigo) / 0.3); }
+
 /* Grid pattern for auth pages */
 .bg-grid-pattern {
   background-image: 

@@ -168,7 +168,8 @@ for (const theme of themes) {
     const page = await ctx.newPage();
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e)));
-    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 300)); });
+    // Third-party fonts/scripts are blocked on purpose; ignore their load failures.
+    page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('ERR_FAILED')) errors.push(m.text().slice(0, 300)); });
     await page.goto(origin + route, { waitUntil: 'networkidle' });
     await page.waitForTimeout(400); // let charts/animations settle
     const htmlClass = await page.evaluate(() => document.documentElement.className);
@@ -176,7 +177,7 @@ for (const theme of themes) {
     const crashed = await page.evaluate(() => (document.getElementById('root')?.innerText || '').trim() === 'Something went wrong');
     if (crashed) {
       crashes += 1;
-      const why = errors.find((e) => !e.includes('ERR_FAILED')) || 'unknown error';
+      const why = errors[0] || 'unknown error';
       console.log(`CRASH [${theme}] ${route}  page did not render, not checked: ${why.split('\n')[0]}`);
       report.push({ theme, route, htmlClass, crashed: true, errors });
       await ctx.close();
@@ -189,7 +190,10 @@ for (const theme of themes) {
         : { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] } };
       const r = await window.axe.run(document, opts);
       const slim = (v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.map((n) => ({ target: n.target.join(' '), summary: n.failureSummary?.split('\n').slice(1).join(' ').trim() })) });
-      return { violations: r.violations.map(slim), incompleteContrast: (r.incomplete.find((v) => v.id === 'color-contrast')?.nodes.length) || 0, passes: r.passes.length };
+      const inc = r.incomplete.find((v) => v.id === 'color-contrast');
+      // "incomplete" = axe could not decide (text over gradients/images, SVG chart text, ...): review by hand.
+      const incomplete = inc ? inc.nodes.map((n) => ({ target: n.target.join(' '), reason: (n.any[0]?.message || '').slice(0, 160) })) : [];
+      return { violations: r.violations.map(slim), incompleteContrast: incomplete.length, incomplete, passes: r.passes.length };
     }, !process.env.AXE_ALL);
     if (process.env.AXE_SHOTS) await page.screenshot({ path: path.join(process.env.AXE_SHOTS, `${theme}${route.replace(/\//g, '_') || '_'}.png`), fullPage: true });
     const n = result.violations.reduce((s, v) => s + v.nodes.length, 0);

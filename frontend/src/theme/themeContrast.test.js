@@ -28,11 +28,12 @@ const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m);
 const mix = (fg, bg, a) => fg.map((v, i) => v * a + bg[i] * (1 - a));
 
 // ---- token parsing ----
+// All rule bodies for a selector (it may appear in several rules, e.g. ":root,\n.dark {").
 const block = (css, selector) => {
-  const re = new RegExp(`(^|[\\s,}])${selector.replace('.', '\\.')}\\s*\\{([^}]*)\\}`, 'm');
-  const m = css.match(re);
-  if (!m) throw new Error(`no ${selector} block`);
-  return m[2];
+  const re = new RegExp(`(^|[\\s,}])${selector.replace('.', '\\.')}\\s*\\{([^}]*)\\}`, 'gm');
+  const bodies = [...css.matchAll(re)].map((m) => m[2]);
+  if (!bodies.length) throw new Error(`no ${selector} block`);
+  return bodies.join('\n');
 };
 const vars = (body) => Object.fromEntries(
   [...body.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]),
