@@ -210,11 +210,19 @@ export default function BillingPage() {
   }[accessState] || 'No active subscription';
 
   const renderAction = (action, { testId, full = false } = {}) => {
+    if (action.kind === CTA_CHECKOUT && !checkoutAvailable) {
+      // No purchasable price configured: say so instead of a dead button.
+      return (
+        <p className="text-sm text-muted-foreground" data-testid={testId}>
+          Checkout isn't available right now. Please contact support to subscribe.
+        </p>
+      );
+    }
     if (action.kind === CTA_CHECKOUT) {
       return (
         <Button
           onClick={handleCheckout}
-          disabled={checkoutLoading || !checkoutAvailable}
+          disabled={checkoutLoading}
           className={`gap-2${full ? ' w-full' : ''}`}
           data-testid={testId}
         >

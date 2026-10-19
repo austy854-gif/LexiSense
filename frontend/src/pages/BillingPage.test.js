@@ -177,3 +177,13 @@ test('a failed load shows an error with retry instead of dead buttons', async ()
   await click(buttons().find((b) => b.textContent.includes('Try again')));
   expect(q('billing-primary-action').textContent).toContain('Upgrade to Team plan');
 });
+
+test('no purchasable interval: explanation instead of a checkout button', async () => {
+  billingAPI.getPlans.mockResolvedValue({
+    data: { plans: [PLANS[0], { ...PLANS[1], intervals: [], prices: {} }] },
+  });
+  await render('trial');
+  expect(q('billing-primary-action').tagName).toBe('P');
+  expect(q('billing-primary-action').textContent).toMatch(/contact support/);
+  expect(q('plan-card-team').querySelector('button')).toBeNull();
+});
