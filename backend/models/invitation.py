@@ -37,6 +37,11 @@ class AcceptInvitationRequest(BaseModel):
     lastName: Optional[str] = None
 
 
+class InvitationPreviewRequest(BaseModel):
+    """Body model for POST /team/accept-invite/preview (token stays out of URLs)."""
+    token: str = Field(min_length=1)
+
+
 class MemberRoleUpdate(BaseModel):
     """Body model for PATCH /team/members/{member_id}/role.
 

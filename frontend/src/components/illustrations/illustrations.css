@@ -1,0 +1,34 @@
+/*
+ * Empty-state illustration colours (lexisense-brand/illustrations/README.md).
+ * Hex values from the light/dark illustration files. The app's current
+ * --accent token is still the old purple and there is no --highlight token
+ * yet (the Steady Blue theme diff isn't applied), so the README's
+ * token-based mapping would draw purple tints; use the brand hex values.
+ * :root is the app's default (dark) palette; ThemeContext adds .light/.dark.
+ */
+:root,
+.dark {
+  --ls-illo-line: #4288F0;
+  --ls-illo-fill: #1F2F47;
+  --ls-illo-fill-opacity: 1;
+  --ls-illo-paper: #181D25;
+  --ls-illo-muted: #3A4150;
+  --ls-illo-muted-opacity: 1;
+  --ls-illo-accent: #F49325;
+}
+
+.light {
+  --ls-illo-line: #0D4AA5;
+  --ls-illo-fill: #E7EEF9;
+  --ls-illo-fill-opacity: 1;
+  --ls-illo-paper: #FFFFFF;
+  --ls-illo-muted: #C9CFDA;
+  --ls-illo-muted-opacity: 1;
+  --ls-illo-accent: #E9820C;
+}
+
+.ls-illustration {
+  display: block;
+  height: auto;
+  max-width: 100%;
+}
