@@ -356,7 +356,7 @@ jobs:
         # them are still caught. Both files were created in 0e278ef, so there
         # is no earlier history to cover.
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@e63326d6545de8f425d93ce24078c6e68d83f70e # v3.99.3
         with:
           path: ./
           base: 0e278ef78bd9c7277eddfdd479f68f6ae11a240a
