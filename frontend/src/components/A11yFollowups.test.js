@@ -78,14 +78,14 @@ describe('Contracts page names', () => {
 });
 
 describe('PaginationBar', () => {
-  test('prev/next names contain their visible text', async () => {
+  test('previous/next names contain their visible text', async () => {
     await render(<PaginationBar page={2} totalPages={3} total={30} pageSize={10} onPageChange={() => {}} onPageSizeChange={() => {}} />);
     for (const id of ['page-prev', 'page-next']) {
       const b = byTestId(id);
       // axe matches whole words, so the visible word must appear as a word in the name.
       expect(b.getAttribute('aria-label').toLowerCase().split(/\s+/)).toContain(b.textContent.trim().toLowerCase());
     }
-    expect(byTestId('page-prev').getAttribute('aria-label')).toBe('Prev page');
+    expect(byTestId('page-prev').getAttribute('aria-label')).toBe('Previous page');
     expect(byTestId('page-next').getAttribute('aria-label')).toBe('Next page');
     expect(await axeViolations()).toEqual([]);
   });
