@@ -36,6 +36,20 @@ let webpackConfig = {
       },
     },
   },
+  // Jest (react-scripts 5 ships Jest 27):
+  // - jest/exportsResolver.js adds package.json "exports" support, which Jest 27
+  //   lacks (react-router v7 and Radix import subpaths through it).
+  // - map the webpack `@` -> src alias used by the shadcn ui components.
+  jest: {
+    configure: (jestConfig) => ({
+      ...jestConfig,
+      resolver: path.resolve(__dirname, 'jest/exportsResolver.js'),
+      moduleNameMapper: {
+        ...(jestConfig.moduleNameMapper || {}),
+        '^@/(.*)$': '<rootDir>/src/$1',
+      },
+    }),
+  },
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
