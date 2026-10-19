@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, versionsAPI, workflowAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
-import { canWriteContracts, getErrorInfo } from '../lib/apiHelpers.mjs';
+import { canPerformWorkflowAction, canWriteContracts, getErrorInfo } from '../lib/apiHelpers.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -78,6 +78,9 @@ export default function ContractDetailPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const canWrite = canWriteContracts(user?.role);
+  // Workflow buttons follow the server's role check (routes/workflow.py):
+  // submit = admin/manager/user; approve, reject, activate = admin/manager.
+  const canDo = (action) => canPerformWorkflowAction(user?.role, action, contract?.status);
   const [contract, setContract] = useState(null);
   const [loading, setLoading] = useState(true);
   const [chatMessages, setChatMessages] = useState([]);
@@ -89,12 +92,6 @@ export default function ContractDetailPage() {
   const [workflowData, setWorkflowData] = useState(null);
   const [workflowLoading, setWorkflowLoading] = useState(false);
   const chatEndRef = useRef(null);
-
-  useEffect(() => {
-    fetchContract();
-    fetchVersions();
-    fetchWorkflow();
-  }, [fetchContract, fetchVersions, fetchWorkflow]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -132,6 +129,16 @@ export default function ContractDetailPage() {
       console.error('Failed to load workflow:', error);
     }
   }, [id]);
+
+  // Must come after the three useCallback fetchers above: the dependency array
+  // is evaluated during render, so referencing them earlier hits the const
+  // temporal dead zone ("Cannot access ... before initialization") and the
+  // whole page falls into the error boundary.
+  useEffect(() => {
+    fetchContract();
+    fetchVersions();
+    fetchWorkflow();
+  }, [fetchContract, fetchVersions, fetchWorkflow]);
 
   const handleWorkflowAction = async (action) => {
     setWorkflowLoading(true);
@@ -275,23 +282,23 @@ export default function ContractDetailPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-wrap" data-testid="workflow-actions">
-                {canWrite && contract.status === 'draft' && (
+                {canDo('submit_for_review') && (
                   <Button size="sm" onClick={() => handleWorkflowAction('submit_for_review')} disabled={workflowLoading} data-testid="workflow-submit">
                     {workflowLoading ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1 h-3.5 w-3.5" />}
                     Submit for Review
                   </Button>
                 )}
-                {canWrite && contract.status === 'review' && (
-                  <>
-                    <Button size="sm" variant="default" onClick={() => handleWorkflowAction('approve')} disabled={workflowLoading} data-testid="workflow-approve">
-                      <CheckCircle className="mr-1 h-3.5 w-3.5" /> Approve
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => handleWorkflowAction('reject')} disabled={workflowLoading} data-testid="workflow-reject">
-                      <XCircle className="mr-1 h-3.5 w-3.5" /> Reject
-                    </Button>
-                  </>
+                {canDo('approve') && (
+                  <Button size="sm" variant="default" onClick={() => handleWorkflowAction('approve')} disabled={workflowLoading} data-testid="workflow-approve">
+                    <CheckCircle className="mr-1 h-3.5 w-3.5" /> Approve
+                  </Button>
                 )}
-                {canWrite && contract.status === 'approved' && (
+                {canDo('reject') && (
+                  <Button size="sm" variant="outline" onClick={() => handleWorkflowAction('reject')} disabled={workflowLoading} data-testid="workflow-reject">
+                    <XCircle className="mr-1 h-3.5 w-3.5" /> Reject
+                  </Button>
+                )}
+                {canDo('activate') && (
                   <Button size="sm" onClick={() => handleWorkflowAction('activate')} disabled={workflowLoading} data-testid="workflow-activate">
                     <CheckCircle className="mr-1 h-3.5 w-3.5" /> Activate
                   </Button>

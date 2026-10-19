@@ -1,0 +1,20 @@
+Subject: {{inviter_name}} invited you to LexiSense
+Preview: Join {{organization_name}} and see your team's contracts in one place.
+
+Hi there,
+
+{{inviter_name}} invited you to join {{organization_name}} on LexiSense, where your team keeps its contracts in one place.
+
+Team:        {{organization_name}}
+Invited by:  {{inviter_name}}
+Your role:   {{role_label}}
+
+Accept invite: {{accept_url}}
+
+Not sure what LexiSense is? See how it works: https://lexisense.net/#how-it-works
+
+This invite expires in 7 days. If you weren't expecting it, you can ignore this email.
+
+--
+LexiSense · https://lexisense.net
+You're getting this because {{inviter_name}} invited {{invitee_email}} to LexiSense.
