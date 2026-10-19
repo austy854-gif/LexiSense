@@ -139,7 +139,7 @@ async def test_2_route_prefix_consistency(session):
                         paths = openapi_data.get('paths', {})
                         
                         # Check for forbidden routes
-                        forbidden_patterns = ['/agentic', '/twofa', '/tags', '/reports']
+                        forbidden_patterns = ['/agentic', '/auth/2fa', '/tags', '/reports']
                         found_forbidden = []
                         for path in paths.keys():
                             for pattern in forbidden_patterns:
@@ -150,13 +150,13 @@ async def test_2_route_prefix_consistency(session):
                             print_test("No forbidden routes in OpenAPI", False, f"Found: {found_forbidden}")
                             all_passed = False
                         else:
-                            print_test("No forbidden routes in OpenAPI", True, "No /agentic, /twofa, /tags, or /reports routes")
+                            print_test("No forbidden routes in OpenAPI", True, "No /agentic, /auth/2fa, /tags, or /reports routes")
             else:
                 openapi_data = await resp.json()
                 paths = openapi_data.get('paths', {})
                 
                 # Check for forbidden routes
-                forbidden_patterns = ['/agentic', '/twofa', '/tags', '/reports']
+                forbidden_patterns = ['/agentic', '/auth/2fa', '/tags', '/reports']
                 found_forbidden = []
                 for path in paths.keys():
                     for pattern in forbidden_patterns:
@@ -167,7 +167,7 @@ async def test_2_route_prefix_consistency(session):
                     print_test("No forbidden routes in OpenAPI", False, f"Found: {found_forbidden}")
                     all_passed = False
                 else:
-                    print_test("No forbidden routes in OpenAPI", True, "No /agentic, /twofa, /tags, or /reports routes")
+                    print_test("No forbidden routes in OpenAPI", True, "No /agentic, /auth/2fa, /tags, or /reports routes")
     except Exception as e:
         print_test("OpenAPI spec check", False, f"Exception: {str(e)}")
         all_passed = False
