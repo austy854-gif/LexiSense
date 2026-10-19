@@ -323,6 +323,26 @@ def _probe_config(env_var: str) -> dict:
     return {"status": "degraded", "details": "Not configured"}
 
 
+_COMMIT_SHA_RE = re.compile(r"[0-9a-fA-F]{7,40}")
+
+
+def _commit_sha() -> str:
+    """Short git SHA of the running build, from Railway's RAILWAY_GIT_COMMIT_SHA.
+
+    Read at request time (like the config probes above), so it always reflects
+    the process environment. Unset, empty or whitespace-only -> "unknown".
+    Anything that is not 7-40 hex characters (malformed) also -> "unknown",
+    and this never raises, so it cannot fail /health.
+    """
+    try:
+        sha = get_env("RAILWAY_GIT_COMMIT_SHA")
+        if sha and _COMMIT_SHA_RE.fullmatch(sha):
+            return sha[:7].lower()
+    except Exception:  # pragma: no cover - defensive; /health must not fail
+        pass
+    return "unknown"
+
+
 # Health check endpoint with detailed checks. MUST be registered on
 # `api_router` BEFORE `app.include_router(api_router)` -- otherwise the
 # route is silently dropped (this is exactly the Gate 2 release-stopper
@@ -363,6 +383,7 @@ async def health_check():
         "version": "2.0.0",
         "checks": checks,
         "timestamp": time.time(),
+        "commit": _commit_sha(),
     }
 
 

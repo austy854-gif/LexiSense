@@ -42,7 +42,7 @@ async def _m001_backfill_billing_trial_limits(db) -> None:
     """
     await db.organization_billing.update_many(
         {"trialContractsLimit": {"$exists": False}},
-        {"$set": {"trialContractsLimit": 3}},
+        {"$set": {"trialContractsLimit": 25}},
     )
     await db.organization_billing.update_many(
         {"trialContractsUsed": {"$exists": False}},
@@ -83,6 +83,20 @@ async def _m003_hash_invitation_tokens(db) -> None:
     logger.info("Hashed %d legacy invitation token(s)", migrated)
 
 
+async def _m004_raise_trial_contract_cap(db) -> None:
+    """Raise the trial contract cap from 3 to 25 on existing trial records.
+
+    Only touches billing records on the trial tier whose limit is still the
+    old default of 3. Paid/cancelled records and any custom limit are left
+    alone, so re-running is a no-op.
+    """
+    result = await db.organization_billing.update_many(
+        {"subscriptionTier": "trial", "trialContractsLimit": 3},
+        {"$set": {"trialContractsLimit": 25}},
+    )
+    logger.info("Raised trial contract cap on %d billing record(s)", result.modified_count)
+
+
 # ---------------------------------------------------------------------------
 # Migration registry -- append-only, numbered.
 # ---------------------------------------------------------------------------
@@ -91,6 +105,7 @@ MIGRATIONS: List[Migration] = [
     {"version": 1, "name": "backfill_billing_trial_limits", "run": _m001_backfill_billing_trial_limits},
     {"version": 2, "name": "add_ai_analysis_status", "run": _m002_add_ai_analysis_status},
     {"version": 3, "name": "hash_invitation_tokens", "run": _m003_hash_invitation_tokens},
+    {"version": 4, "name": "raise_trial_contract_cap", "run": _m004_raise_trial_contract_cap},
 ]
 
 
