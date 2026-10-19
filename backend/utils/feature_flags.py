@@ -37,3 +37,16 @@ APPROVAL_EMAILS_FLAG = "APPROVAL_EMAILS_ENABLED"
 
 def approval_emails_enabled(env_flag: Callable[[str], bool] = flag_enabled) -> bool:
     return env_flag(APPROVAL_EMAILS_FLAG)
+
+
+#: Billing UI (Billing page, nav entry, Upgrade buttons, price displays).
+#: Default OFF while pricing is not final. Read at request time and exposed to
+#: the frontend via GET /billing/config, so it can be flipped with an env change
+#: and a restart -- no frontend rebuild. When off, user-facing billing messages
+#: point to support instead of the hidden Billing page. Stripe webhooks and
+#: entitlement enforcement are unaffected.
+BILLING_UI_FLAG = "BILLING_UI_ENABLED"
+
+
+def billing_ui_enabled(env_flag: Callable[[str], bool] = flag_enabled) -> bool:
+    return env_flag(BILLING_UI_FLAG)

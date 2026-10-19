@@ -103,6 +103,10 @@ class SubscriptionInfo(BaseModel):
     gracePeriodEndsAt: Optional[str] = None
     #: Non-blocking warning to show the user (e.g. during the grace period).
     warning: Optional[str] = None
+    #: Past due beyond the grace period: view/list/download only.
+    readOnly: bool = False
+    #: BILLING_UI_ENABLED at request time (the Billing page is hidden when off).
+    billingUiEnabled: bool = False
 
 
 class WebhookEvent(BaseModel):

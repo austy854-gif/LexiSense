@@ -22,7 +22,7 @@ from utils.rbac import (
 )
 from services.email_service import send_invitation_email
 from services.audit_service import log_action
-from routes.billing import get_entitlement
+from routes.billing import ensure_invite_access, get_entitlement
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/team", tags=["Team"])
@@ -140,6 +140,8 @@ async def invite_member(
             detail="Invitation already sent to this email"
         )
 
+    # Read-only (past due beyond the grace period): no new invitations.
+    await ensure_invite_access(current_user["organizationId"])
     # Plan member cap (members + open invitations), from the plan config.
     await _enforce_seat_limit_for_invite(current_user["organizationId"])
 

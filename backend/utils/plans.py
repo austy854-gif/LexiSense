@@ -45,8 +45,9 @@ from utils.env import get_env
 
 logger = logging.getLogger(__name__)
 
-#: Plan id of the (currently only) paid plan. Paid orgs whose stored price ID is
-#: unknown fall back to this plan's limits.
+#: Plan id of the (currently only) paid plan; the default checkout ``planId``.
+#: (An org whose stored Stripe price is unknown gets NO paid plan -- there is no
+#: fallback to this plan's limits.)
 DEFAULT_PAID_PLAN_ID = "team"
 
 _DEFAULTS = {

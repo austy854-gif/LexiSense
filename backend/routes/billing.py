@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, Request
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 from datetime import datetime, timezone, timedelta
+import asyncio
 import logging
 import stripe
 from pymongo.errors import DuplicateKeyError
@@ -20,6 +21,8 @@ from models.billing import (
 )
 from utils.auth import get_current_user, require_role
 from utils.env import get_env
+from utils.feature_flags import billing_ui_enabled
+from services.stripe_prices import reconcile_display_price
 from utils.plans import (
     CHECKOUT_INTERVALS,
     PlanConfig,
@@ -76,16 +79,50 @@ ACCESS_INACTIVE = "inactive"
 #: Team subscription whose Stripe price isn't in the plan config: no access.
 ACCESS_UNVERIFIED_PLAN = "unverified_plan"
 
+# User-facing messages. Each has a "billing UI on" form (points to the Billing
+# page / Stripe portal) and a "billing UI off" form: while BILLING_UI_ENABLED is
+# off the Billing page is hidden, so messages must not send users to it.
 MSG_TRIAL_EXPIRED = "Your free trial has ended. Please upgrade to continue using LexiSense."
 MSG_PAST_DUE = (
-    "Your last payment failed. Please update your payment method in the billing "
-    "portal to continue using LexiSense."
+    "Your last payment failed, so your account is read-only. Please update your "
+    "payment method in the billing portal to restore uploads, AI analysis, chat "
+    "and invitations."
 )
 MSG_CANCELLED = "Your subscription has been cancelled. Please resubscribe to continue using LexiSense."
 MSG_UNVERIFIED_PLAN = (
     "We couldn't verify your subscription plan. Please contact support so we can fix your account."
 )
 MSG_INACTIVE = "Your subscription is not active. Please complete checkout or contact support."
+
+MSG_TRIAL_EXPIRED_NO_BILLING_UI = (
+    "Your free trial has ended. Please contact support to continue using LexiSense."
+)
+MSG_PAST_DUE_NO_BILLING_UI = (
+    "Your last payment failed, so your account is read-only. Please contact "
+    "support to restore uploads, AI analysis, chat and invitations."
+)
+MSG_CANCELLED_NO_BILLING_UI = (
+    "Your subscription has been cancelled. Please contact support to continue using LexiSense."
+)
+MSG_INACTIVE_NO_BILLING_UI = "Your subscription is not active. Please contact support."
+
+
+def _billing_ui() -> bool:
+    return billing_ui_enabled()
+
+
+def _blocked_message(state: str) -> str:
+    """Message for a blocked access state, matching whether the Billing UI is visible."""
+    ui = _billing_ui()
+    if state == ACCESS_TRIAL_EXPIRED:
+        return MSG_TRIAL_EXPIRED if ui else MSG_TRIAL_EXPIRED_NO_BILLING_UI
+    if state == ACCESS_PAST_DUE:
+        return MSG_PAST_DUE if ui else MSG_PAST_DUE_NO_BILLING_UI
+    if state == ACCESS_CANCELLED:
+        return MSG_CANCELLED if ui else MSG_CANCELLED_NO_BILLING_UI
+    if state == ACCESS_UNVERIFIED_PLAN:
+        return MSG_UNVERIFIED_PLAN
+    return MSG_INACTIVE if ui else MSG_INACTIVE_NO_BILLING_UI
 
 
 @dataclass(frozen=True)
@@ -109,6 +146,13 @@ class Entitlement:
     @property
     def is_paid(self) -> bool:
         return self.state == ACCESS_PAID
+
+    @property
+    def read_only(self) -> bool:
+        """Past-due beyond the grace period: existing contracts stay viewable,
+        listable and downloadable; uploads, AI analysis, chat and new
+        invitations are blocked with the payment-failed message."""
+        return self.state == ACCESS_PAST_DUE
 
 
 def _billing_get(billing: Union[OrganizationBilling, dict, None], key: str, default=None):
@@ -162,6 +206,11 @@ def _grace_warning(grace_end: datetime, now: datetime) -> str:
     remaining = grace_end - now
     days = max(1, -(-remaining // timedelta(days=1)))  # ceil, at least 1
     unit = "day" if days == 1 else "days"
+    if not _billing_ui():
+        return (
+            f"Your last payment failed. Please contact support within {days} {unit} "
+            "to keep full access to LexiSense."
+        )
     return (
         "Your last payment failed. Please update your payment method in the billing "
         f"portal within {days} {unit} to keep using LexiSense."
@@ -184,7 +233,10 @@ def compute_entitlement(billing: Union[OrganizationBilling, dict, None], now: Op
     * Team tier with Stripe status ``active`` or ``trialing`` -> paid: unlimited
       uploads, AI access, the plan's member cap.
     * Team tier ``past_due`` -> still entitled (with a warning) for
-      ``BILLING_PAST_DUE_GRACE_DAYS`` after ``pastDueSince``, then blocked.
+      ``BILLING_PAST_DUE_GRACE_DAYS`` after ``pastDueSince``, then READ-ONLY
+      (``ACCESS_PAST_DUE``): contracts can still be viewed, listed and
+      downloaded; uploads, AI, chat and new invitations are blocked.
+    * Team tier whose Stripe price isn't in the plan config -> no access.
     * Other non-paid Team statuses -> blocked (not relabelled as a trial).
     * Cancelled tier -> blocked.
     * Trial tier -> in-app trial: AI + capped uploads until ``trialEndDate``.
@@ -202,7 +254,8 @@ def compute_entitlement(billing: Union[OrganizationBilling, dict, None], now: Op
                 _billing_get(billing, "organizationId"), _billing_get(billing, "stripePriceId"),
             )
             return Entitlement(
-                ACCESS_UNVERIFIED_PLAN, None, False, False, 0, trial.max_members, MSG_UNVERIFIED_PLAN
+                ACCESS_UNVERIFIED_PLAN, None, False, False, 0, trial.max_members,
+                _blocked_message(ACCESS_UNVERIFIED_PLAN),
             )
         if billing_status in PAID_BILLING_STATUSES:
             return Entitlement(ACCESS_PAID, plan.id, True, True, plan.max_uploads, plan.max_members)
@@ -214,19 +267,28 @@ def compute_entitlement(billing: Union[OrganizationBilling, dict, None], now: Op
                     warning=_grace_warning(grace_end, now), grace_ends_at=grace_end,
                 )
             return Entitlement(
-                ACCESS_PAST_DUE, plan.id, False, False, 0, plan.max_members, MSG_PAST_DUE,
+                ACCESS_PAST_DUE, plan.id, False, False, 0, plan.max_members, _blocked_message(ACCESS_PAST_DUE),
                 grace_ends_at=grace_end,
             )
         if billing_status == BillingStatus.CANCELLED:
-            return Entitlement(ACCESS_CANCELLED, plan.id, False, False, 0, plan.max_members, MSG_CANCELLED)
-        return Entitlement(ACCESS_INACTIVE, plan.id, False, False, 0, plan.max_members, MSG_INACTIVE)
+            return Entitlement(
+                ACCESS_CANCELLED, plan.id, False, False, 0, plan.max_members, _blocked_message(ACCESS_CANCELLED)
+            )
+        return Entitlement(
+            ACCESS_INACTIVE, plan.id, False, False, 0, plan.max_members, _blocked_message(ACCESS_INACTIVE)
+        )
 
     if tier == SubscriptionTier.CANCELLED:
-        return Entitlement(ACCESS_CANCELLED, None, False, False, 0, trial.max_members, MSG_CANCELLED)
+        return Entitlement(
+            ACCESS_CANCELLED, None, False, False, 0, trial.max_members, _blocked_message(ACCESS_CANCELLED)
+        )
 
     trial_end = _parse_iso(_billing_get(billing, "trialEndDate"))
     if trial_end is not None and now > trial_end:
-        return Entitlement(ACCESS_TRIAL_EXPIRED, None, False, False, 0, trial.max_members, MSG_TRIAL_EXPIRED)
+        return Entitlement(
+            ACCESS_TRIAL_EXPIRED, None, False, False, 0, trial.max_members,
+            _blocked_message(ACCESS_TRIAL_EXPIRED),
+        )
     return Entitlement(ACCESS_TRIAL, None, True, False, trial.upload_limit, trial.max_members)
 
 
@@ -239,7 +301,8 @@ def has_live_subscription(billing) -> bool:
 
 
 def _trial_limit_message(limit: int) -> str:
-    return f"You've reached the trial limit of {limit} contract uploads. Please upgrade to continue."
+    next_step = "Please upgrade to continue." if _billing_ui() else "Please contact support to continue."
+    return f"You've reached the trial limit of {limit} contract uploads. {next_step}"
 
 
 async def get_or_create_billing(org_id: str, database=None) -> OrganizationBilling:
@@ -282,6 +345,18 @@ async def ensure_ai_access(org_id: str) -> Entitlement:
     """Raise 403 unless the org may spend AI credits (active trial or paid)."""
     entitlement = await get_entitlement(org_id)
     if not entitlement.can_use_ai:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
+    return entitlement
+
+
+async def ensure_invite_access(org_id: str) -> Entitlement:
+    """Raise 403 when the org is read-only (past due beyond the grace period).
+
+    Only the read-only state blocks invitations; trial / cancelled orgs keep
+    today's behaviour (seat caps still apply via the member limit).
+    """
+    entitlement = await get_entitlement(org_id)
+    if entitlement.read_only:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
     return entitlement
 
@@ -458,7 +533,20 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
         pastDueSince=billing.pastDueSince if billing.billingStatus == BillingStatus.PAST_DUE else None,
         gracePeriodEndsAt=_iso(entitlement.grace_ends_at) if entitlement.grace_ends_at else None,
         warning=entitlement.warning or None,
+        readOnly=entitlement.read_only,
+        billingUiEnabled=billing_ui_enabled(),
     )
+
+
+@router.get("/config")
+async def get_billing_config():
+    """Runtime billing flags for the frontend (no auth: nothing sensitive).
+
+    ``billingUiEnabled`` mirrors BILLING_UI_ENABLED (default off). While off the
+    frontend hides the Billing page, its nav entry, Upgrade buttons and every
+    price display.
+    """
+    return {"billingUiEnabled": billing_ui_enabled()}
 
 
 def resolve_checkout_price(request: CheckoutSessionRequest) -> Tuple[PlanConfig, str]:
@@ -966,15 +1054,34 @@ def _subscription_price_id(subscription) -> Optional[str]:
         return None
 
 
+def _plan_prices(plan: PlanConfig) -> dict:
+    """Display prices per checkout interval, reconciled with Stripe (B9)."""
+    prices = {}
+    for checkout_interval in CHECKOUT_INTERVALS:
+        shown = reconcile_display_price(plan, checkout_interval)
+        if shown is not None:
+            prices[checkout_interval] = shown.as_dict()
+    return prices
+
+
 @router.get("/plans")
 async def get_plans():
-    """Get available pricing plans (rendered from the server-side plan config)."""
+    """Get available pricing plans (rendered from the server-side plan config).
+
+    Paid-plan prices are checked against the Stripe Price objects for the
+    configured price IDs; on a mismatch Stripe's amount is served (and an error
+    logged), so the page never advertises a price other than the one charged.
+    """
     trial = get_trial_config()
+    paid_plans = list(get_paid_plans().values())
+    # Stripe lookups are blocking network calls (cached); keep them off the loop.
+    paid_prices = await asyncio.to_thread(lambda: [_plan_prices(p) for p in paid_plans])
     plans = [
         {
             "id": "trial",
             "name": "Free Trial",
             "price": 0,
+            "currency": paid_plans[0].currency if paid_plans else "usd",
             "interval": "month",
             "trialDays": trial.days,
             "uploadLimit": trial.upload_limit,
@@ -990,7 +1097,8 @@ async def get_plans():
             "cta": "Start Free Trial"
         }
     ]
-    for plan in get_paid_plans().values():
+    for plan, prices in zip(paid_plans, paid_prices):
+        monthly = prices.get("monthly")
         members = (
             f"Team collaboration (up to {plan.max_members} members)"
             if plan.max_members
@@ -1004,8 +1112,12 @@ async def get_plans():
         plans.append({
             "id": plan.id,
             "name": plan.name,
-            "price": plan.price_monthly,
-            "interval": plan.interval,
+            # Monthly price (Stripe-verified when possible); ``prices`` has
+            # every purchasable interval.
+            "price": monthly["amount"] if monthly else None,
+            "currency": monthly["currency"] if monthly else plan.currency,
+            "interval": monthly["interval"] if monthly else plan.interval,
+            "prices": prices,
             "uploadLimit": plan.max_uploads,
             "memberLimit": plan.max_members,
             "features": [
@@ -1024,7 +1136,7 @@ async def get_plans():
             ],
             "cta": f"Upgrade to {plan.name.replace(' Plan', '')}",
             # Intervals the client may request at checkout (no price IDs).
-            "intervals": [i for i in CHECKOUT_INTERVALS if plan.price_for_interval(i)],
+            "intervals": [i for i in CHECKOUT_INTERVALS if plan.price_for_interval(i) and i in prices],
         })
     return {"plans": plans}
 
