@@ -190,7 +190,8 @@ async def test_plans_endpoint_renders_from_config(http, billing_env):
     billing_env.setenv("BILLING_TEAM_PRICE_ANNUAL", "1290")
     body = (await http.get(f"{API_PREFIX}/billing/plans")).json()
     trial, team = body["plans"]
-    assert "14-day free trial" in trial["features"]
+    assert "Free trial" in trial["features"] and trial["trialDays"] == 14
+    assert not any("day" in f for f in trial["features"])  # no trial length in copy
     assert "Up to 25 contract uploads" in trial["features"]
     assert team["price"] == 129
     assert "priceId" not in team and "price_" not in str(body)  # no Stripe IDs reach the client

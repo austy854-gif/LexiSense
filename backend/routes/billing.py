@@ -1087,7 +1087,10 @@ async def get_plans():
             "uploadLimit": trial.upload_limit,
             "memberLimit": trial.max_members,
             "features": [
-                f"{trial.days}-day free trial",
+                # No trial length in user-facing copy (it's configuration; same
+                # rule as fix/upload-feedback-and-errors). ``trialDays`` stays
+                # available as data.
+                "Free trial",
                 f"Up to {trial.upload_limit} contract uploads",
                 "AI contract analysis",
                 "Contract repository",

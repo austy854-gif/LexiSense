@@ -21,7 +21,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const PLANS = [
   {
     id: 'trial', name: 'Free Trial', price: 0, currency: 'usd', interval: 'month',
-    trialDays: 14, uploadLimit: 25, memberLimit: 3, features: ['14-day free trial'], cta: 'Start Free Trial',
+    trialDays: 14, uploadLimit: 25, memberLimit: 3, features: ['Free trial'], cta: 'Start Free Trial',
   },
   {
     id: 'team', name: 'Team Plan', price: 59, currency: 'usd', interval: 'month', memberLimit: 12,
@@ -157,12 +157,13 @@ test('non-admins see an explanation instead of buttons', async () => {
   expect(q('plan-card-team').querySelector('button')).toBeNull();
 });
 
-test('copy and limits come from /billing/plans (no hard-coded 7-day, 3 or $49)', async () => {
+test('limits and prices come from /billing/plans; no trial length, no hard-coded 3 or $49', async () => {
   await render('trial');
   const text = container.textContent;
   expect(text).toContain('5 / 25 contracts used');
   expect(text).toContain('25 per trial');
-  expect(text).toContain('When your 14-day trial ends or you reach the 25-contract limit');
+  expect(text).toContain('When your trial ends or you reach the 25-contract limit');
+  expect(text).not.toMatch(/\d+-day/); // trial length is never stated
   expect(text).toContain('flat $59/month for your entire team (up to 12 members)');
   expect(text).not.toMatch(/7-day|\$49|3-contract|3 per trial/);
 });

@@ -565,8 +565,8 @@ export default function BillingPage() {
                   What happens when my trial ends?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  {trialPlan
-                    ? `When your ${trialPlan.trialDays}-day trial ends or you reach the ${trialPlan.uploadLimit}-contract limit, you'll need to subscribe to the Team plan to keep uploading and analyzing contracts.`
+                  {trialPlan?.uploadLimit != null
+                    ? `When your trial ends or you reach the ${trialPlan.uploadLimit}-contract limit, you'll need to subscribe to the Team plan to keep uploading and analyzing contracts.`
                     : "When your trial ends or you reach the trial's contract limit, you'll need to subscribe to the Team plan to keep uploading and analyzing contracts."}{' '}
                   Your contracts and data are preserved, and you can still view and download them.
                 </p>
