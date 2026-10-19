@@ -20,6 +20,10 @@ from utils.auth import get_current_user, require_role
 from utils.env import get_env
 
 logger = logging.getLogger(__name__)
+
+# Shown verbatim in the upload toast. Do not put the trial length here: it is
+# configuration, and user-facing copy must not state a number of days.
+TRIAL_ENDED_MESSAGE = "Your free trial has ended. Upgrade to keep adding contracts."
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
 db = None
@@ -77,7 +81,7 @@ async def check_trial_access(org_id: str) -> tuple[bool, str]:
     if billing.trialEndDate:
         trial_end = datetime.fromisoformat(billing.trialEndDate.replace("Z", "+00:00"))
         if datetime.now(timezone.utc) > trial_end:
-            return False, "Your free trial has ended. Upgrade to keep adding contracts."
+            return False, TRIAL_ENDED_MESSAGE
 
     # Check contract upload limit
     if billing.trialContractsUsed >= billing.trialContractsLimit:
@@ -115,7 +119,7 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
     if trial_end_str:
         trial_end = datetime.fromisoformat(trial_end_str.replace("Z", "+00:00"))
         if datetime.now(timezone.utc) > trial_end:
-            return False, "Your free trial has ended. Upgrade to keep adding contracts."
+            return False, TRIAL_ENDED_MESSAGE
 
     # Atomic conditional increment: only succeeds if we're strictly below the limit.
     result = await db.organization_billing.find_one_and_update(
@@ -479,6 +483,7 @@ async def get_plans():
                 "price": 0,
                 "interval": "month",
                 "features": [
+                    "Free trial",
                     "Limited contract uploads",
                     "AI contract analysis",
                     "Contract repository",

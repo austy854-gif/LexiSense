@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { Button } from '../components/ui/button';
 import { Layout } from '../components/Layout';
 import { dashboardAPI } from '../api';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -13,6 +14,7 @@ import {
   Users,
   TrendingUp,
   ArrowRight,
+  RefreshCw,
 } from 'lucide-react';
 
 // "Expiring Soon" card when nothing expires in the dashboard's 30-day window.
@@ -86,17 +88,24 @@ const StatusBadge = ({ status }) => {
 export default function DashboardPage() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     fetchStats();
   }, []);
 
   const fetchStats = async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
       const response = await dashboardAPI.getStats();
       setStats(response.data);
     } catch (error) {
       console.error('Failed to fetch stats:', error);
+      // Without this, a failed load renders zeros and "No contracts yet",
+      // which looks exactly like an empty account.
+      setStats(null);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -112,6 +121,25 @@ export default function DashboardPage() {
               <Skeleton key={i} className="h-32" />
             ))}
           </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Layout>
+        <div className="space-y-6" data-testid="dashboard-page">
+          <Card data-testid="dashboard-load-error" role="alert">
+            <CardContent className="p-8 text-center space-y-4">
+              <AlertTriangle className="h-10 w-10 mx-auto text-muted-foreground" />
+              <p className="text-base font-medium">We couldn't load your dashboard.</p>
+              <Button onClick={fetchStats} data-testid="dashboard-retry">
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Try again
+              </Button>
+            </CardContent>
+          </Card>
         </div>
       </Layout>
     );
