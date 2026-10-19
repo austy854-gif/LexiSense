@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<!--
+  LexiSense ACCOUNT email: Team invite (DRAFT, not sent)
+  Variant: account mail (invite, password reset, welcome). Live-type, so there's no pending banner and no
+  unsubscribe or notification-settings rows, by design (account mail, not marketing).
+  Copy: lexisense-copy/transactional-emails.md. Claim rules apply (see README.md).
+  Placeholders: {{double_brace}} values are filled by the app at send time. They're listed in README.md
+  "Account variant: placeholders". The ones written {{name|there}} are "value or fallback"; in Jinja use
+  {{ name or 'there' }}.
+  Before production: host the header PNGs and replace the https://lexisense.net/brand/email/... URLs.
+  BLOCKER: /accept-invite has no page in the app yet. Don't send this until that route works (Cindy owns the fix).
+-->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no, url=no">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
+  <title>{{inviter_name}} invited you to LexiSense</title>
+  <!--[if mso]>
+  <noscript><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+  <style>table, td, p, a, h1, li { font-family: Arial, Helvetica, sans-serif !important; }</style>
+  <![endif]-->
+  <style>
+    :root { color-scheme: light dark; supported-color-schemes: light dark; }
+    body { margin: 0 !important; padding: 0 !important; width: 100% !important; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table { border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { border: 0; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
+    a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !important; }
+    u + #body a { color: inherit; text-decoration: none; }
+    @media screen and (max-width: 620px) {
+      .ls-container { width: 100% !important; }
+      .ls-pad { padding-left: 24px !important; padding-right: 24px !important; }
+      .ls-head { padding-left: 16px !important; padding-right: 24px !important; }
+      .ls-h1 { font-size: 24px !important; line-height: 32px !important; }
+      .ls-btn a { display: block !important; }
+    }
+    /* Dark mode: Apple Mail, iOS Mail, Outlook for Mac/iOS. Gmail ignores this block. */
+    @media (prefers-color-scheme: dark) {
+      .ls-bg { background-color: #11151D !important; }
+      .ls-card { background-color: #181D25 !important; }
+      .ls-text { color: #F0F1F5 !important; }
+      .ls-muted { color: #A4AAB7 !important; }
+      .ls-link { color: #6FA3F5 !important; }
+      .ls-rule { border-color: #303540 !important; }
+      .ls-btn-cell { background-color: #4288F0 !important; }
+      .ls-btn-link { background-color: #4288F0 !important; color: #0E121B !important; }
+      .ls-logo-light { display: none !important; }
+      .ls-panel { background-color: #1F2F47 !important; }
+      .ls-logo-dark { display: block !important; max-height: none !important; overflow: visible !important; }
+    }
+    /* Outlook.com / Outlook apps dark mode */
+    [data-ogsc] .ls-text { color: #F0F1F5 !important; }
+    [data-ogsc] .ls-muted { color: #A4AAB7 !important; }
+    [data-ogsc] .ls-link { color: #6FA3F5 !important; }
+  </style>
+</head>
+<body id="body" class="ls-bg" style="margin:0; padding:0; background-color:#FCFAF8;">
+  <!-- SLOT: preview text -->
+  <div style="display:none; font-size:1px; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden; mso-hide:all;">Join {{organization_name}} and see your team's contracts in one place.&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;</div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="ls-bg" style="background-color:#FCFAF8;">
+    <tr>
+      <td align="center" style="padding:32px 12px;">
+        <!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td><![endif]-->
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" class="ls-container" style="width:600px; max-width:600px;">
+
+          <!-- Header (logo B, opaque PNG) -->
+          <tr>
+            <td class="ls-card ls-head" style="background-color:#FFFFFF; border-radius:12px 12px 0 0; padding:20px 40px 0 32px;" align="left">
+              <a href="https://lexisense.net" target="_blank" style="text-decoration:none;">
+                <img class="ls-logo-light" src="https://lexisense.net/brand/email/lexisense-email-header-light@2x.png" width="215" alt="LexiSense" style="display:block; width:215px; max-width:215px; height:auto; color:#19202E; font-family:Arial, sans-serif; font-size:22px; font-weight:bold;">
+                <!--[if !mso]><!-->
+                <img class="ls-logo-dark" src="https://lexisense.net/brand/email/lexisense-email-header-dark@2x.png" width="215" alt="LexiSense" style="display:none; width:215px; max-width:215px; height:auto; max-height:0; overflow:hidden; mso-hide:all;">
+                <!--<![endif]-->
+              </a>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td class="ls-card ls-pad" style="background-color:#FFFFFF; padding:16px 40px 8px 40px; font-family:Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+              <!-- SLOT: H1 (26 characters or fewer) -->
+              <h1 class="ls-text ls-h1" style="margin:0 0 20px 0; font-size:26px; line-height:34px; font-weight:700; color:#19202E; letter-spacing:-0.3px;">You're invited</h1>
+              <!-- SLOT: greeting + intro -->
+              <p class="ls-text" style="margin:0 0 16px 0; font-size:16px; line-height:26px; color:#19202E;">Hi there,</p>
+              <p class="ls-text" style="margin:0 0 16px 0; font-size:16px; line-height:26px; color:#19202E;">{{inviter_name}} invited you to join <strong>{{organization_name}}</strong> on LexiSense, where your team keeps its contracts in one place.</p>
+              <!-- SLOT: details panel (optional) -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="ls-panel" style="background-color:#E7EEF9; border-radius:8px; margin:0 0 28px 0;">
+                <tr><td style="padding:16px 20px;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td class="ls-muted" width="120" valign="top" style="padding:4px 0; font-size:14px; line-height:22px; color:#4B5363;">Team</td><td class="ls-text" style="padding:4px 0; font-size:15px; line-height:22px; color:#19202E; font-weight:600;">{{organization_name}}</td></tr>
+                    <tr><td class="ls-muted" width="120" valign="top" style="padding:4px 0; font-size:14px; line-height:22px; color:#4B5363;">Invited by</td><td class="ls-text" style="padding:4px 0; font-size:15px; line-height:22px; color:#19202E; font-weight:600;">{{inviter_name}}</td></tr>
+                    <tr><td class="ls-muted" width="120" valign="top" style="padding:4px 0; font-size:14px; line-height:22px; color:#4B5363;">Your role</td><td class="ls-text" style="padding:4px 0; font-size:15px; line-height:22px; color:#19202E; font-weight:600;">{{role_label}}</td></tr>
+                  </table>
+                </td></tr>
+              </table>
+              <!-- SLOT: primary button -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="ls-btn" style="margin:0 0 24px 0;">
+                <tr>
+                  <td class="ls-btn-cell" align="center" style="border-radius:8px; background-color:#0D4AA5;">
+                    <!--[if mso]>
+                    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{{accept_url}}" style="height:48px; v-text-anchor:middle; width:180px;" arcsize="17%" stroke="f" fillcolor="#0D4AA5">
+                      <w:anchorlock/>
+                      <center style="color:#FFFFFF; font-family:Arial, sans-serif; font-size:16px; font-weight:bold;">Accept invite</center>
+                    </v:roundrect>
+                    <![endif]-->
+                    <!--[if !mso]><!-->
+                    <a href="{{accept_url}}" target="_blank" class="ls-btn-link" style="display:inline-block; padding:14px 28px; font-family:Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:16px; line-height:20px; font-weight:600; color:#FFFFFF; text-decoration:none; border-radius:8px; background-color:#0D4AA5;">Accept invite</a>
+                    <!--<![endif]-->
+                  </td>
+                </tr>
+              </table>
+              <!-- SLOT: secondary line (optional) -->
+              <p class="ls-text" style="margin:0 0 16px 0; font-size:15px; line-height:24px; color:#19202E;">Not sure what LexiSense is? <a href="https://lexisense.net/#how-it-works" target="_blank" class="ls-link" style="color:#0D4AA5; text-decoration:underline;">See how it works</a></p>
+              <!-- SLOT: small note -->
+              <p class="ls-muted" style="margin:0 0 32px 0; font-size:14px; line-height:22px; color:#4B5363;">This invite expires in 7 days. If you weren't expecting it, you can ignore this email.</p>
+            </td>
+          </tr>
+
+          <!-- Footer (account mail: no unsubscribe or notification-settings rows) -->
+          <tr>
+            <td class="ls-card ls-pad" style="background-color:#FFFFFF; border-radius:0 0 12px 12px; padding:0 40px 32px 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td class="ls-rule" style="border-top:1px solid #DCDFE4; font-size:0; line-height:0; height:24px;">&nbsp;</td></tr>
+                <tr>
+                  <td class="ls-muted" style="font-family:Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:13px; line-height:20px; color:#575E6B;">
+                    <p style="margin:0 0 8px 0;"><strong class="ls-text" style="color:#19202E;">LexiSense</strong> &middot; <a href="https://lexisense.net" target="_blank" class="ls-link" style="color:#0D4AA5; text-decoration:underline;">lexisense.net</a></p>
+                    <!-- SLOT: footer reason line -->
+                    <p style="margin:0;">You're getting this because {{inviter_name}} invited {{invitee_email}} to LexiSense.</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+        <!--[if mso]></td></tr></table><![endif]-->
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

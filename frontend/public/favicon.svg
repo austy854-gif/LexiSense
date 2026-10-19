@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>LexiSense</title>
+  <style>@media (prefers-color-scheme: dark) { .t { fill: #2F6FD6; } .k { stroke: #2F6FD6; } }</style>
+  <rect width="512" height="512" rx="96" fill="#0D4AA5" class="t"/>
+  <path d="M104.0 116.0 Q104.0 80.0 140.0 80.0 L310.0 80.0 Q320.0 80.0 327.1 87.1 L400.9 160.9 Q408.0 168.0 408.0 178.0 L408.0 396.0 Q408.0 432.0 372.0 432.0 L140.0 432.0 Q104.0 432.0 104.0 396.0 Z" fill="#FFFFFF"/>
+  <path d="M176 284 L236 344 L340 232" fill="none" stroke="#0D4AA5" class="k" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

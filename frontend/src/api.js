@@ -24,11 +24,24 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Endpoints where a 401 means "wrong credentials", not "session expired".
+// The calling page shows its own error for these, so the interceptor must not
+// clear the session and hard-reload /login (that wiped the toast).
+const AUTH_ENDPOINT_PATTERN = /\/auth\/(login|register)\/?(\?.*)?$/;
+
+export function isAuthEndpoint(url) {
+  return typeof url === 'string' && AUTH_ENDPOINT_PATTERN.test(url);
+}
+
+export function shouldRedirectOnUnauthorized(error) {
+  return error?.response?.status === 401 && !isAuthEndpoint(error?.config?.url);
+}
+
 // Handle auth errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (shouldRedirectOnUnauthorized(error)) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';
@@ -68,8 +81,11 @@ export const teamAPI = {
   cancelInvitation: (id) => api.delete(`/team/invitations/${id}`),
   updateRole: (memberId, role) => api.patch(`/team/members/${memberId}/role`, { role }),
   removeMember: (memberId) => api.delete(`/team/members/${memberId}`),
-  acceptInvite: (token, password, firstName, lastName) =>
-    api.post('/team/accept-invite', { token, password, firstName, lastName }),
+  // Public (no auth): the invite token is the credential. It always travels in
+  // a POST body, never a query string, so it stays out of API access logs.
+  previewInvite: (token) => api.post('/team/accept-invite/preview', { token }),
+  // payload: { token, password, firstName?, lastName? } (see lib/inviteFlow.mjs)
+  acceptInvite: (payload) => api.post('/team/accept-invite', payload),
 };
 
 // Dashboard API
