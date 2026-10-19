@@ -150,6 +150,24 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
             status=IntakeStatus.RECEIVED,
         )
 
+        # Billing gate BEFORE storing attachments or calling the AI classifier:
+        # an emailed contract is an upload plus AI work, so orgs without AI
+        # entitlement (trial ended, cancelled, read-only past due, unverified
+        # plan) get a record of the email for manual review and nothing else.
+        from routes.billing import SKIPPED_NO_ENTITLEMENT, background_ai_entitlement
+
+        if await background_ai_entitlement(organization_id, db, f"email intake from {from_email}") is None:
+            intake.status = IntakeStatus.MANUAL_REVIEW
+            intake_doc = intake.model_dump()
+            intake_doc.update({
+                "error_message": "Not processed: the organization's plan does not include uploads or AI analysis right now.",
+                "processing_skip_reason": "no_ai_entitlement",
+                "playbook_analysis_status": SKIPPED_NO_ENTITLEMENT,
+                "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            await db.contract_intakes.insert_one(intake_doc)
+            return {"status": SKIPPED_NO_ENTITLEMENT, "intake_id": intake.id, "reason": "no_ai_entitlement"}
+
         # Process attachments
         processed_attachments = []
         for attachment in attachments:

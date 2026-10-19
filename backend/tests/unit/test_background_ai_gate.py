@@ -183,3 +183,61 @@ async def test_missing_billing_record_starts_trial(task_db):
     assert ent is not None and ent.state == "trial"
     assert await task_db.organization_billing.count_documents({"organizationId": "org-new"}) == 1
     assert await background_ai_entitlement(None, task_db, "test") is None
+
+
+# --------------------------------------------------------------------------
+# Email intake: no attachment storage and no AI classification without entitlement
+# --------------------------------------------------------------------------
+@pytest.fixture
+def intake_fakes(monkeypatch):
+    import services.ai_service as ai_service
+    import services.storage_service as storage_service
+
+    calls = {"classify": [], "s3": []}
+
+    async def resolve(sender, db):
+        return ORG
+
+    async def classify(**kwargs):
+        calls["classify"].append(kwargs)
+        return {"contract_type": "NDA", "counterparty": "Acme", "confidence": 0.9}
+
+    async def upload(**kwargs):
+        calls["s3"].append(kwargs["filename"])
+        return f"{ORG}/{kwargs['filename']}"
+
+    async def no_contract(intake, classification, db):
+        return None
+
+    monkeypatch.setattr(intake_tasks, "_resolve_organization_from_sender", resolve)
+    monkeypatch.setattr(ai_service, "classify_intake_contract", classify)
+    monkeypatch.setattr(storage_service, "upload_file_to_s3", upload)
+    monkeypatch.setattr(intake_tasks, "_create_contract_from_intake", no_contract)
+    return calls
+
+
+INTAKE_PAYLOAD = {
+    "created_at": "2026-10-19T12:00:00Z",
+    "data": {
+        "id": "em_1", "from": "legal@acme.test", "subject": "NDA",
+        "attachments": [{"filename": "nda.txt", "content_type": "text/plain", "content": "VGVybTogMSB5ZWFy"}],
+    },
+}
+
+
+@pytest.mark.parametrize("name", list(BLOCKED))
+async def test_email_intake_not_classified_or_stored_without_entitlement(task_db, intake_fakes, name):
+    await _billing(task_db, BLOCKED[name])
+    result = await intake_tasks._process_resend_webhook_async(INTAKE_PAYLOAD)
+    assert result["status"] == "skipped" and result["reason"] == "no_ai_entitlement"
+    assert intake_fakes == {"classify": [], "s3": []}
+    doc = await task_db.contract_intakes.find_one({"id": result["intake_id"]})
+    assert doc["organizationId"] == ORG and doc["status"] == "manual_review"
+    assert doc["processing_skip_reason"] == "no_ai_entitlement" and doc["attachments"] == []
+
+
+async def test_email_intake_classified_with_entitlement(task_db, intake_fakes):
+    await _billing(task_db, ENTITLED["paid"])
+    result = await intake_tasks._process_resend_webhook_async(INTAKE_PAYLOAD)
+    assert result["status"] == "success", result
+    assert len(intake_fakes["classify"]) == 1 and intake_fakes["s3"] == ["nda.txt"]
