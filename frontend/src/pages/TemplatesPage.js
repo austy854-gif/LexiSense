@@ -292,16 +292,20 @@ export default function TemplatesPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleCopyContent(template.content)}
+                    aria-label={`Copy the text of ${template.name}`}
+                    data-testid={`copy-template-${template.id}`}
                   >
-                    <Copy className="h-4 w-4" />
+                    <Copy className="h-4 w-4" aria-hidden="true" />
                   </Button>
                   {!template.isPublic && !template.id.startsWith('default-') && (
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => handleDelete(template.id)}
+                      aria-label={`Delete ${template.name}`}
+                      data-testid={`delete-template-${template.id}`}
                     >
-                      <Trash2 className="h-4 w-4 text-destructive" />
+                      <Trash2 className="h-4 w-4 text-destructive" aria-hidden="true" />
                     </Button>
                   )}
                 </div>

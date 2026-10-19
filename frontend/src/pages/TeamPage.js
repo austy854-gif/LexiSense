@@ -171,6 +171,10 @@ export default function TeamPage() {
     return member.email[0].toUpperCase();
   };
 
+  // Name used in the row action labels ("Actions for Jackson Lee"); falls back to the email.
+  const memberLabel = (member) =>
+    `${member.firstName || ''} ${member.lastName || ''}`.trim() || member.email;
+
   const formatDate = (dateStr) => {
     if (!dateStr) return '-';
     return new Date(dateStr).toLocaleDateString();
@@ -345,8 +349,13 @@ export default function TeamPage() {
                         {member.id !== user.id && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon">
-                                <MoreVertical className="h-4 w-4" />
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                aria-label={`Actions for ${memberLabel(member)}`}
+                                data-testid={`member-actions-${member.id}`}
+                              >
+                                <MoreVertical className="h-4 w-4" aria-hidden="true" />
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
@@ -438,8 +447,10 @@ export default function TeamPage() {
                             variant="ghost"
                             size="icon"
                             onClick={() => handleCancelInvitation(invite.id)}
+                            aria-label={`Cancel the invite for ${invite.email}`}
+                            data-testid={`cancel-invite-${invite.id}`}
                           >
-                            <XCircle className="h-4 w-4 text-destructive" />
+                            <XCircle className="h-4 w-4 text-destructive" aria-hidden="true" />
                           </Button>
                         )}
                       </TableCell>
