@@ -809,7 +809,7 @@ export default function IntakeDashboardPage() {
                 value={filters.status}
                 onValueChange={handleStatusFilter}
               >
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-[180px]" aria-label="Filter by status">
                   <SelectValue placeholder="All Statuses" />
                 </SelectTrigger>
                 <SelectContent>

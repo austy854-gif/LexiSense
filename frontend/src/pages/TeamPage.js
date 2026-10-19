@@ -228,7 +228,7 @@ export default function TeamPage() {
                       value={inviteData.role}
                       onValueChange={(value) => setInviteData({ ...inviteData, role: value })}
                     >
-                      <SelectTrigger data-testid="invite-role">
+                      <SelectTrigger id="role" data-testid="invite-role">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

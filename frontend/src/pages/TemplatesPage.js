@@ -168,12 +168,12 @@ export default function TemplatesPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Contract Type</Label>
+                    <Label htmlFor="templateContractType">Contract Type</Label>
                     <Select
                       value={newTemplate.contractType}
                       onValueChange={(v) => setNewTemplate({ ...newTemplate, contractType: v })}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger id="templateContractType">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -238,7 +238,7 @@ export default function TemplatesPage() {
                 />
               </div>
               <Select value={typeFilter} onValueChange={setTypeFilter}>
-                <SelectTrigger className="w-full sm:w-40">
+                <SelectTrigger className="w-full sm:w-40" aria-label="Filter by type">
                   <SelectValue placeholder="Filter by type" />
                 </SelectTrigger>
                 <SelectContent>

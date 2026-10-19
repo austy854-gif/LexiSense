@@ -10,7 +10,8 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100].filter((n) => n <= MAX_PAGE_SIZE);
  *
  * Renders nothing when there are no records. The range summary and the
  * page-size selector are labelled for screen readers, and the prev/next
- * buttons carry explicit `aria-label`s.
+ * buttons are named "Prev page" / "Next page", which contain their visible
+ * text as a whole word ("Prev" / "Next"), so voice-control users can say what they see.
  */
 export function PaginationBar({
   page,
@@ -62,10 +63,10 @@ export function PaginationBar({
           size="sm"
           onClick={() => onPageChange(page - 1)}
           disabled={loading || page <= 1}
-          aria-label="Go to previous page"
+          aria-label="Prev page"
           data-testid="page-prev"
         >
-          <ChevronLeft className="h-4 w-4" />
+          <ChevronLeft className="h-4 w-4" aria-hidden="true" />
           Prev
         </Button>
 
@@ -78,11 +79,11 @@ export function PaginationBar({
           size="sm"
           onClick={() => onPageChange(page + 1)}
           disabled={loading || page >= totalPages}
-          aria-label="Go to next page"
+          aria-label="Next page"
           data-testid="page-next"
         >
           Next
-          <ChevronRight className="h-4 w-4" />
+          <ChevronRight className="h-4 w-4" aria-hidden="true" />
         </Button>
       </div>
     </div>
