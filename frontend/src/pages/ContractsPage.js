@@ -46,7 +46,6 @@ import { Skeleton } from '../components/ui/skeleton';
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger,
 } from '../components/ui/collapsible';
 import {
   FileText,
@@ -382,9 +381,9 @@ export default function ContractsPage() {
                 </DialogHeader>
                 <form onSubmit={handleBulkUpload} className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Contract Type (for all files)</Label>
+                    <Label htmlFor="bulkContractType">Contract Type (for all files)</Label>
                     <Select value={bulkContractType} onValueChange={setBulkContractType}>
-                      <SelectTrigger>
+                      <SelectTrigger id="bulkContractType">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -513,7 +512,7 @@ export default function ContractsPage() {
                     value={uploadData.contractType}
                     onValueChange={(value) => setUploadData({ ...uploadData, contractType: value })}
                   >
-                    <SelectTrigger data-testid="upload-type">
+                    <SelectTrigger id="contractType" data-testid="upload-type">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -604,8 +603,8 @@ export default function ContractsPage() {
                   />
                 </div>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-full sm:w-40" data-testid="status-filter">
-                    <Filter className="h-4 w-4 mr-2" />
+                  <SelectTrigger className="w-full sm:w-40" data-testid="status-filter" aria-label="Filter by status">
+                    <Filter className="h-4 w-4 mr-2" aria-hidden="true" />
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -618,7 +617,7 @@ export default function ContractsPage() {
                   </SelectContent>
                 </Select>
                 <Select value={typeFilter} onValueChange={setTypeFilter}>
-                  <SelectTrigger className="w-full sm:w-40" data-testid="type-filter">
+                  <SelectTrigger className="w-full sm:w-40" data-testid="type-filter" aria-label="Filter by type">
                     <SelectValue placeholder="Type" />
                   </SelectTrigger>
                   <SelectContent>
@@ -630,21 +629,28 @@ export default function ContractsPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                  <CollapsibleTrigger asChild>
-                    <Button variant="outline" size="sm">
-                      <ChevronDown className={`h-4 w-4 mr-1 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
-                      Advanced
-                    </Button>
-                  </CollapsibleTrigger>
-                </Collapsible>
+                {/* The trigger and panel live in different parts of the layout, so the toggle points
+                    aria-controls at the always-mounted Collapsible root rather than using a second Root
+                    whose content never renders (that left aria-controls pointing at a missing id). */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-expanded={advancedOpen}
+                  aria-controls="advanced-filters"
+                  onClick={() => setAdvancedOpen((open) => !open)}
+                  data-testid="advanced-filters-toggle"
+                >
+                  <ChevronDown aria-hidden="true" className={`h-4 w-4 mr-1 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+                  Advanced
+                </Button>
               </div>
               
-              <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+              <Collapsible id="advanced-filters" open={advancedOpen} onOpenChange={setAdvancedOpen}>
                 <CollapsibleContent className="pt-4 border-t">
                   <div className="flex flex-col sm:flex-row gap-4">
                     <Select value={riskFilter} onValueChange={setRiskFilter}>
-                      <SelectTrigger className="w-full sm:w-40">
+                      <SelectTrigger className="w-full sm:w-40" data-testid="risk-filter" aria-label="Filter by risk level">
                         <SelectValue placeholder="Risk Level" />
                       </SelectTrigger>
                       <SelectContent>
@@ -655,7 +661,7 @@ export default function ContractsPage() {
                       </SelectContent>
                     </Select>
                     <Select value={expiringFilter} onValueChange={setExpiringFilter}>
-                      <SelectTrigger className="w-full sm:w-48">
+                      <SelectTrigger className="w-full sm:w-48" data-testid="expiring-filter" aria-label="Filter by expiry date">
                         <SelectValue placeholder="Expiring Within" />
                       </SelectTrigger>
                       <SelectContent>
@@ -746,8 +752,12 @@ export default function ContractsPage() {
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Button variant="ghost" size="icon" asChild>
-                            <Link to={`/contracts/${contract.id}`} data-testid={`view-${contract.id}`}>
-                              <Eye className="h-4 w-4" />
+                            <Link
+                              to={`/contracts/${contract.id}`}
+                              data-testid={`view-${contract.id}`}
+                              aria-label={`View ${contract.title}`}
+                            >
+                              <Eye className="h-4 w-4" aria-hidden="true" />
                             </Link>
                           </Button>
                           <Button
@@ -755,8 +765,9 @@ export default function ContractsPage() {
                             size="icon"
                             onClick={() => handleExportPDF(contract.id, contract.title)}
                             title="Export PDF"
+                            aria-label={`Export ${contract.title} as PDF`}
                           >
-                            <Download className="h-4 w-4" />
+                            <Download className="h-4 w-4" aria-hidden="true" />
                           </Button>
                           {canWrite && (
                           <Button
@@ -764,8 +775,9 @@ export default function ContractsPage() {
                             size="icon"
                             onClick={() => handleDelete(contract.id, contract.title)}
                             data-testid={`delete-${contract.id}`}
+                            aria-label={`Delete ${contract.title}`}
                           >
-                            <Trash2 className="h-4 w-4 text-destructive" />
+                            <Trash2 className="h-4 w-4 text-destructive" aria-hidden="true" />
                           </Button>
                           )}
                         </div>

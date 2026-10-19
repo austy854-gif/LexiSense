@@ -20,6 +20,52 @@ MAX_RETRIES = 5
 _ALREADY_SENT = {"sent", "logged", "delivered", "delivery_delayed", "bounced", "complained"}
 
 
+class ApprovalEmailDeliveryError(Exception):
+    """Sanitised retry reason: carries only the original exception type name."""
+
+
+def _http_status(exc: BaseException) -> Optional[int]:
+    """The provider's HTTP status code, if the exception carries one.
+
+    ``resend.exceptions.ResendError`` exposes it as ``code``; HTTP-client
+    errors as ``status_code`` or ``response.status_code``. Only a plausible
+    integer status (100-599) is returned -- never free text.
+    """
+    candidates = (
+        getattr(exc, "code", None),
+        getattr(exc, "status_code", None),
+        getattr(exc, "http_status", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    )
+    for value in candidates:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, str) and value.strip().isdigit():
+            value = int(value.strip())
+        if isinstance(value, int) and 100 <= value <= 599:
+            return value
+    return None
+
+
+def safe_error_summary(exc: BaseException) -> str:
+    """``'ResendError (HTTP 422)'`` / ``'TimeoutError'``: type plus status only.
+
+    Stored as ``email_notifications.lastError``. Provider error text is never
+    kept: it can echo the recipient address or the rendered links (tokens).
+    """
+    try:
+        status = _http_status(exc)
+    except Exception:
+        status = None
+    name = type(exc).__name__
+    return f"{name} (HTTP {status})" if status is not None else name
+
+
+def _recipient_domain(address) -> str:
+    from services.email_service import _recipient_domain as domain_of
+    return domain_of(address)
+
+
 def _db(db=None):
     if db is not None:
         return db
@@ -70,10 +116,15 @@ async def deliver_notification(db, notification_id: str, organization_id: str, f
             idempotency_key=f"lexisense-notification-{notification_id}",
         )
     except Exception as exc:
+        # Metadata only: provider error text can echo the recipient or links.
+        logger.warning(
+            "Approval email send failed (template=%s recipient_domain=%s error_type=%s)",
+            notification.get("kind"), _recipient_domain(notification.get("to")), type(exc).__name__,
+        )
         await db.email_notifications.update_one(
             query, {"$inc": {"attempts": 1},
                     "$set": {"status": "failed" if final_attempt else "retrying",
-                             "lastError": str(exc)[:500], "updatedAt": now}})
+                             "lastError": safe_error_summary(exc), "updatedAt": now}})
         raise
     await db.email_notifications.update_one(
         query, {"$inc": {"attempts": 1},
@@ -93,10 +144,14 @@ def send_approval_email_task(self, notification_id: str, organization_id: str):
     try:
         return loop.run_until_complete(deliver_notification(db, notification_id, organization_id, final_attempt=final))
     except Exception as exc:
-        logger.warning("Approval email %s failed (attempt %s): %s", notification_id, self.request.retries + 1, exc)
+        logger.warning("Approval email %s failed (attempt %s, error_type=%s)",
+                       notification_id, self.request.retries + 1, type(exc).__name__)
         if final:
             return {"status": "failed"}
-        raise self.retry(exc=exc, countdown=min(600, 30 * 2 ** self.request.retries))
+        # Celery logs the retry reason; hand it a sanitised exception so the
+        # provider's error text never reaches worker logs.
+        raise self.retry(exc=ApprovalEmailDeliveryError(type(exc).__name__),
+                         countdown=min(600, 30 * 2 ** self.request.retries))
     finally:
         loop.close()
 
@@ -118,6 +173,8 @@ async def dispatch_notification(db, notification_id: str, organization_id: str) 
     try:
         result = await deliver_notification(db, notification_id, organization_id)
         return result.get("status", "sent")
-    except Exception:
-        logger.exception("Approval email %s failed (inline send)", notification_id)
+    except Exception as exc:
+        # No traceback/exception text: it can carry provider-echoed recipients
+        # or links. deliver_notification already logged template + domain.
+        logger.error("Approval email %s failed (inline send, error_type=%s)", notification_id, type(exc).__name__)
         return "failed"
