@@ -92,3 +92,6 @@ credentials.json
 *.key
 .credentials
 celerybeat-schedule*
+
+# Generated env-setup output (may contain connection strings); never commit
+env_setup_output.json

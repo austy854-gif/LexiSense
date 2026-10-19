@@ -56,12 +56,12 @@ This guide walks you through obtaining and configuring all required API keys and
 
 ### Example Connection String
 ```
-mongodb+srv://lexisense_user:YOUR_PASSWORD@lexisense-cluster.xxxxx.mongodb.net/lexisense?retryWrites=true&w=majority
+mongodb+srv://<user>:<password>@<cluster-host>/lexisense?retryWrites=true&w=majority
 ```
 
 ### Set in `.env`
 ```bash
-MONGO_URL=mongodb+srv://lexisense_user:YOUR_PASSWORD@lexisense-cluster.xxxxx.mongodb.net/lexisense?retryWrites=true&w=majority
+MONGO_URL=mongodb+srv://<user>:<password>@<cluster-host>/lexisense?retryWrites=true&w=majority
 DB_NAME=lexisense
 ```
 
@@ -349,7 +349,7 @@ yarn start
 # ===========================================
 # DATABASE (MongoDB Atlas)
 # ===========================================
-MONGO_URL=mongodb+srv://lexisense_user:YOUR_PASSWORD@lexisense-cluster.xxxxx.mongodb.net/lexisense?retryWrites=true&w=majority
+MONGO_URL=mongodb+srv://<user>:<password>@<cluster-host>/lexisense?retryWrites=true&w=majority
 DB_NAME=lexisense
 
 # ===========================================
