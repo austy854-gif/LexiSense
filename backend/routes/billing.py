@@ -40,7 +40,7 @@ def init_db(database):
 
 
 TRIAL_DAYS = 7
-TRIAL_CONTRACT_LIMIT = 3
+TRIAL_CONTRACT_LIMIT = 25
 TEAM_PLAN_PRICE_ID = get_env("STRIPE_TEAM_PRICE_ID")  # price_... from Stripe Dashboard
 
 

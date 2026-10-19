@@ -36,7 +36,7 @@ class OrganizationBilling(BaseModel):
     cancelAtPeriodEnd: bool = False
     cancelledAt: Optional[str] = None
     trialContractsUsed: int = 0
-    trialContractsLimit: int = 3
+    trialContractsLimit: int = 25
     createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -71,7 +71,7 @@ class SubscriptionInfo(BaseModel):
     currentPeriodEnd: Optional[str] = None
     cancelAtPeriodEnd: bool = False
     trialContractsUsed: int = 0
-    trialContractsLimit: int = 3
+    trialContractsLimit: int = 25
     stripeCustomerId: Optional[str] = None
     stripeSubscriptionId: Optional[str] = None
 
