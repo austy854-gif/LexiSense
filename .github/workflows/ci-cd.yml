@@ -327,7 +327,7 @@ jobs:
           ignore-unfixed: true
           exit-code: '1'
       - name: Check for secrets with TruffleHog
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@e63326d6545de8f425d93ce24078c6e68d83f70e # v3.99.3
         with:
           path: ./
           # Do NOT hardcode base/head here. On a push to main, `base: main` and
@@ -336,7 +336,33 @@ jobs:
           # With no base/head inputs the action auto-detects the scan range from
           # the event: push -> before..after, pull_request -> base.sha..head.sha,
           # schedule/workflow_dispatch -> full history.
-          extra_args: --results=verified,unknown
+          #
+          # Placeholder exclusion (full-history runs only): commit 0e278ef added
+          # ENV_SETUP_GUIDE.md and env_setup_output.json with placeholder Atlas
+          # URIs (lexisense_user:YOUR_PASSWORD@...xxxxx.mongodb.net). They were
+          # never real credentials and have since been scrubbed, but they stay
+          # in history. On schedule/workflow_dispatch this step skips those two
+          # paths, listed in .github/trufflehog/placeholder-paths.txt; the next
+          # step rescans the same two paths in every commit after 0e278ef. The
+          # net effect: only those two files' contents in commit 0e278ef go
+          # unscanned. PR and push scans are unchanged and never exclude anything.
+          extra_args: >-
+            --results=verified,unknown
+            ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '--exclude-paths=.github/trufflehog/placeholder-paths.txt' || '' }}
+      - name: Check for secrets with TruffleHog (placeholder paths after 0e278ef)
+        # Second half of the exclusion above: on full-history runs, scan
+        # ENV_SETUP_GUIDE.md and env_setup_output.json in every commit after
+        # 0e278ef (--since-commit excludes 0e278ef itself), so new secrets in
+        # them are still caught. Both files were created in 0e278ef, so there
+        # is no earlier history to cover.
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: trufflesecurity/trufflehog@e63326d6545de8f425d93ce24078c6e68d83f70e # v3.99.3
+        with:
+          path: ./
+          base: 0e278ef78bd9c7277eddfdd479f68f6ae11a240a
+          # An explicit head avoids an empty --branch argument once base is set.
+          head: ${{ github.sha }}
+          extra_args: --results=verified,unknown --include-paths=.github/trufflehog/placeholder-paths.txt
 
   dependency-check:
     name: Dependency Check
