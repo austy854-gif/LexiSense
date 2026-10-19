@@ -258,7 +258,9 @@ async def test_email_failure_does_not_break_request(http, seeded, db, monkeypatc
     body = await _submit(http, seeded)
     assert body["status"] == "review"
     notif = await db.email_notifications.find_one({})
-    assert notif["status"] == "failed" and "resend down" in notif["lastError"]
+    # Exception type only: provider text is never stored (see approval_tasks.safe_error_summary).
+    assert notif["status"] == "failed" and notif["lastError"] == "RuntimeError"
+    assert "resend down" not in notif["lastError"]
 
 
 async def test_approval_service_crash_does_not_break_request(http, seeded, monkeypatch):
