@@ -52,6 +52,15 @@ module.exports = {
   				'3': 'hsl(var(--chart-3))',
   				'4': 'hsl(var(--chart-4))',
   				'5': 'hsl(var(--chart-5))'
+  			},
+  			highlight: {
+  				DEFAULT: 'hsl(var(--highlight))',
+  				foreground: 'hsl(var(--highlight-foreground))'
+  			},
+  			risk: {
+  				low: 'hsl(var(--risk-low))',
+  				medium: 'hsl(var(--risk-medium))',
+  				high: 'hsl(var(--risk-high))'
   			}
   		},
   		keyframes: {

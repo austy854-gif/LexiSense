@@ -18,6 +18,7 @@ Roles (ordered least -> most privileged)::
 """
 from __future__ import annotations
 
+import os
 import logging
 import time
 from collections import defaultdict, deque
@@ -139,22 +140,40 @@ class SlidingWindowRateLimiter:
         self._hits.clear()
 
 
+def _trusted_proxy_count() -> int:
+    try:
+        return max(0, int(os.environ.get("TRUSTED_PROXY_COUNT", "1")))
+    except ValueError:
+        return 1
+
+
 def client_key(request) -> str:
     """Best-effort client identity for rate-limit keys.
 
-    ``X-Forwarded-For`` is honoured because the app is deployed behind a
-    reverse proxy (nginx) that overwrites it; the left-most entry is the
-    originating client. Behind a proxy that does **not** sanitise the header,
-    this is spoofable -- that is precisely why the limiter is a defence in
-    depth layer and not the only control.
+    ``X-Forwarded-For`` is a list the client can pre-fill, so the *left-most*
+    entry is spoofable. Each trusted proxy appends the address it saw, so the
+    real client is the entry ``TRUSTED_PROXY_COUNT`` hops from the right
+    (default 1: one platform proxy in front of the app). ``0`` ignores the
+    header entirely and uses the socket peer. If the header is shorter than
+    the configured hop count, the header can't be trusted and the socket peer
+    is used. Repeated ``X-Forwarded-For`` headers are joined in order.
+
+    ``request.client`` must be the raw socket peer for this to be sound, so
+    uvicorn must NOT be told to trust every proxy (``--forwarded-allow-ips *``
+    makes it rewrite the peer from the spoofable left-most entry). The
+    Dockerfile defaults FORWARDED_ALLOW_IPS to 127.0.0.1.
     """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
+    hops = _trusted_proxy_count()
     client = getattr(request, "client", None)
-    return getattr(client, "host", None) or "unknown"
+    peer = getattr(client, "host", None) or "unknown"
+    if not hops:
+        return peer
+    headers = request.headers
+    values = headers.getlist("x-forwarded-for") if hasattr(headers, "getlist") else [headers.get("x-forwarded-for")]
+    parts = [p.strip() for v in values if v for p in v.split(",") if p.strip()]
+    if len(parts) >= hops:
+        return parts[-hops]
+    return peer
 
 
 def rate_limit(limiter: SlidingWindowRateLimiter, scope: str):
@@ -301,9 +320,9 @@ def make_org_limiter(max_requests: int, window_seconds: float, prefix: str, *, f
     ``fail_closed`` only applies when Redis is configured: with no Redis URL
     the limiter is per-process by design and never fails closed.
     """
-    import os
+    from utils.env import get_env
 
-    url = os.environ.get("RATE_LIMIT_REDIS_URL") or os.environ.get("REDIS_URL")
+    url = get_env("RATE_LIMIT_REDIS_URL") or get_env("REDIS_URL")
     if url and url.startswith(("redis://", "rediss://")):
         return RedisRateLimiter(url, max_requests, window_seconds, prefix=prefix, fail_closed=fail_closed)
     return _InMemoryAsyncLimiter(max_requests, window_seconds)

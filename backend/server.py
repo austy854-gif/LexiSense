@@ -17,6 +17,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # Configure structured logging FIRST (before other imports that may log)
+from utils.env import get_database_url, get_env  # noqa: E402
 from utils.logging_config import (
     RequestLoggingMiddleware,
     get_logger,
@@ -24,10 +25,12 @@ from utils.logging_config import (
     setup_logging,
 )
 setup_logging(
-    level=os.environ.get("LOG_LEVEL", "INFO"),
-    json_format=os.environ.get("LOG_JSON", "true").lower() == "true"
+    level=get_env("LOG_LEVEL", "INFO"),
+    json_format=get_env("LOG_JSON", "true").lower() == "true"
 )
 logger = get_logger("main")
+from utils.logging_config import install_access_log_redaction  # noqa: E402
+install_access_log_redaction()
 
 # MongoDB connection.
 #
@@ -42,13 +45,13 @@ logger = get_logger("main")
 #     can serve health checks.
 #   * serverSelectionTimeoutMS bounds how long a request waits for a primary,
 #     so a database outage fails fast instead of hanging every request.
-mongo_url = os.environ.get("DATABASE_URL") or os.environ.get("MONGO_URL")
+mongo_url = get_database_url()
 if not mongo_url:
     raise RuntimeError("DATABASE_URL (or MONGO_URL) must be set at runtime")
 
 
 def _resolve_db_name(url: str) -> str:
-    name = os.environ.get("DB_NAME")
+    name = get_env("DB_NAME")
     if name:
         return name
     try:
@@ -73,12 +76,16 @@ client = AsyncIOMotorClient(
 db = client[DB_NAME]
 
 # Initialize Sentry
-sentry_dsn = os.environ.get("SENTRY_DSN")
+sentry_dsn = get_env("SENTRY_DSN")
 if sentry_dsn and not sentry_dsn.startswith("your-"):
     import sentry_sdk
     from sentry_sdk.integrations.fastapi import FastApiIntegration
     from sentry_sdk.integrations.starlette import StarletteIntegration
-    from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration, ignore_logger
+    from utils.sentry_scrub import logger as _sentry_scrub_logger, sentry_init_options
+
+    # Scrubber diagnostics must never become Sentry events themselves.
+    ignore_logger(_sentry_scrub_logger.name)
 
     sentry_logging = LoggingIntegration(
         level=logging.INFO,
@@ -94,10 +101,13 @@ if sentry_dsn and not sentry_dsn.startswith("your-"):
         ],
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
-        environment=os.environ.get("ENVIRONMENT", "development"),
+        environment=get_env("ENVIRONMENT", "development"),
         release=os.environ.get("RELEASE_VERSION", "2.0.0"),
+        # No frame locals, no default PII, and every event/breadcrumb scrubbed
+        # of tokens, email addresses and query strings (utils/sentry_scrub.py).
+        **sentry_init_options(),
     )
-    logger.info("Sentry initialized", extra={"environment": os.environ.get("ENVIRONMENT", "development")})
+    logger.info("Sentry initialized", extra={"environment": get_env("ENVIRONMENT", "development")})
 else:
     logger.info("Sentry not configured (SENTRY_DSN not set)")
 
@@ -144,6 +154,13 @@ async def lifespan(app: FastAPI):
                 from utils.migrations import run_migrations
                 await run_migrations(db)
 
+                # Opt-in (EXPIRE_LEGACY_INVITES_ON_STARTUP, OFF by default).
+                from utils.invite_expiry import maybe_expire_on_startup
+                try:
+                    await maybe_expire_on_startup(db)
+                except Exception as exc:  # optional maintenance must not block readiness
+                    logger.error("Legacy invitation expiry failed (error_type=%s)", type(exc).__name__)
+
                 if AGENTIC_GROUPS:
                     from routes.agentic import _create_indexes as create_agentic_indexes
                     await create_agentic_indexes()
@@ -188,6 +205,9 @@ app.state.db_name = DB_NAME
 
 # Add request logging middleware
 app.add_middleware(RequestLoggingMiddleware)
+# Trust X-Forwarded-Proto from the proxy hop only (uvicorn no longer does, see Dockerfile).
+from utils.proxy import ForwardedProtoMiddleware  # noqa: E402
+app.add_middleware(ForwardedProtoMiddleware)
 
 # Create a router with the /api/v1 prefix
 api_router = APIRouter(prefix="/api/v1")
@@ -210,6 +230,7 @@ from routes.workflow import router as workflow_router, init_db as init_workflow_
 from routes.agentic import build_router as build_agentic_router, enabled_groups as agentic_enabled_groups, init_db as init_agentic_db
 from routes.billing import router as billing_router, init_db as init_billing_db
 from services.audit_service import init_db as init_audit_service_db
+from utils.feature_flags import approval_emails_enabled
 
 # Initialize database for all route modules
 init_auth_db(db)
@@ -249,6 +270,13 @@ if AGENTIC_GROUPS:
     logger.info("Agentic routes enabled", extra={"groups": sorted(AGENTIC_GROUPS)})
 api_router.include_router(billing_router)
 
+# Approval email links + Resend delivery webhook (APPROVAL_EMAILS_ENABLED, default off).
+if approval_emails_enabled():
+    from routes.approvals import router as approvals_router, init_db as init_approvals_db
+    init_approvals_db(db)
+    api_router.include_router(approvals_router)
+    logger.info("Approval email routes enabled")
+
 @api_router.get("/")
 async def root():
     return {"message": "LexiSense API", "version": "2.0.0", "docs": "/api/docs"}
@@ -266,16 +294,17 @@ async def _probe_storage() -> dict:
     unresponsive S3 endpoint could hang the health check indefinitely.
     """
     try:
-        from services.storage_service import get_s3_client
+        from services.storage_service import get_bucket_name, get_s3_client
 
+        bucket = get_bucket_name()
+        if not bucket:
+            return {"status": "degraded", "details": "S3 bucket not configured"}
         s3_client = get_s3_client()
         if not s3_client:
             return {"status": "degraded", "details": "Using mock storage"}
 
         await asyncio.wait_for(
-            asyncio.to_thread(
-                s3_client.head_bucket, Bucket=os.environ.get("AWS_S3_BUCKET", "")
-            ),
+            asyncio.to_thread(s3_client.head_bucket, Bucket=bucket),
             timeout=HEALTH_PROBE_TIMEOUT_SECONDS,
         )
         return {"status": "healthy", "details": "S3 accessible"}
@@ -288,7 +317,7 @@ async def _probe_storage() -> dict:
 
 def _probe_config(env_var: str) -> dict:
     """Report whether an optional integration is configured."""
-    value = os.environ.get(env_var)
+    value = get_env(env_var)
     if value and not value.startswith("your-"):
         return {"status": "healthy", "details": "Configured"}
     return {"status": "degraded", "details": "Not configured"}
@@ -351,14 +380,56 @@ async def readiness_check():
     except Exception:
         db_ok = False
     bootstrap_ok = bool(getattr(app.state, "bootstrap_ok", False))
-    ready = db_ok and bootstrap_ok
+    redis_status = await _probe_redis()
+    ready = db_ok and bootstrap_ok and redis_status != "unhealthy"
     return JSONResponse(
         status_code=200 if ready else 503,
         content={
             "status": "ready" if ready else "not_ready",
-            "checks": {"database": db_ok, "bootstrap": bootstrap_ok},
+            "checks": {"database": db_ok, "bootstrap": bootstrap_ok, "redis": redis_status},
         },
     )
+
+
+REDIS_PROBE_TIMEOUT_SECONDS = 1.0
+
+
+def _redis_url():
+    """The broker URL Celery actually uses (see services/celery_app.py)."""
+    return get_env("CELERY_BROKER_URL") or get_env("REDIS_URL")
+
+
+async def _probe_redis() -> str:
+    """"skipped" when no Redis is configured, else "healthy"/"unhealthy".
+
+    Uses the asyncio client with ~1s timeouts so the event loop never blocks.
+    The URL is never logged (it carries credentials).
+    """
+    url = _redis_url()
+    if not url:
+        return "skipped"
+    if not url.startswith(("redis://", "rediss://")):
+        return "skipped"  # non-Redis broker: nothing to ping here
+    client = None
+    try:
+        import redis.asyncio as aioredis
+
+        client = aioredis.from_url(
+            url,
+            socket_timeout=REDIS_PROBE_TIMEOUT_SECONDS,
+            socket_connect_timeout=REDIS_PROBE_TIMEOUT_SECONDS,
+        )
+        await asyncio.wait_for(client.ping(), timeout=REDIS_PROBE_TIMEOUT_SECONDS + 0.5)
+        return "healthy"
+    except Exception as exc:
+        logger.warning("Readiness Redis ping failed: %s", type(exc).__name__)
+        return "unhealthy"
+    finally:
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
 
 
 # Include the router in the main app
@@ -420,7 +491,7 @@ register_exception_handlers(app)
 # ---------------------------------------------------------------------------
 from fastapi.responses import FileResponse  # noqa: E402
 
-FRONTEND_BUILD_DIR = Path(os.environ.get("FRONTEND_BUILD_DIR", str(ROOT_DIR / "static")))
+FRONTEND_BUILD_DIR = Path(get_env("FRONTEND_BUILD_DIR", str(ROOT_DIR / "static")))
 
 if (FRONTEND_BUILD_DIR / "index.html").is_file():
     _frontend_root = FRONTEND_BUILD_DIR.resolve()

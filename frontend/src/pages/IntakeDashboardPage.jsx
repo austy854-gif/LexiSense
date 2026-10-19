@@ -315,7 +315,7 @@ export default function IntakeDashboardPage() {
                       <div className="flex flex-col items-center">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
                           idx < currentStep ? 'bg-green-500 text-white' :
-                          idx === currentStep ? 'bg-primary text-white' :
+                          idx === currentStep ? 'bg-primary text-primary-foreground' :
                           'bg-muted text-muted-foreground'
                         }`}>
                           {idx < currentStep ? <CheckCircle className="h-4 w-4" /> : idx + 1}
@@ -477,7 +477,7 @@ export default function IntakeDashboardPage() {
                           return (
                             <div key={idx} className="relative flex gap-4">
                               <div className="flex flex-col items-center">
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${item.error ? 'bg-red-500 text-white' : 'bg-primary text-white'}`}>
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${item.error ? 'bg-red-500 text-white' : 'bg-primary text-primary-foreground'}`}>
                                   <item.icon className="h-4 w-4" />
                                 </div>
                                 {idx < 7 && <div className="w-0.5 h-16 bg-muted" />}
@@ -727,7 +727,7 @@ export default function IntakeDashboardPage() {
                 <li>Select your domain and click "Webhooks"</li>
                 <li>Add new webhook with the URL above</li>
                 <li>Select "email.received" event</li>
-                <li>Set webhook secret in environment variable: <code className="bg-muted px-1 rounded">RESEND_WEBHOOK_SECRET</code></li>
+                <li>Set webhook secret in environment variable: <code className="bg-muted px-1 rounded">RESEND_INTAKE_WEBHOOK_SECRET</code></li>
                 <li>Configure intake email address (e.g., <code className="bg-muted px-1 rounded">contracts@yourcompany.lexisense.app</code>)</li>
               </ol>
             </CardContent>
@@ -809,7 +809,7 @@ export default function IntakeDashboardPage() {
                 value={filters.status}
                 onValueChange={handleStatusFilter}
               >
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-[180px]" aria-label="Filter by status">
                   <SelectValue placeholder="All Statuses" />
                 </SelectTrigger>
                 <SelectContent>

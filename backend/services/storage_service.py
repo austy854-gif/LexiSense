@@ -1,4 +1,3 @@
-import os
 import uuid
 import asyncio
 import logging
@@ -6,17 +5,31 @@ from typing import Optional
 import boto3
 from botocore.exceptions import ClientError
 
+from utils.env import get_env
+
 logger = logging.getLogger(__name__)
 
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-S3_BUCKET_NAME = os.environ.get("AWS_S3_BUCKET") or os.environ.get("S3_BUCKET_NAME")
+AWS_ACCESS_KEY_ID = get_env("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = get_env("AWS_SECRET_ACCESS_KEY")
+AWS_REGION = get_env("AWS_REGION", "us-east-1")
+
+
+def get_bucket_name() -> Optional[str]:
+    """The S3 bucket: ``AWS_S3_BUCKET``, else the legacy ``S3_BUCKET_NAME``.
+
+    Single source of truth for storage *and* the /health probe. Read at call
+    time so both always agree.
+    """
+    return get_env("AWS_S3_BUCKET") or get_env("S3_BUCKET_NAME") or None
+
+
+#: Back-compat alias (value at import time). Prefer :func:`get_bucket_name`.
+S3_BUCKET_NAME = get_bucket_name()
 
 
 def get_s3_client():
     """Get an S3 client instance."""
-    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY or not S3_BUCKET_NAME:
+    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY or not get_bucket_name():
         logger.warning("AWS credentials not fully configured - using mock storage (NOT FOR PRODUCTION)")
         return None
 
@@ -48,7 +61,7 @@ async def upload_file_to_s3(
         # (and every other in-flight request) is not blocked during upload.
         await asyncio.to_thread(
             s3_client.put_object,
-            Bucket=S3_BUCKET_NAME,
+            Bucket=get_bucket_name(),
             Key=storage_key,
             Body=file_content,
             ContentType=content_type,
@@ -71,7 +84,7 @@ async def generate_presigned_url(storage_key: str, expiration: int = 3600) -> Op
         url = await asyncio.to_thread(
             s3_client.generate_presigned_url,
             'get_object',
-            Params={'Bucket': S3_BUCKET_NAME, 'Key': storage_key},
+            Params={'Bucket': get_bucket_name(), 'Key': storage_key},
             ExpiresIn=expiration,
         )
         return url
@@ -88,7 +101,7 @@ async def delete_file_from_s3(storage_key: str) -> bool:
         return True
 
     try:
-        await asyncio.to_thread(s3_client.delete_object, Bucket=S3_BUCKET_NAME, Key=storage_key)
+        await asyncio.to_thread(s3_client.delete_object, Bucket=get_bucket_name(), Key=storage_key)
         logger.info(f"Deleted file from S3: {storage_key}")
         return True
     except ClientError as e:
@@ -103,21 +116,21 @@ async def ensure_bucket_exists():
         return False
 
     try:
-        await asyncio.to_thread(s3_client.head_bucket, Bucket=S3_BUCKET_NAME)
+        await asyncio.to_thread(s3_client.head_bucket, Bucket=get_bucket_name())
         return True
     except ClientError as e:
         error_code = e.response.get('Error', {}).get('Code')
         if error_code == '404':
             try:
                 if AWS_REGION == 'us-east-1':
-                    await asyncio.to_thread(s3_client.create_bucket, Bucket=S3_BUCKET_NAME)
+                    await asyncio.to_thread(s3_client.create_bucket, Bucket=get_bucket_name())
                 else:
                     await asyncio.to_thread(
                         s3_client.create_bucket,
-                        Bucket=S3_BUCKET_NAME,
+                        Bucket=get_bucket_name(),
                         CreateBucketConfiguration={'LocationConstraint': AWS_REGION},
                     )
-                logger.info(f"Created S3 bucket: {S3_BUCKET_NAME}")
+                logger.info(f"Created S3 bucket: {get_bucket_name()}")
                 return True
             except ClientError as create_err:
                 logger.error(f"Failed to create bucket: {create_err}")

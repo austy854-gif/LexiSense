@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException, status, Depends, Request
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import logging
-import os
 import stripe
 
 from models.billing import (
@@ -18,6 +17,7 @@ from models.billing import (
     WebhookEvent
 )
 from utils.auth import get_current_user, require_role
+from utils.env import get_env
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing", tags=["Billing"])
@@ -28,7 +28,7 @@ stripe_api_key = None
 def init_db(database):
     global db, stripe_api_key
     db = database
-    stripe_api_key = os.environ.get("STRIPE_SECRET_KEY")
+    stripe_api_key = get_env("STRIPE_SECRET_KEY")
     if stripe_api_key:
         stripe.api_key = stripe_api_key
     else:
@@ -37,7 +37,7 @@ def init_db(database):
 
 TRIAL_DAYS = 7
 TRIAL_CONTRACT_LIMIT = 3
-TEAM_PLAN_PRICE_ID = os.environ.get("STRIPE_TEAM_PRICE_ID")  # price_... from Stripe Dashboard
+TEAM_PLAN_PRICE_ID = get_env("STRIPE_TEAM_PRICE_ID")  # price_... from Stripe Dashboard
 
 
 async def get_or_create_billing(org_id: str) -> OrganizationBilling:
@@ -77,11 +77,11 @@ async def check_trial_access(org_id: str) -> tuple[bool, str]:
     if billing.trialEndDate:
         trial_end = datetime.fromisoformat(billing.trialEndDate.replace("Z", "+00:00"))
         if datetime.now(timezone.utc) > trial_end:
-            return False, "Your 7-day free trial has ended. Please upgrade to continue using LexiSense."
+            return False, "Your free trial has ended. Upgrade to keep adding contracts."
 
     # Check contract upload limit
     if billing.trialContractsUsed >= billing.trialContractsLimit:
-        return False, f"You've reached the trial limit of {TRIAL_CONTRACT_LIMIT} contract uploads. Please upgrade to continue."
+        return False, f"You've used all {TRIAL_CONTRACT_LIMIT} trial uploads. Upgrade to keep adding contracts."
 
     return True, ""
 
@@ -115,7 +115,7 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
     if trial_end_str:
         trial_end = datetime.fromisoformat(trial_end_str.replace("Z", "+00:00"))
         if datetime.now(timezone.utc) > trial_end:
-            return False, "Your 7-day free trial has ended. Please upgrade to continue using LexiSense."
+            return False, "Your free trial has ended. Upgrade to keep adding contracts."
 
     # Atomic conditional increment: only succeeds if we're strictly below the limit.
     result = await db.organization_billing.find_one_and_update(
@@ -129,7 +129,7 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
         },
     )
     if result is None:
-        return False, f"You've reached the trial limit of {TRIAL_CONTRACT_LIMIT} contract uploads. Please upgrade to continue."
+        return False, f"You've used all {TRIAL_CONTRACT_LIMIT} trial uploads. Upgrade to keep adding contracts."
     return True, ""
 
 
@@ -288,7 +288,7 @@ async def stripe_webhook(request: Request):
     
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
-    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
+    webhook_secret = get_env("STRIPE_WEBHOOK_SECRET")
     
     if not webhook_secret:
         logger.error("STRIPE_WEBHOOK_SECRET not configured")
@@ -475,29 +475,26 @@ async def get_plans():
         "plans": [
             {
                 "id": "trial",
-                "name": "Free Trial",
+                "name": "Free trial",
                 "price": 0,
                 "interval": "month",
                 "features": [
-                    f"{TRIAL_DAYS}-day free trial",
-                    f"Up to {TRIAL_CONTRACT_LIMIT} contract uploads",
+                    "Limited contract uploads",
                     "AI contract analysis",
                     "Contract repository",
-                    "Renewal alerts",
                     "Basic dashboard"
                 ],
-                "cta": "Start Free Trial"
+                "cta": "Start free trial"
             },
             {
                 "id": "team",
-                "name": "Team Plan",
+                "name": "Team plan",
                 "price": 49,
                 "interval": "month",
                 "features": [
                     "Unlimited contract uploads",
                     "AI contract analysis",
                     "Contract repository",
-                    "Renewal alerts",
                     "Advanced dashboard & analytics",
                     "Team collaboration (up to 10 members)",
                     "Role-based access control",
@@ -507,7 +504,7 @@ async def get_plans():
                     "Audit logs",
                     "Priority support"
                 ],
-                "cta": "Upgrade to Team",
+                "cta": "Upgrade to Team plan",
                 "priceId": TEAM_PLAN_PRICE_ID
             }
         ]

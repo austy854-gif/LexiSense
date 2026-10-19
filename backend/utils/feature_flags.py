@@ -28,3 +28,12 @@ def flag_enabled(name: str) -> bool:
 def enabled_groups(env_flag: Callable[[str], bool] = flag_enabled) -> Set[str]:
     """Feature groups whose flag is on (empty set by default)."""
     return {group for group, flag in ROUTE_GROUP_FLAGS.items() if env_flag(flag)}
+
+
+#: Approval-request emails (one-click Approve/Reject links via Resend) and the
+#: Resend delivery-status webhook. Default OFF, like the agentic flags.
+APPROVAL_EMAILS_FLAG = "APPROVAL_EMAILS_ENABLED"
+
+
+def approval_emails_enabled(env_flag: Callable[[str], bool] = flag_enabled) -> bool:
+    return env_flag(APPROVAL_EMAILS_FLAG)

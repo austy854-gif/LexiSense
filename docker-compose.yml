@@ -53,6 +53,7 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL}
       - RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET}
+      - RESEND_INTAKE_WEBHOOK_SECRET=${RESEND_INTAKE_WEBHOOK_SECRET:-}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET}
@@ -75,7 +76,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: lexisense-celery-worker
-    command: celery -A services.celery_app worker --loglevel=info --concurrency=4 -Q high_priority,default,scheduled,low_priority
+    command: celery -A services.celery_app worker --loglevel=info --concurrency=4 -Q high_priority,default,scheduled,low_priority --without-gossip --without-mingle --without-heartbeat
     environment:
       - MONGO_URL=mongodb://mongodb:27017
       - DB_NAME=lexisense

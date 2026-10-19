@@ -10,9 +10,11 @@ from celery.signals import task_prerun, task_postrun
 from celery.schedules import crontab
 from kombu import Queue
 
+from utils.env import get_database_url, get_env
+
 # Configuration
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL") or os.environ.get("REDIS_URL")
-CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND") or os.environ.get("REDIS_URL")
+CELERY_BROKER_URL = get_env("CELERY_BROKER_URL") or get_env("REDIS_URL")
+CELERY_RESULT_BACKEND = get_env("CELERY_RESULT_BACKEND") or get_env("REDIS_URL")
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,12 @@ BEAT_JOB_GROUPS = {
 
 ENABLED_GROUPS = enabled_groups()
 TASK_MODULES = tuple(m for g, m in GROUP_TASK_MODULES.items() if g in ENABLED_GROUPS)
+
+# Approval emails are not an agentic group; they have their own flag.
+from utils.feature_flags import approval_emails_enabled  # noqa: E402
+
+if approval_emails_enabled():
+    TASK_MODULES = TASK_MODULES + ("services.approval_tasks",)
 
 _ALL_BEAT_JOBS = {
     # Contract agents - check every hour for due agents
@@ -150,6 +158,7 @@ celery_app.conf.update(
         "services.playbook_tasks.*": {"queue": "default"},
         "services.obligation_tasks.*": {"queue": "default"},
         "services.intake_tasks.*": {"queue": "high_priority"},
+        "services.approval_tasks.*": {"queue": "high_priority"},
     },
     
     # Queue definitions
@@ -167,6 +176,10 @@ celery_app.conf.update(
     broker_transport_options={
         "socket_timeout": float(os.environ.get("CELERY_BROKER_SOCKET_TIMEOUT", "5")),
         "socket_connect_timeout": float(os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")),
+        # Seconds an idle worker blocks per BRPOP before re-polling. The kombu
+        # default (1s) costs ~86k Redis commands/day per queue on metered
+        # Redis such as Upstash; 10s cuts that ~10x. Requires kombu>=5.6.
+        "polling_interval": 10,
     },
     redis_socket_timeout=float(os.environ.get("CELERY_BROKER_SOCKET_TIMEOUT", "5")),
     redis_socket_connect_timeout=float(os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")),
@@ -203,7 +216,7 @@ _task_mongo_clients = {}
 
 
 def _db_name_from(url: str) -> str:
-    name = os.environ.get("DB_NAME")
+    name = get_env("DB_NAME")
     if name:
         return name
     try:
@@ -215,7 +228,7 @@ def _db_name_from(url: str) -> str:
 
 @task_prerun.connect
 def _wire_task_database(task_id=None, **_):
-    url = os.environ.get("DATABASE_URL") or os.environ.get("MONGO_URL")
+    url = get_database_url()
     if not url:
         logger.error("DATABASE_URL/MONGO_URL not set - tasks cannot reach the database")
         return
