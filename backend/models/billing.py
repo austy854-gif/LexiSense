@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional
+from typing import Literal, Optional
 from datetime import datetime, timezone
 import uuid
 
@@ -57,10 +57,15 @@ class OrganizationBillingCreate(BaseModel):
 
 
 class CheckoutSessionRequest(BaseModel):
-    # Either may be sent; both are validated against the server-side plan
-    # config. Neither -> the default paid plan's default price.
-    priceId: Optional[str] = None
-    planId: Optional[str] = None
+    """The client picks a plan and a billing interval -- never a Stripe price.
+
+    The server maps (planId, interval) to an allow-listed Stripe price via
+    utils.plans. Unknown fields (e.g. a ``priceId``) are rejected (422).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    planId: str = "team"
+    interval: Literal["monthly", "annual"] = "monthly"
     successUrl: str
     cancelUrl: str
 

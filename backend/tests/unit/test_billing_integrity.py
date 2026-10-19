@@ -33,6 +33,7 @@ from tests.unit.conftest import (
 
 PRICE_MONTHLY = "price_team_monthly"
 PRICE_ANNUAL = "price_team_annual"
+PRICE_LEGACY_EXTRA = "price_team_cad_legacy"
 
 BILLING_ENV = (
     "BILLING_TRIAL_DAYS",
@@ -42,7 +43,10 @@ BILLING_ENV = (
     "BILLING_TEAM_PRICE_MONTHLY",
     "BILLING_PAST_DUE_GRACE_DAYS",
     "STRIPE_TEAM_PRICE_ID",
+    "STRIPE_TEAM_PRICE_ID_ANNUAL",
     "STRIPE_TEAM_PRICE_IDS",
+    "BILLING_TEAM_PRICE_ANNUAL",
+    "BILLING_CURRENCY",
 )
 
 
@@ -51,7 +55,8 @@ def billing_env(monkeypatch):
     for name in BILLING_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("STRIPE_TEAM_PRICE_ID", PRICE_MONTHLY)
-    monkeypatch.setenv("STRIPE_TEAM_PRICE_IDS", PRICE_ANNUAL)
+    monkeypatch.setenv("STRIPE_TEAM_PRICE_ID_ANNUAL", PRICE_ANNUAL)
+    monkeypatch.setenv("STRIPE_TEAM_PRICE_IDS", PRICE_LEGACY_EXTRA)
     return monkeypatch
 
 
@@ -78,6 +83,8 @@ PAST_DUE = dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingSta
 CANCELLED = dict(subscriptionTier=SubscriptionTier.CANCELLED, billingStatus=BillingStatus.CANCELLED,
                  trialEndDate=iso_in(-30))
 EXPIRED_TRIAL = dict(trialEndDate=iso_in(-1))
+GRACE = dict(PAST_DUE, pastDueSince=iso_in(-2))
+GRACE_OVER = dict(PAST_DUE, pastDueSince=iso_in(-8))
 
 
 # --------------------------------------------------------------------------
@@ -137,7 +144,8 @@ def test_plan_config_defaults_match_current_pricing():
     team = plans_module.get_paid_plans()["team"]
     assert (trial.days, trial.upload_limit, trial.max_members) == (7, 3, 3)
     assert team.max_members == 10 and team.price_monthly == 49 and team.max_uploads is None
-    assert team.stripe_price_ids == (PRICE_MONTHLY, PRICE_ANNUAL)
+    assert team.stripe_price_ids == (PRICE_MONTHLY, PRICE_ANNUAL, PRICE_LEGACY_EXTRA)
+    assert team.interval_prices == {"monthly": PRICE_MONTHLY, "annual": PRICE_ANNUAL}
     assert team.default_price_id == PRICE_MONTHLY
 
 
@@ -165,6 +173,7 @@ def test_plan_config_invalid_values_fall_back_and_zero_is_unlimited(billing_env)
 
 def test_plan_for_price_id_is_an_allowlist():
     assert plans_module.plan_for_price_id(PRICE_ANNUAL).id == "team"
+    assert plans_module.plan_for_price_id(PRICE_LEGACY_EXTRA).id == "team"
     assert plans_module.plan_for_price_id("price_attacker") is None
     assert plans_module.plan_for_price_id(None) is None
 
@@ -178,28 +187,29 @@ async def test_plans_endpoint_renders_from_config(http, billing_env):
     trial, team = body["plans"]
     assert "14-day free trial" in trial["features"]
     assert "Up to 25 contract uploads" in trial["features"]
-    assert team["price"] == 129 and team["priceId"] == PRICE_MONTHLY
+    assert team["price"] == 129
+    assert "priceId" not in team and "price_" not in str(body)  # no Stripe IDs reach the client
+    assert team["intervals"] == ["monthly", "annual"]
     assert "Team collaboration (up to 15 members)" in team["features"]
 
 
 # --------------------------------------------------------------------------
 # P1: server-side price allow-list + P1: no second Stripe trial
 # --------------------------------------------------------------------------
-async def test_checkout_rejects_unlisted_price(http, db, users, fake_stripe):
-    resp = await http.post(
-        f"{API_PREFIX}/billing/checkout",
-        json={"priceId": "price_one_cent", **CHECKOUT_URLS},
-        headers=auth_headers(users["admin"]),
-    )
-    assert resp.status_code == 400
+@pytest.mark.parametrize("payload", [{"priceId": "price_one_cent"}, {"priceId": PRICE_MONTHLY},
+                                     {"planId": "team", "interval": "monthly", "priceId": PRICE_MONTHLY}])
+async def test_checkout_rejects_client_supplied_price(http, users, fake_stripe, payload):
+    resp = await http.post(f"{API_PREFIX}/billing/checkout", json={**payload, **CHECKOUT_URLS},
+                           headers=auth_headers(users["admin"]))
+    assert resp.status_code == 422
     assert fake_stripe["checkout"] == [] and fake_stripe["customer"] == []
 
 
-@pytest.mark.parametrize("price", [PRICE_MONTHLY, PRICE_ANNUAL])
-async def test_checkout_accepts_allowlisted_price_without_stripe_trial(http, users, fake_stripe, price):
+@pytest.mark.parametrize("interval,price", [("monthly", PRICE_MONTHLY), ("annual", PRICE_ANNUAL)])
+async def test_checkout_maps_plan_and_interval_to_price(http, users, fake_stripe, interval, price):
     resp = await http.post(
         f"{API_PREFIX}/billing/checkout",
-        json={"priceId": price, **CHECKOUT_URLS},
+        json={"planId": "team", "interval": interval, **CHECKOUT_URLS},
         headers=auth_headers(users["admin"]),
     )
     assert resp.status_code == 200, resp.text
@@ -209,28 +219,38 @@ async def test_checkout_accepts_allowlisted_price_without_stripe_trial(http, use
     assert call["subscription_data"]["metadata"] == {"organizationId": users["admin"]["organizationId"], "planId": "team"}
 
 
-async def test_checkout_without_price_uses_default_plan_price(http, users, fake_stripe):
+async def test_checkout_defaults_to_monthly_team(http, users, fake_stripe):
     resp = await http.post(f"{API_PREFIX}/billing/checkout", json=CHECKOUT_URLS, headers=auth_headers(users["admin"]))
     assert resp.status_code == 200
     assert fake_stripe["checkout"][0]["line_items"][0]["price"] == PRICE_MONTHLY
 
 
-async def test_checkout_plan_id_resolves_and_mismatch_rejected(http, users, fake_stripe):
-    ok = await http.post(f"{API_PREFIX}/billing/checkout", json={"planId": "team", **CHECKOUT_URLS},
-                         headers=auth_headers(users["admin"]))
-    assert ok.status_code == 200
+async def test_checkout_rejects_unknown_plan_and_interval(http, users, fake_stripe, billing_env):
     bad_plan = await http.post(f"{API_PREFIX}/billing/checkout", json={"planId": "enterprise", **CHECKOUT_URLS},
                                headers=auth_headers(users["admin"]))
     assert bad_plan.status_code == 400
-    mismatch = await http.post(f"{API_PREFIX}/billing/checkout",
-                               json={"planId": "enterprise", "priceId": PRICE_MONTHLY, **CHECKOUT_URLS},
-                               headers=auth_headers(users["admin"]))
-    assert mismatch.status_code == 400
-    assert len(fake_stripe["checkout"]) == 1
+    bad_interval = await http.post(f"{API_PREFIX}/billing/checkout", json={"interval": "weekly", **CHECKOUT_URLS},
+                                   headers=auth_headers(users["admin"]))
+    assert bad_interval.status_code == 422
+    billing_env.delenv("STRIPE_TEAM_PRICE_ID_ANNUAL")
+    no_annual = await http.post(f"{API_PREFIX}/billing/checkout", json={"interval": "annual", **CHECKOUT_URLS},
+                                headers=auth_headers(users["admin"]))
+    assert no_annual.status_code == 400
+    assert fake_stripe["checkout"] == []
+
+
+async def test_extra_price_ids_are_not_checkout_choices(http, users, fake_stripe, billing_env):
+    """STRIPE_TEAM_PRICE_IDS only keeps legacy subscribers entitled; it can't be bought."""
+    billing_env.delenv("STRIPE_TEAM_PRICE_ID")
+    billing_env.delenv("STRIPE_TEAM_PRICE_ID_ANNUAL")
+    resp = await http.post(f"{API_PREFIX}/billing/checkout", json=CHECKOUT_URLS, headers=auth_headers(users["admin"]))
+    assert resp.status_code == 503
+    assert fake_stripe["checkout"] == []
 
 
 async def test_checkout_unconfigured_price_is_503(http, users, fake_stripe, billing_env):
     billing_env.delenv("STRIPE_TEAM_PRICE_ID")
+    billing_env.delenv("STRIPE_TEAM_PRICE_ID_ANNUAL")
     billing_env.delenv("STRIPE_TEAM_PRICE_IDS")
     resp = await http.post(f"{API_PREFIX}/billing/checkout", json=CHECKOUT_URLS, headers=auth_headers(users["admin"]))
     assert resp.status_code == 503
@@ -533,14 +553,35 @@ async def test_legacy_stripe_trial_still_records_trial_end(db, org_id):
     assert billing_route.compute_entitlement(doc).is_paid
 
 
-async def test_unknown_price_falls_back_to_default_plan(db, org_id):
+async def test_unknown_price_grants_no_paid_access(db, org_id):
     billing_route.init_db(db)
     await db.organization_billing.insert_one(billing_doc(org_id))
     await billing_route.update_billing_from_subscription(org_id, _subscription("active", price="price_legacy"), "cus_1")
     doc = await db.organization_billing.find_one({"organizationId": org_id})
-    assert doc["planId"] is None
+    assert doc["planId"] is None and doc["stripePriceId"] == "price_legacy"
     ent = billing_route.compute_entitlement(doc)
-    assert ent.is_paid and ent.plan_id == "team" and ent.member_limit == 10
+    assert ent.state == billing_route.ACCESS_UNVERIFIED_PLAN
+    assert not ent.is_paid and not ent.can_use_ai and not ent.unlimited_uploads
+    assert ent.member_limit == 3
+
+
+@pytest.mark.parametrize("stored", [
+    dict(PAID, stripePriceId="price_removed_from_config"),
+    dict(PAID, stripePriceId=None, planId="team"),  # planId alone is not trusted
+    dict(GRACE, stripePriceId="price_removed_from_config"),
+])
+async def test_unmapped_stored_price_blocks_uploads_and_ai(http, db, org_id, owner, chat_contract, fake_chat, stored):
+    await db.organization_billing.insert_one(billing_doc(org_id, **stored))
+    allowed, msg = await billing_route.reserve_trial_upload_atomic(org_id)
+    assert allowed is False and "contact support" in msg
+    resp = await http.post(f"{API_PREFIX}/contracts/c-chat/chat", json={"question": "Q"}, headers=auth_headers(owner))
+    assert resp.status_code == 403 and fake_chat == []
+
+
+async def test_legacy_extra_price_still_grants_team(db, org_id):
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one(billing_doc(org_id, **dict(PAID, stripePriceId=PRICE_LEGACY_EXTRA)))
+    assert billing_route.compute_entitlement(await db.organization_billing.find_one({})).is_paid
 
 
 async def test_invoice_paid_restores_team_tier(db, org_id):
@@ -792,8 +833,6 @@ def test_grace_days_are_config_driven(billing_env):
     assert plans_module.get_past_due_grace_period() == timedelta(days=7)
 
 
-GRACE = dict(PAST_DUE, pastDueSince=iso_in(-2))
-GRACE_OVER = dict(PAST_DUE, pastDueSince=iso_in(-8))
 
 
 async def test_grace_allows_upload_and_chat_then_blocks(http, db, org_id, owner, chat_contract, fake_chat):

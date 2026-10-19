@@ -15,10 +15,19 @@ Environment variables (all optional except the Stripe price ID in production):
 ``BILLING_PAST_DUE_GRACE_DAYS``   days a past-due subscriber keeps access after
                                   the first failed payment (default 7; 0 = block
                                   immediately)
-``STRIPE_TEAM_PRICE_ID``          default Stripe price for the Team plan
+``STRIPE_TEAM_PRICE_ID``          Stripe price for the Team plan, billed monthly
+``STRIPE_TEAM_PRICE_ID_ANNUAL``   optional Stripe price for the Team plan, billed
+                                  annually (``interval=annual`` at checkout)
 ``STRIPE_TEAM_PRICE_IDS``         optional comma-separated *additional* Stripe
-                                  prices that also map to the Team plan
-                                  (e.g. annual / CAD prices)
+                                  prices that still grant the Team plan to
+                                  existing subscribers (e.g. legacy / CAD prices).
+                                  They cannot be chosen at checkout.
+``BILLING_TEAM_PRICE_ANNUAL``     optional display price for annual billing
+``BILLING_CURRENCY``              ISO currency of the display prices (default usd)
+
+The client never sends a Stripe price ID: checkout takes ``planId`` +
+``interval`` and the server maps them to a price here. A subscription whose
+price is not listed here grants no paid access.
 
 A member cap of ``0`` or less means "unlimited".
 
@@ -77,21 +86,33 @@ class TrialConfig:
     max_members: Optional[int]
 
 
+#: Checkout intervals a client may ask for -> Stripe recurring interval.
+CHECKOUT_INTERVALS: Dict[str, str] = {"monthly": "month", "annual": "year"}
+
+
 @dataclass(frozen=True)
 class PlanConfig:
     id: str
     name: str
     price_monthly: int
     interval: str
-    #: Allowed Stripe price IDs; the first one is the default checkout price.
+    #: Every Stripe price ID that grants this plan (checkout prices + extras).
     stripe_price_ids: Tuple[str, ...] = field(default_factory=tuple)
     max_members: Optional[int] = None
     #: ``None`` = unlimited uploads.
     max_uploads: Optional[int] = None
+    #: Checkout interval ("monthly" / "annual") -> Stripe price ID.
+    interval_prices: Dict[str, str] = field(default_factory=dict)
+    #: Display prices per checkout interval (whole currency units).
+    display_prices: Dict[str, Optional[int]] = field(default_factory=dict)
+    currency: str = "usd"
 
     @property
     def default_price_id(self) -> Optional[str]:
-        return self.stripe_price_ids[0] if self.stripe_price_ids else None
+        return self.interval_prices.get("monthly")
+
+    def price_for_interval(self, interval: str) -> Optional[str]:
+        return self.interval_prices.get(interval)
 
 
 def get_trial_config() -> TrialConfig:
@@ -114,11 +135,19 @@ def get_past_due_grace_period() -> timedelta:
     return timedelta(days=days)
 
 
-def _team_price_ids() -> Tuple[str, ...]:
-    ids = []
-    primary = get_env("STRIPE_TEAM_PRICE_ID")
-    if primary:
-        ids.append(primary)
+def _team_interval_prices() -> Dict[str, str]:
+    prices = {}
+    monthly = (get_env("STRIPE_TEAM_PRICE_ID") or "").strip()
+    annual = (get_env("STRIPE_TEAM_PRICE_ID_ANNUAL") or "").strip()
+    if monthly:
+        prices["monthly"] = monthly
+    if annual:
+        prices["annual"] = annual
+    return prices
+
+
+def _team_price_ids(interval_prices: Dict[str, str]) -> Tuple[str, ...]:
+    ids = list(dict.fromkeys(interval_prices.values()))
     extra = get_env("STRIPE_TEAM_PRICE_IDS") or ""
     for pid in extra.split(","):
         pid = pid.strip()
@@ -129,18 +158,25 @@ def _team_price_ids() -> Tuple[str, ...]:
 
 def get_paid_plans() -> Dict[str, PlanConfig]:
     """All purchasable plans, keyed by plan id."""
+    interval_prices = _team_interval_prices()
+    monthly = _env_int(
+        "BILLING_TEAM_PRICE_MONTHLY", _DEFAULTS["BILLING_TEAM_PRICE_MONTHLY"], minimum=0
+    )
+    annual_raw = get_env("BILLING_TEAM_PRICE_ANNUAL")
+    annual = _env_int("BILLING_TEAM_PRICE_ANNUAL", 0, minimum=0) if annual_raw else None
     team = PlanConfig(
         id=DEFAULT_PAID_PLAN_ID,
         name="Team Plan",
-        price_monthly=_env_int(
-            "BILLING_TEAM_PRICE_MONTHLY", _DEFAULTS["BILLING_TEAM_PRICE_MONTHLY"], minimum=0
-        ),
+        price_monthly=monthly,
         interval="month",
-        stripe_price_ids=_team_price_ids(),
+        stripe_price_ids=_team_price_ids(interval_prices),
         max_members=_limit(
             _env_int("BILLING_TEAM_MAX_MEMBERS", _DEFAULTS["BILLING_TEAM_MAX_MEMBERS"])
         ),
         max_uploads=None,
+        interval_prices=interval_prices,
+        display_prices={"monthly": monthly, "annual": annual},
+        currency=(get_env("BILLING_CURRENCY") or "usd").strip().lower(),
     )
     return {team.id: team}
 
@@ -162,6 +198,7 @@ def plan_for_price_id(price_id: Optional[str]) -> Optional[PlanConfig]:
 
 
 __all__ = [
+    "CHECKOUT_INTERVALS",
     "DEFAULT_PAID_PLAN_ID",
     "PlanConfig",
     "TrialConfig",

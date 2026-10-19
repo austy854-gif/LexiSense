@@ -14,16 +14,26 @@ from services.task_db import current_db
 from tests.unit.conftest import iso_in, make_contract
 
 ORG = "org-bg"
+PRICE = "price_bg_team"
+
+
+@pytest.fixture(autouse=True)
+def team_price(monkeypatch):
+    monkeypatch.setenv("STRIPE_TEAM_PRICE_ID", PRICE)
 
 ENTITLED = {
     "trial": dict(subscriptionTier=SubscriptionTier.TRIAL, billingStatus=BillingStatus.TRIALING, trialEndDate=iso_in(3)),
-    "paid": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.ACTIVE),
-    "grace": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.PAST_DUE, pastDueSince=iso_in(-2)),
+    "paid": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.ACTIVE, stripePriceId=PRICE),
+    "grace": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.PAST_DUE, pastDueSince=iso_in(-2),
+                  stripePriceId=PRICE),
 }
 BLOCKED = {
     "expired": dict(subscriptionTier=SubscriptionTier.TRIAL, billingStatus=BillingStatus.TRIALING, trialEndDate=iso_in(-1)),
     "cancelled": dict(subscriptionTier=SubscriptionTier.CANCELLED, billingStatus=BillingStatus.CANCELLED),
-    "past_due": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.PAST_DUE, pastDueSince=iso_in(-9)),
+    "past_due": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.PAST_DUE, pastDueSince=iso_in(-9),
+                     stripePriceId=PRICE),
+    "unmapped_price": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.ACTIVE,
+                           stripePriceId="price_unknown"),
 }
 
 

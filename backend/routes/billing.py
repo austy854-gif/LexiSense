@@ -21,7 +21,7 @@ from models.billing import (
 from utils.auth import get_current_user, require_role
 from utils.env import get_env
 from utils.plans import (
-    DEFAULT_PAID_PLAN_ID,
+    CHECKOUT_INTERVALS,
     PlanConfig,
     get_past_due_grace_period,
     get_paid_plan,
@@ -73,6 +73,8 @@ ACCESS_PAST_DUE = "past_due"
 ACCESS_PAST_DUE_GRACE = "past_due_grace"
 ACCESS_CANCELLED = "cancelled"
 ACCESS_INACTIVE = "inactive"
+#: Team subscription whose Stripe price isn't in the plan config: no access.
+ACCESS_UNVERIFIED_PLAN = "unverified_plan"
 
 MSG_TRIAL_EXPIRED = "Your free trial has ended. Please upgrade to continue using LexiSense."
 MSG_PAST_DUE = (
@@ -80,6 +82,9 @@ MSG_PAST_DUE = (
     "portal to continue using LexiSense."
 )
 MSG_CANCELLED = "Your subscription has been cancelled. Please resubscribe to continue using LexiSense."
+MSG_UNVERIFIED_PLAN = (
+    "We couldn't verify your subscription plan. Please contact support so we can fix your account."
+)
 MSG_INACTIVE = "Your subscription is not active. Please complete checkout or contact support."
 
 
@@ -163,12 +168,14 @@ def _grace_warning(grace_end: datetime, now: datetime) -> str:
     )
 
 
-def _resolve_paid_plan(billing) -> PlanConfig:
-    return (
-        get_paid_plan(_billing_get(billing, "planId"))
-        or plan_for_price_id(_billing_get(billing, "stripePriceId"))
-        or get_paid_plans()[DEFAULT_PAID_PLAN_ID]
-    )
+def _resolve_paid_plan(billing) -> Optional[PlanConfig]:
+    """The plan a subscription's Stripe price maps to, or ``None``.
+
+    The stored Stripe price is authoritative and must be in the plan config's
+    allow-list; an unknown / unmapped price grants NO paid plan (there is no
+    fallback to the default plan's limits).
+    """
+    return plan_for_price_id(_billing_get(billing, "stripePriceId"))
 
 
 def compute_entitlement(billing: Union[OrganizationBilling, dict, None], now: Optional[datetime] = None) -> Entitlement:
@@ -189,6 +196,14 @@ def compute_entitlement(billing: Union[OrganizationBilling, dict, None], now: Op
 
     if tier == SubscriptionTier.TEAM:
         plan = _resolve_paid_plan(billing)
+        if plan is None:
+            logger.error(
+                "Org %s has a Team subscription with unmapped Stripe price %r; no paid access",
+                _billing_get(billing, "organizationId"), _billing_get(billing, "stripePriceId"),
+            )
+            return Entitlement(
+                ACCESS_UNVERIFIED_PLAN, None, False, False, 0, trial.max_members, MSG_UNVERIFIED_PLAN
+            )
         if billing_status in PAID_BILLING_STATUSES:
             return Entitlement(ACCESS_PAID, plan.id, True, True, plan.max_uploads, plan.max_members)
         if billing_status == BillingStatus.PAST_DUE:
@@ -447,37 +462,27 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
 
 
 def resolve_checkout_price(request: CheckoutSessionRequest) -> Tuple[PlanConfig, str]:
-    """Map the client's plan/price choice onto a server-side allow-listed price.
+    """Map the client's (planId, interval) onto a server-side allow-listed price.
 
-    The client never chooses an arbitrary Stripe price: a ``priceId`` must be
-    one of the IDs configured for a plan in ``utils.plans``, and a ``planId``
-    resolves to that plan's default price.
+    The client never chooses a Stripe price; the price comes from the plan
+    config in ``utils.plans``.
     """
-    if request.priceId:
-        plan = plan_for_price_id(request.priceId)
-        if plan is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Unknown or unsupported price.",
-            )
-        if request.planId and request.planId != plan.id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Price does not belong to the selected plan.",
-            )
-        return plan, request.priceId
-
-    plan_id = request.planId or DEFAULT_PAID_PLAN_ID
-    plan = get_paid_plan(plan_id)
+    plan = get_paid_plan(request.planId)
     if plan is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown plan.")
-    if not plan.default_price_id:
-        logger.error("No Stripe price configured for plan %s", plan.id)
+    price_id = plan.price_for_interval(request.interval)
+    if price_id:
+        return plan, price_id
+    if request.interval != "monthly" and plan.default_price_id:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Billing not configured. Please contact support.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{request.interval.capitalize()} billing isn't available for this plan.",
         )
-    return plan, plan.default_price_id
+    logger.error("No Stripe price configured for plan %s (%s)", plan.id, request.interval)
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Billing not configured. Please contact support.",
+    )
 
 
 #: Stripe Checkout rejects a ``subscription_data.trial_end`` less than 48 hours
@@ -915,11 +920,11 @@ async def update_billing_from_subscription(
 
     price_id = _subscription_price_id(subscription)
     plan = plan_for_price_id(price_id)
-    if price_id and plan is None:
-        logger.warning(
-            "Subscription %s uses Stripe price %s which is not in the plan config; "
-            "falling back to the default plan's limits",
-            subscription.get("id"), price_id,
+    if plan is None and billing_status in LIVE_BILLING_STATUSES:
+        logger.error(
+            "Subscription %s for org %s uses Stripe price %r which is not in the plan "
+            "config; recorded, but it grants NO paid access",
+            subscription.get("id"), org_id, price_id,
         )
 
     current_period_end = None
@@ -1018,7 +1023,8 @@ async def get_plans():
                 "Priority support"
             ],
             "cta": f"Upgrade to {plan.name.replace(' Plan', '')}",
-            "priceId": plan.default_price_id,
+            # Intervals the client may request at checkout (no price IDs).
+            "intervals": [i for i in CHECKOUT_INTERVALS if plan.price_for_interval(i)],
         })
     return {"plans": plans}
 
