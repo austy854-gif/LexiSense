@@ -68,8 +68,11 @@ export const teamAPI = {
   cancelInvitation: (id) => api.delete(`/team/invitations/${id}`),
   updateRole: (memberId, role) => api.patch(`/team/members/${memberId}/role`, { role }),
   removeMember: (memberId) => api.delete(`/team/members/${memberId}`),
-  acceptInvite: (token, password, firstName, lastName) =>
-    api.post('/team/accept-invite', { token, password, firstName, lastName }),
+  // Public (no auth): the invite token is the credential. It always travels in
+  // a POST body, never a query string, so it stays out of API access logs.
+  previewInvite: (token) => api.post('/team/accept-invite/preview', { token }),
+  // payload: { token, password, firstName?, lastName? } (see lib/inviteFlow.mjs)
+  acceptInvite: (payload) => api.post('/team/accept-invite', payload),
 };
 
 // Dashboard API

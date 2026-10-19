@@ -12,7 +12,6 @@ import {
   Menu,
   X,
   ChevronDown,
-  Scale,
   Bell,
   BarChart3,
   Files,
@@ -22,6 +21,8 @@ import {
   CheckCheck,
   CreditCard,
 } from 'lucide-react';
+import { BrandLockup } from './BrandLockup';
+import './avatar-initials.css';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Avatar, AvatarFallback } from './ui/avatar';
@@ -139,17 +140,17 @@ export function Layout({ children }) {
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-border">
-            <div className="p-2 bg-primary rounded-lg">
-              <Scale className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <span className="text-xl font-bold text-foreground tracking-tight">LexiSense</span>
+            <Link to="/" className="flex items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <BrandLockup className="h-8 w-auto" />
+            </Link>
             <Button
               variant="ghost"
               size="icon"
               className="ml-auto lg:hidden"
               onClick={() => setSidebarOpen(false)}
+              aria-label="Close menu"
             >
-              <X className="h-5 w-5" />
+              <X className="h-5 w-5" aria-hidden="true" />
             </Button>
           </div>
 
@@ -183,7 +184,7 @@ export function Layout({ children }) {
           <div className="p-4 border-t border-border">
             <div className="flex items-center gap-3 px-2">
               <Avatar className="h-9 w-9">
-                <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
+                <AvatarFallback className="ls-avatar-initials text-sm font-medium">
                   {getInitials()}
                 </AvatarFallback>
               </Avatar>
@@ -208,8 +209,10 @@ export function Layout({ children }) {
               size="icon"
               className="lg:hidden"
               onClick={() => setSidebarOpen(true)}
+              aria-label="Open menu"
+              aria-expanded={sidebarOpen}
             >
-              <Menu className="h-5 w-5" />
+              <Menu className="h-5 w-5" aria-hidden="true" />
             </Button>
 
             <div className="flex-1" />
@@ -221,21 +224,28 @@ export function Layout({ children }) {
                 size="icon"
                 onClick={toggleTheme}
                 data-testid="theme-toggle"
+                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
               >
                 {theme === 'dark' ? (
-                  <Sun className="h-5 w-5" />
+                  <Sun className="h-5 w-5" aria-hidden="true" />
                 ) : (
-                  <Moon className="h-5 w-5" />
+                  <Moon className="h-5 w-5" aria-hidden="true" />
                 )}
               </Button>
 
               {/* Notifications */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="relative" data-testid="notifications-bell">
-                    <Bell className="h-5 w-5" />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="relative"
+                    data-testid="notifications-bell"
+                    aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+                  >
+                    <Bell className="h-5 w-5" aria-hidden="true" />
                     {unreadCount > 0 && (
-                      <span className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
                         {unreadCount > 9 ? '9+' : unreadCount}
                       </span>
                     )}
@@ -245,9 +255,18 @@ export function Layout({ children }) {
                   <div className="flex items-center justify-between px-3 py-2">
                     <p className="text-sm font-semibold">Notifications</p>
                     {unreadCount > 0 && (
-                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleMarkAllRead}>
-                        <CheckCheck className="mr-1 h-3.5 w-3.5" /> Mark all read
-                      </Button>
+                      // A menu may only contain menu items, so this is a DropdownMenuItem rather than a
+                      // Button. preventDefault keeps the menu open after marking everything read.
+                      <DropdownMenuItem
+                        className="h-7 cursor-pointer px-2 text-xs"
+                        onSelect={(e) => {
+                          e.preventDefault();
+                          handleMarkAllRead();
+                        }}
+                        data-testid="mark-all-read"
+                      >
+                        <CheckCheck className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Mark all read
+                      </DropdownMenuItem>
                     )}
                   </div>
                   <DropdownMenuSeparator />
@@ -284,12 +303,13 @@ export function Layout({ children }) {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="flex items-center gap-2" data-testid="user-menu">
-                    <Avatar className="h-8 w-8">
-                      <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                    <span className="sr-only">Account menu</span>
+                    <Avatar className="h-8 w-8" aria-hidden="true">
+                      <AvatarFallback className="ls-avatar-initials text-sm">
                         {getInitials()}
                       </AvatarFallback>
                     </Avatar>
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">

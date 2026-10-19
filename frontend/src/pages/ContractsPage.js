@@ -5,6 +5,14 @@ import { contractsAPI, exportAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationBar } from '../components/PaginationBar';
+import { EmptyState } from '../components/EmptyState';
+import {
+  NoContractsIllustration,
+  NoSearchResultsIllustration,
+  NothingExpiringIllustration,
+  SomethingWentWrongIllustration,
+  UploadFailedIllustration,
+} from '../components/illustrations/Illustrations';
 import { canWriteContracts, getErrorInfo, parseTotalCount } from '../lib/apiHelpers.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -38,7 +46,6 @@ import { Skeleton } from '../components/ui/skeleton';
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger,
 } from '../components/ui/collapsible';
 import {
   FileText,
@@ -101,6 +108,87 @@ const CONTRACT_TYPES = [
   'Other',
 ];
 
+const isSet = (value) => Boolean(value) && value !== 'all';
+
+// Only API-provided messages for client errors (e.g. a size or type limit)
+// are shown as the second line; nothing is invented for other failures.
+export const UPLOAD_FAILED_BODY =
+  'LexiSense reads digital PDFs with selectable text (like ones exported from Word or Google Docs) and .txt files. Check the file and try again.';
+
+export function uploadErrorDetails(error) {
+  const info = getErrorInfo(error);
+  const isClientError = info.status !== null && info.status >= 400 && info.status < 500;
+  return { apiMessage: isClientError && error?.response?.data ? info.message : null };
+}
+
+/**
+ * Contracts list with no rows: first run (no contracts), an "expiring within"
+ * filter with nothing in that window, or search/filters that match nothing.
+ */
+export function ContractsEmptyState({ searchQuery, filters, canWrite, onUpload, onClearFilters }) {
+  const { statusFilter, typeFilter, riskFilter, expiringFilter } = filters;
+  const otherFilters = [statusFilter, typeFilter, riskFilter].some(isSet);
+  const hasExpiring = isSet(expiringFilter);
+
+  if (!searchQuery && !otherFilters && !hasExpiring) {
+    return (
+      <EmptyState
+        illustration={NoContractsIllustration}
+        title="No contracts yet"
+        data-testid="contracts-empty"
+        action={
+          canWrite ? (
+            <Button onClick={onUpload}>
+              <Upload className="mr-2 h-4 w-4" />
+              Upload a contract
+            </Button>
+          ) : null
+        }
+      >
+        <p>
+          Upload your first contract and LexiSense will pull out the key terms and flag higher-risk contracts.
+        </p>
+      </EmptyState>
+    );
+  }
+
+  if (hasExpiring && !searchQuery && !otherFilters) {
+    return (
+      <EmptyState
+        illustration={NothingExpiringIllustration}
+        title="Nothing expiring soon"
+        data-testid="contracts-nothing-expiring"
+        action={
+          <Button variant="outline" onClick={onClearFilters}>
+            View all contracts
+          </Button>
+        }
+      >
+        <p>No contracts expire in the next {expiringFilter} days. Upcoming renewals will show up here.</p>
+      </EmptyState>
+    );
+  }
+
+  return (
+    <EmptyState
+      illustration={NoSearchResultsIllustration}
+      title="No matching contracts"
+      data-testid="contracts-no-results"
+      action={
+        <Button variant="outline" onClick={onClearFilters}>
+          Clear filters
+        </Button>
+      }
+    >
+      <p>
+        {searchQuery
+          ? `Nothing matches \u201c${searchQuery}\u201d. Search looks at contract titles and counterparties, so try a different word or clear your filters.`
+          : 'No contracts match these filters. Try changing them, or clear them to see all your contracts.'}
+      </p>
+    </EmptyState>
+  );
+}
+
 export default function ContractsPage() {
   const { user } = useAuth();
   const canWrite = canWriteContracts(user?.role);
@@ -115,6 +203,9 @@ export default function ContractsPage() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // { apiMessage } when the last single upload failed; shows the upload-failed state.
+  const [uploadError, setUploadError] = useState(null);
+  const [loadError, setLoadError] = useState(false);
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkFiles, setBulkFiles] = useState([]);
   const [bulkContractType, setBulkContractType] = useState('General');
@@ -130,6 +221,7 @@ export default function ContractsPage() {
 
   const fetchContracts = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const params = { limit: pageSize, offset };
       if (searchQuery) params.search = searchQuery;
@@ -144,7 +236,9 @@ export default function ContractsPage() {
       // pagination controls never have to guess from a truncated page.
       setTotal(parseTotalCount(response.headers) ?? response.data.length);
     } catch (error) {
-      toast.error(getErrorInfo(error).message || 'Failed to load contracts');
+      // Show the "something went wrong" state instead of an empty list, which
+      // would look like an account with no contracts.
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -181,7 +275,7 @@ export default function ContractsPage() {
       setUploadData({ title: '', counterparty: '', contractType: 'General', file: null });
       fetchContracts();
     } catch (error) {
-      toast.error(getErrorInfo(error).message || 'Upload failed');
+      setUploadError(uploadErrorDetails(error));
     } finally {
       setUploading(false);
     }
@@ -287,9 +381,9 @@ export default function ContractsPage() {
                 </DialogHeader>
                 <form onSubmit={handleBulkUpload} className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Contract Type (for all files)</Label>
+                    <Label htmlFor="bulkContractType">Contract Type (for all files)</Label>
                     <Select value={bulkContractType} onValueChange={setBulkContractType}>
-                      <SelectTrigger>
+                      <SelectTrigger id="bulkContractType">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -347,7 +441,13 @@ export default function ContractsPage() {
             </Dialog>
             
             {/* Single Upload */}
-            <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+            <Dialog
+              open={uploadOpen}
+              onOpenChange={(open) => {
+                setUploadOpen(open);
+                if (!open) setUploadError(null);
+              }}
+            >
               <DialogTrigger asChild>
                 <Button data-testid="upload-contract-btn">
                   <Plus className="mr-2 h-4 w-4" />
@@ -361,6 +461,29 @@ export default function ContractsPage() {
                   Upload a PDF or text file to analyze with AI
                 </DialogDescription>
               </DialogHeader>
+              {uploadError ? (
+                <EmptyState
+                  illustration={UploadFailedIllustration}
+                  title="That file didn't upload"
+                  role="alert"
+                  size="sm"
+                  data-testid="upload-failed"
+                  action={
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        setUploadError(null);
+                        setUploadData({ ...uploadData, file: null });
+                      }}
+                    >
+                      Choose another file
+                    </Button>
+                  }
+                >
+                  <p>{UPLOAD_FAILED_BODY}</p>
+                  {uploadError.apiMessage && <p data-testid="upload-failed-detail">{uploadError.apiMessage}</p>}
+                </EmptyState>
+              ) : (
               <form onSubmit={handleUpload} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="title">Contract Title *</Label>
@@ -389,7 +512,7 @@ export default function ContractsPage() {
                     value={uploadData.contractType}
                     onValueChange={(value) => setUploadData({ ...uploadData, contractType: value })}
                   >
-                    <SelectTrigger data-testid="upload-type">
+                    <SelectTrigger id="contractType" data-testid="upload-type">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -457,6 +580,7 @@ export default function ContractsPage() {
                   </Button>
                 </div>
               </form>
+              )}
             </DialogContent>
           </Dialog>
           </div>
@@ -479,8 +603,8 @@ export default function ContractsPage() {
                   />
                 </div>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-full sm:w-40" data-testid="status-filter">
-                    <Filter className="h-4 w-4 mr-2" />
+                  <SelectTrigger className="w-full sm:w-40" data-testid="status-filter" aria-label="Filter by status">
+                    <Filter className="h-4 w-4 mr-2" aria-hidden="true" />
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -493,7 +617,7 @@ export default function ContractsPage() {
                   </SelectContent>
                 </Select>
                 <Select value={typeFilter} onValueChange={setTypeFilter}>
-                  <SelectTrigger className="w-full sm:w-40" data-testid="type-filter">
+                  <SelectTrigger className="w-full sm:w-40" data-testid="type-filter" aria-label="Filter by type">
                     <SelectValue placeholder="Type" />
                   </SelectTrigger>
                   <SelectContent>
@@ -505,21 +629,28 @@ export default function ContractsPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                  <CollapsibleTrigger asChild>
-                    <Button variant="outline" size="sm">
-                      <ChevronDown className={`h-4 w-4 mr-1 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
-                      Advanced
-                    </Button>
-                  </CollapsibleTrigger>
-                </Collapsible>
+                {/* The trigger and panel live in different parts of the layout, so the toggle points
+                    aria-controls at the always-mounted Collapsible root rather than using a second Root
+                    whose content never renders (that left aria-controls pointing at a missing id). */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-expanded={advancedOpen}
+                  aria-controls="advanced-filters"
+                  onClick={() => setAdvancedOpen((open) => !open)}
+                  data-testid="advanced-filters-toggle"
+                >
+                  <ChevronDown aria-hidden="true" className={`h-4 w-4 mr-1 transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+                  Advanced
+                </Button>
               </div>
               
-              <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+              <Collapsible id="advanced-filters" open={advancedOpen} onOpenChange={setAdvancedOpen}>
                 <CollapsibleContent className="pt-4 border-t">
                   <div className="flex flex-col sm:flex-row gap-4">
                     <Select value={riskFilter} onValueChange={setRiskFilter}>
-                      <SelectTrigger className="w-full sm:w-40">
+                      <SelectTrigger className="w-full sm:w-40" data-testid="risk-filter" aria-label="Filter by risk level">
                         <SelectValue placeholder="Risk Level" />
                       </SelectTrigger>
                       <SelectContent>
@@ -530,7 +661,7 @@ export default function ContractsPage() {
                       </SelectContent>
                     </Select>
                     <Select value={expiringFilter} onValueChange={setExpiringFilter}>
-                      <SelectTrigger className="w-full sm:w-48">
+                      <SelectTrigger className="w-full sm:w-48" data-testid="expiring-filter" aria-label="Filter by expiry date">
                         <SelectValue placeholder="Expiring Within" />
                       </SelectTrigger>
                       <SelectContent>
@@ -560,22 +691,24 @@ export default function ContractsPage() {
                   <Skeleton key={i} className="h-16 w-full" />
                 ))}
               </div>
+            ) : loadError ? (
+              <EmptyState
+                illustration={SomethingWentWrongIllustration}
+                title="Something went wrong"
+                role="alert"
+                data-testid="contracts-load-error"
+                action={<Button onClick={fetchContracts}>Try again</Button>}
+              >
+                <p>We couldn't load this just now. Try again in a moment.</p>
+              </EmptyState>
             ) : contracts.length === 0 ? (
-              <div className="text-center py-16">
-                <FileText className="h-16 w-16 text-muted-foreground/30 mx-auto mb-4" />
-                <h3 className="text-lg font-medium">No contracts found</h3>
-                <p className="text-muted-foreground mt-1">
-                  {searchQuery || statusFilter || typeFilter
-                    ? 'Try adjusting your filters'
-                    : 'Upload your first contract to get started'}
-                </p>
-                {canWrite && !searchQuery && !statusFilter && !typeFilter && (
-                  <Button className="mt-4" onClick={() => setUploadOpen(true)}>
-                    <Upload className="mr-2 h-4 w-4" />
-                    Upload Contract
-                  </Button>
-                )}
-              </div>
+              <ContractsEmptyState
+                searchQuery={searchQuery}
+                filters={{ statusFilter, typeFilter, riskFilter, expiringFilter }}
+                canWrite={canWrite}
+                onUpload={() => setUploadOpen(true)}
+                onClearFilters={clearFilters}
+              />
             ) : (
               <Table>
                 <TableHeader>
@@ -619,8 +752,12 @@ export default function ContractsPage() {
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Button variant="ghost" size="icon" asChild>
-                            <Link to={`/contracts/${contract.id}`} data-testid={`view-${contract.id}`}>
-                              <Eye className="h-4 w-4" />
+                            <Link
+                              to={`/contracts/${contract.id}`}
+                              data-testid={`view-${contract.id}`}
+                              aria-label={`View ${contract.title}`}
+                            >
+                              <Eye className="h-4 w-4" aria-hidden="true" />
                             </Link>
                           </Button>
                           <Button
@@ -628,8 +765,9 @@ export default function ContractsPage() {
                             size="icon"
                             onClick={() => handleExportPDF(contract.id, contract.title)}
                             title="Export PDF"
+                            aria-label={`Export ${contract.title} as PDF`}
                           >
-                            <Download className="h-4 w-4" />
+                            <Download className="h-4 w-4" aria-hidden="true" />
                           </Button>
                           {canWrite && (
                           <Button
@@ -637,8 +775,9 @@ export default function ContractsPage() {
                             size="icon"
                             onClick={() => handleDelete(contract.id, contract.title)}
                             data-testid={`delete-${contract.id}`}
+                            aria-label={`Delete ${contract.title}`}
                           >
-                            <Trash2 className="h-4 w-4 text-destructive" />
+                            <Trash2 className="h-4 w-4 text-destructive" aria-hidden="true" />
                           </Button>
                           )}
                         </div>

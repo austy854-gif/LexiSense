@@ -59,10 +59,6 @@ export default function TemplatesPage() {
     tags: '',
   });
 
-  useEffect(() => {
-    fetchTemplates();
-  }, [fetchTemplates]);
-
   const fetchTemplates = useCallback(async () => {
     try {
       const params = {};
@@ -77,6 +73,12 @@ export default function TemplatesPage() {
       setLoading(false);
     }
   }, [searchQuery, typeFilter]);
+
+  // Declared after the useCallback: reading a `const` in the deps array before
+  // its declaration throws (temporal dead zone) and crashes the page.
+  useEffect(() => {
+    fetchTemplates();
+  }, [fetchTemplates]);
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -168,12 +170,12 @@ export default function TemplatesPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Contract Type</Label>
+                    <Label htmlFor="templateContractType">Contract Type</Label>
                     <Select
                       value={newTemplate.contractType}
                       onValueChange={(v) => setNewTemplate({ ...newTemplate, contractType: v })}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger id="templateContractType">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -238,7 +240,7 @@ export default function TemplatesPage() {
                 />
               </div>
               <Select value={typeFilter} onValueChange={setTypeFilter}>
-                <SelectTrigger className="w-full sm:w-40">
+                <SelectTrigger className="w-full sm:w-40" aria-label="Filter by type">
                   <SelectValue placeholder="Filter by type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -290,16 +292,20 @@ export default function TemplatesPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleCopyContent(template.content)}
+                    aria-label={`Copy the text of ${template.name}`}
+                    data-testid={`copy-template-${template.id}`}
                   >
-                    <Copy className="h-4 w-4" />
+                    <Copy className="h-4 w-4" aria-hidden="true" />
                   </Button>
                   {!template.isPublic && !template.id.startsWith('default-') && (
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => handleDelete(template.id)}
+                      aria-label={`Delete ${template.name}`}
+                      data-testid={`delete-template-${template.id}`}
                     >
-                      <Trash2 className="h-4 w-4 text-destructive" />
+                      <Trash2 className="h-4 w-4 text-destructive" aria-hidden="true" />
                     </Button>
                   )}
                 </div>
