@@ -20,7 +20,7 @@ contracts            the hottest collection: every list/dashboard query is
                      ``contractType``/``uploadedBy``. The application ``id``
                      lookup (unique) backs every by-id endpoint.
 contract_versions    version history per contract.
-invitations          token lookup on acceptance + per-org listing.
+invitations          token-hash lookup on acceptance + per-org listing.
 expiration_alerts    the alert scheduler looks alerts up per contract and the
                      alerts screen lists them per organisation.
 templates            per-org template listing.
@@ -61,7 +61,10 @@ INDEX_SPECIFICATION: Dict[str, List[Dict[str, Any]]] = {
         {"keys": [("contractId", 1), ("version", -1)], "name": "ix_versions_contract_version"},
     ],
     "invitations": [
-        {"keys": [("token", 1)], "unique": True, "name": "uq_invitations_token"},
+        # Hashed invite token (utils.invite_tokens). Sparse: legacy records
+        # lack it until migration 003 hashes them. The old plaintext
+        # ``uq_invitations_token`` index is dropped by that migration.
+        {"keys": [("tokenHash", 1)], "unique": True, "sparse": True, "name": "uq_invitations_token_hash"},
         {"keys": [("organizationId", 1), ("email", 1)], "name": "ix_invitations_org_email"},
         {"keys": [("organizationId", 1), ("createdAt", -1)], "name": "ix_invitations_org_created"},
     ],

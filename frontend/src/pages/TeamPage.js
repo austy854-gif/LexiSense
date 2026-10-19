@@ -205,19 +205,19 @@ export default function TeamPage() {
               <DialogTrigger asChild>
                 <Button data-testid="invite-member-btn">
                   <UserPlus className="mr-2 h-4 w-4" />
-                  Invite Member
+                  Invite member
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-md">
                 <DialogHeader>
-                  <DialogTitle>Invite Team Member</DialogTitle>
+                  <DialogTitle>Invite a teammate</DialogTitle>
                   <DialogDescription>
                     Send an invitation to join your organization
                   </DialogDescription>
                 </DialogHeader>
                 <form onSubmit={handleInvite} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="email">Email Address</Label>
+                    <Label htmlFor="email">Email address</Label>
                     <Input
                       id="email"
                       type="email"
@@ -281,7 +281,7 @@ export default function TeamPage() {
                           Sending...
                         </>
                       ) : (
-                        'Send Invitation'
+                        'Send invite'
                       )}
                     </Button>
                   </div>
@@ -291,12 +291,12 @@ export default function TeamPage() {
           )}
         </div>
 
-        {/* Team Members */}
+        {/* Team members */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Users className="h-5 w-5" />
-              Team Members ({members.length})
+              Team members ({members.length})
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0 overflow-x-auto">
@@ -306,7 +306,7 @@ export default function TeamPage() {
                   <TableHead>Member</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Last Active</TableHead>
+                  <TableHead>Last active</TableHead>
                   {isAdmin && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
@@ -316,7 +316,7 @@ export default function TeamPage() {
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="h-9 w-9">
-                          <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                          <AvatarFallback className="bg-accent text-accent-foreground text-sm">
                             {getInitials(member)}
                           </AvatarFallback>
                         </Avatar>
@@ -364,28 +364,28 @@ export default function TeamPage() {
                                 disabled={member.role === 'admin'}
                               >
                                 <Shield className="mr-2 h-4 w-4" />
-                                Make Admin
+                                Make admin
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => handleUpdateRole(member.id, 'manager')}
                                 disabled={member.role === 'manager'}
                               >
                                 <Users className="mr-2 h-4 w-4" />
-                                Make Manager
+                                Make manager
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => handleUpdateRole(member.id, 'user')}
                                 disabled={member.role === 'user'}
                               >
                                 <Users className="mr-2 h-4 w-4" />
-                                Make User
+                                Make user
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => handleUpdateRole(member.id, 'viewer')}
                                 disabled={member.role === 'viewer'}
                               >
                                 <Mail className="mr-2 h-4 w-4" />
-                                Make Viewer
+                                Make viewer
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
@@ -407,13 +407,13 @@ export default function TeamPage() {
           </CardContent>
         </Card>
 
-        {/* Pending Invitations */}
+        {/* Pending invitations */}
         {isAdmin && invitations.length > 0 && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Mail className="h-5 w-5" />
-                Pending Invitations ({invitations.filter((i) => i.status === 'pending').length})
+                Pending invitations ({invitations.filter((i) => i.status === 'pending').length})
               </CardTitle>
               <CardDescription>Invitations waiting to be accepted</CardDescription>
             </CardHeader>
