@@ -327,7 +327,7 @@ jobs:
           ignore-unfixed: true
           exit-code: '1'
       - name: Check for secrets with TruffleHog
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@e63326d6545de8f425d93ce24078c6e68d83f70e # v3.99.3
         with:
           path: ./
           # Do NOT hardcode base/head here. On a push to main, `base: main` and
