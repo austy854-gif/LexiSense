@@ -312,7 +312,7 @@ export default function TeamPage() {
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="h-9 w-9">
-                          <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                          <AvatarFallback className="bg-accent text-accent-foreground text-sm">
                             {getInitials(member)}
                           </AvatarFallback>
                         </Avatar>

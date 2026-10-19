@@ -23,75 +23,12 @@ code, pre, .font-mono {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-@layer base {
-  :root {
-    --background: 220 15% 8%;
-    --foreground: 0 0% 95%;
-
-    --card: 220 13% 12%;
-    --card-foreground: 0 0% 95%;
-
-    --popover: 220 13% 12%;
-    --popover-foreground: 0 0% 95%;
-
-    --primary: 216 85% 35%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 220 12% 16%;
-    --secondary-foreground: 0 0% 95%;
-
-    --muted: 220 12% 16%;
-    --muted-foreground: 0 0% 55%;
-
-    --accent: 270 70% 60%;
-    --accent-foreground: 0 0% 100%;
-
-    --destructive: 358 75% 55%;
-    --destructive-foreground: 0 0% 100%;
-
-    --border: 220 10% 20%;
-    --input: 220 10% 20%;
-    --ring: 216 85% 35%;
-
-    --radius: 0.5rem;
-
-    /* Semantic colors */
-    --success: 145 65% 45%;
-    --warning: 38 90% 55%;
-    --error: 358 75% 55%;
-    --info: 200 85% 55%;
-  }
-
-  .light {
-    --background: 0 0% 100%;
-    --foreground: 220 15% 8%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 220 15% 8%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 220 15% 8%;
-
-    --primary: 216 85% 35%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 220 15% 96%;
-    --secondary-foreground: 220 15% 8%;
-
-    --muted: 220 15% 96%;
-    --muted-foreground: 220 10% 45%;
-
-    --accent: 270 70% 60%;
-    --accent-foreground: 0 0% 100%;
-
-    --destructive: 358 75% 55%;
-    --destructive-foreground: 0 0% 100%;
-
-    --border: 220 15% 90%;
-    --input: 220 15% 90%;
-    --ring: 216 85% 35%;
-  }
-}
+/*
+ * Theme tokens (--background, --primary, ...) live in index.css only: :root (= light, the
+ * default), .light and .dark. This file used to redefine :root (dark values) and .light after
+ * index.css; with no .dark block here, its :root won over index.css's .dark and dark mode got
+ * the light-theme primary #0D4AA5 for links and text-primary (about 2:1 on the dark surfaces).
+ */
 
 @layer base {
   * {
@@ -171,7 +108,7 @@ code, pre, .font-mono {
 .dark {
   --ls-tone-green: 71 194 137; /* #47C289 */
   --ls-tone-yellow: 244 164 52; /* #F4A434 */
-  --ls-tone-red: 244 126 130; /* #F47E82 */
+  --ls-tone-red: 246 140 144; /* #F68C90 (was #F47E82: 4.4:1 on the brand dark --muted) */
   --ls-tone-gray: 164 170 183; /* #A4AAB7 */
   --ls-tone-blue: 127 175 247; /* #7FAFF7 */
   --ls-tone-orange: 245 145 82; /* #F59152 */
@@ -230,6 +167,26 @@ code, pre, .font-mono {
     display: contents !important;
   }
 }
+
+/* Tailwind's stock yellow-700/800 text (billing trial card) is ~2-3:1 on the dark surfaces;
+   use the dark-theme yellow tone there. Light mode keeps Tailwind's (AA) values. */
+.dark .text-yellow-700,
+.dark .text-yellow-800 { color: rgb(var(--ls-tone-yellow)); }
+
+/* Indigo tone (Team "manager" role badge). Tailwind's stock indigo-500 is ~4.0:1 on its tint in
+   light and ~3.3:1 in dark; same treatment as the --ls-tone-* badges above. */
+:root,
+.dark {
+  --ls-tone-indigo: 170 166 250; /* #AAA6FA */
+}
+
+.light {
+  --ls-tone-indigo: 67 56 202; /* #4338CA */
+}
+
+.bg-indigo-500\/10 { background-color: rgb(var(--ls-tone-indigo) / var(--ls-tone-tint)); }
+.text-indigo-500 { color: rgb(var(--ls-tone-indigo)); }
+.border-indigo-500\/20 { border-color: rgb(var(--ls-tone-indigo) / 0.3); }
 
 /* Grid pattern for auth pages */
 .bg-grid-pattern {
