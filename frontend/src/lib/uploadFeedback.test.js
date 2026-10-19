@@ -42,7 +42,7 @@ describe('bulkUploadFeedback', () => {
   test('some failed: warning with both counts', () => {
     const fb = bulkUploadFeedback({ successful: 2, failed: 1 });
     expect(fb.type).toBe('warning');
-    expect(fb.message).toBe("2 uploaded, 1 didn't. Check each is a PDF under 10 MB.");
+    expect(fb.message).toBe("2 uploaded, 1 didn't. Check each is a PDF or .txt file under 10 MB.");
   });
 
   test('all failed: error toast, never success', () => {

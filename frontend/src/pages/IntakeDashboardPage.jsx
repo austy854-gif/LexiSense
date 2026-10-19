@@ -315,7 +315,7 @@ export default function IntakeDashboardPage() {
                       <div className="flex flex-col items-center">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
                           idx < currentStep ? 'bg-green-500 text-white' :
-                          idx === currentStep ? 'bg-primary text-white' :
+                          idx === currentStep ? 'bg-primary text-primary-foreground' :
                           'bg-muted text-muted-foreground'
                         }`}>
                           {idx < currentStep ? <CheckCircle className="h-4 w-4" /> : idx + 1}
@@ -477,7 +477,7 @@ export default function IntakeDashboardPage() {
                           return (
                             <div key={idx} className="relative flex gap-4">
                               <div className="flex flex-col items-center">
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${item.error ? 'bg-red-500 text-white' : 'bg-primary text-white'}`}>
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${item.error ? 'bg-red-500 text-white' : 'bg-primary text-primary-foreground'}`}>
                                   <item.icon className="h-4 w-4" />
                                 </div>
                                 {idx < 7 && <div className="w-0.5 h-16 bg-muted" />}
@@ -809,7 +809,7 @@ export default function IntakeDashboardPage() {
                 value={filters.status}
                 onValueChange={handleStatusFilter}
               >
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-[180px]" aria-label="Filter by status">
                   <SelectValue placeholder="All Statuses" />
                 </SelectTrigger>
                 <SelectContent>

@@ -26,6 +26,23 @@ describe('getErrorInfo never leaks technical text', () => {
     expect(info.status).toBe(413);
   });
 
+  test('413 with a JSON detail from our API shows that detail', () => {
+    const err = {
+      message: 'Request failed with status code 413',
+      response: { status: 413, data: { detail: 'File size exceeds maximum allowed (10MB)' } },
+    };
+    const info = getErrorInfo(err);
+    expect(info.message).toBe('File size exceeds maximum allowed (10MB)');
+    expect(info.status).toBe(413);
+  });
+
+  test('413 with a JSON body but no usable detail falls back to the too-large message', () => {
+    for (const data of [{}, { detail: '' }, { detail: '<html>413</html>' }, null]) {
+      const info = getErrorInfo({ message: 'Request failed with status code 413', response: { status: 413, data } });
+      expect(info.message).toBe(TOO_LARGE_MESSAGE);
+    }
+  });
+
   test('502 with an HTML body falls back to the generic message', () => {
     const err = {
       message: 'Request failed with status code 502',

@@ -6,6 +6,7 @@ import { dashboardAPI } from '../api';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Skeleton } from '../components/ui/skeleton';
+import { NothingExpiringIllustration } from '../components/illustrations/Illustrations';
 import {
   FileText,
   AlertTriangle,
@@ -15,6 +16,25 @@ import {
   ArrowRight,
   RefreshCw,
 } from 'lucide-react';
+
+// "Expiring Soon" card when nothing expires in the dashboard's 30-day window.
+const NothingExpiringCard = () => (
+  <Card className="hover:shadow-md transition-shadow" data-testid="dashboard-nothing-expiring">
+    <CardContent className="p-6">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-medium text-muted-foreground">Expiring Soon</p>
+        <NothingExpiringIllustration className="-mt-2 -mr-2 w-16 shrink-0" />
+      </div>
+      <h2 className="text-base font-semibold text-foreground">Nothing expiring soon</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        No contracts expire in the next 30 days. Upcoming renewals will show up here.
+      </p>
+      <Link to="/contracts" className="mt-2 inline-block text-sm text-primary hover:underline">
+        View all contracts
+      </Link>
+    </CardContent>
+  </Card>
+);
 
 const StatCard = ({ title, value, icon: Icon, description, color = 'primary' }) => (
   <Card className="hover:shadow-md transition-shadow">
@@ -151,13 +171,17 @@ export default function DashboardPage() {
             description="Currently in effect"
             color="green-500"
           />
-          <StatCard
-            title="Expiring Soon"
-            value={overview.expiringSoon || 0}
-            icon={Clock}
-            description="Next 30 days"
-            color="yellow-500"
-          />
+          {overview.expiringSoon ? (
+            <StatCard
+              title="Expiring Soon"
+              value={overview.expiringSoon}
+              icon={Clock}
+              description="Next 30 days"
+              color="yellow-500"
+            />
+          ) : (
+            <NothingExpiringCard />
+          )}
           <StatCard
             title="High Risk"
             value={overview.highRisk || 0}

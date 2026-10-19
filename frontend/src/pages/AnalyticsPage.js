@@ -29,6 +29,9 @@ import {
   LineChart, Line, CartesianGrid,
 } from 'recharts';
 import { toast } from 'sonner';
+import { Link } from 'react-router-dom';
+import { EmptyState } from '../components/EmptyState';
+import { NothingExpiringIllustration } from '../components/illustrations/Illustrations';
 
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 const RISK_COLORS = { high: '#ef4444', medium: '#f59e0b', low: '#10b981', unassessed: '#6b7280' };
@@ -315,6 +318,21 @@ export default function AnalyticsPage() {
                   </div>
                 ))}
               </div>
+              {!expiring.next7Days && !expiring.next30Days && !expiring.next90Days && (
+                <EmptyState
+                  illustration={NothingExpiringIllustration}
+                  title="Nothing expiring soon"
+                  size="sm"
+                  data-testid="analytics-nothing-expiring"
+                  action={
+                    <Link to="/contracts" className="text-sm text-primary hover:underline">
+                      View all contracts
+                    </Link>
+                  }
+                >
+                  <p>No contracts expire in the next 90 days. Upcoming renewals will show up here.</p>
+                </EmptyState>
+              )}
             </CardContent>
           </Card>
 
@@ -377,7 +395,7 @@ export default function AnalyticsPage() {
           <CardContent>
             <div className="flex flex-col sm:flex-row gap-4 mb-6">
               <Select value={compareContract1} onValueChange={setCompareContract1}>
-                <SelectTrigger className="w-full sm:w-64" data-testid="compare-contract-1">
+                <SelectTrigger className="w-full sm:w-64" data-testid="compare-contract-1" aria-label="First contract to compare">
                   <SelectValue placeholder="Select first contract" />
                 </SelectTrigger>
                 <SelectContent>
@@ -387,7 +405,7 @@ export default function AnalyticsPage() {
                 </SelectContent>
               </Select>
               <Select value={compareContract2} onValueChange={setCompareContract2}>
-                <SelectTrigger className="w-full sm:w-64" data-testid="compare-contract-2">
+                <SelectTrigger className="w-full sm:w-64" data-testid="compare-contract-2" aria-label="Second contract to compare">
                   <SelectValue placeholder="Select second contract" />
                 </SelectTrigger>
                 <SelectContent>

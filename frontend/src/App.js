@@ -3,7 +3,10 @@ import { Toaster } from 'sonner';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { HomeRoute } from './components/HomeRoute';
+import { RouteHead } from './components/RouteHead';
 
+import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
@@ -18,6 +21,7 @@ import AuditLogPage from './pages/AuditLogPage';
 // import AgenticDashboardPage from './pages/AgenticDashboardPage';
 import BillingPage from './pages/BillingPage';
 import ApprovalRespondPage from './pages/ApprovalRespondPage';
+import AcceptInvitePage from './pages/AcceptInvitePage';
 
 import './App.css';
 
@@ -27,22 +31,25 @@ function App() {
       <AuthProvider>
         <BrowserRouter>
           <Toaster position="top-right" richColors closeButton />
+          {/* Canonical on '/', robots noindex everywhere else */}
+          <RouteHead />
           <Routes>
             {/* Public routes */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
             {/* Approval email links (token is the credential; no login needed) */}
             <Route path="/approvals/respond" element={<ApprovalRespondPage />} />
+            {/* Team invite email links (?token=...); works signed in or out */}
+            <Route path="/accept-invite" element={<AcceptInvitePage />} />
 
-            {/* Protected routes */}
+            {/* Home: marketing landing page for logged-out visitors,
+                the dashboard for signed-in users (same URL as before). */}
             <Route
               path="/"
-              element={
-                <ProtectedRoute>
-                  <DashboardPage />
-                </ProtectedRoute>
-              }
+              element={<HomeRoute landing={<LandingPage />} dashboard={<DashboardPage />} />}
             />
+
+            {/* Protected routes */}
             <Route
               path="/contracts"
               element={

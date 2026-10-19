@@ -81,7 +81,11 @@ if sentry_dsn and not sentry_dsn.startswith("your-"):
     import sentry_sdk
     from sentry_sdk.integrations.fastapi import FastApiIntegration
     from sentry_sdk.integrations.starlette import StarletteIntegration
-    from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration, ignore_logger
+    from utils.sentry_scrub import logger as _sentry_scrub_logger, sentry_init_options
+
+    # Scrubber diagnostics must never become Sentry events themselves.
+    ignore_logger(_sentry_scrub_logger.name)
 
     sentry_logging = LoggingIntegration(
         level=logging.INFO,
@@ -99,6 +103,9 @@ if sentry_dsn and not sentry_dsn.startswith("your-"):
         profiles_sample_rate=0.1,
         environment=get_env("ENVIRONMENT", "development"),
         release=os.environ.get("RELEASE_VERSION", "2.0.0"),
+        # No frame locals, no default PII, and every event/breadcrumb scrubbed
+        # of tokens, email addresses and query strings (utils/sentry_scrub.py).
+        **sentry_init_options(),
     )
     logger.info("Sentry initialized", extra={"environment": get_env("ENVIRONMENT", "development")})
 else:
@@ -146,6 +153,13 @@ async def lifespan(app: FastAPI):
 
                 from utils.migrations import run_migrations
                 await run_migrations(db)
+
+                # Opt-in (EXPIRE_LEGACY_INVITES_ON_STARTUP, OFF by default).
+                from utils.invite_expiry import maybe_expire_on_startup
+                try:
+                    await maybe_expire_on_startup(db)
+                except Exception as exc:  # optional maintenance must not block readiness
+                    logger.error("Legacy invitation expiry failed (error_type=%s)", type(exc).__name__)
 
                 if AGENTIC_GROUPS:
                     from routes.agentic import _create_indexes as create_agentic_indexes

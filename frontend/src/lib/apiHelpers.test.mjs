@@ -181,3 +181,40 @@ test('unknown roles are never more privileged than viewer', () => {
   assert.equal(canReadAudit('root'), false);
   assert.equal(canManageTeam('root'), false);
 });
+
+// ---------------------------------------------------------------------------
+// Workflow actions (mirror backend/routes/workflow.py action_map)
+// ---------------------------------------------------------------------------
+import {
+  APPROVER_ROLES,
+  canApproveContracts,
+  canPerformWorkflowAction,
+  workflowActionsFor,
+} from './apiHelpers.mjs';
+
+test('only managers and admins can approve', () => {
+  assert.deepEqual([...APPROVER_ROLES].sort(), ['admin', 'manager']);
+  assert.equal(canApproveContracts('admin'), true);
+  assert.equal(canApproveContracts('manager'), true);
+  assert.equal(canApproveContracts('user'), false);
+  assert.equal(canApproveContracts('viewer'), false);
+  assert.equal(canApproveContracts('bogus'), false);
+  assert.equal(canApproveContracts(undefined), false);
+});
+
+test('approve/reject buttons are hidden from the user role on a contract in review', () => {
+  assert.deepEqual(workflowActionsFor('user', 'review'), []);
+  assert.deepEqual(workflowActionsFor('viewer', 'review'), []);
+  assert.deepEqual(workflowActionsFor('manager', 'review'), ['approve', 'reject']);
+  assert.deepEqual(workflowActionsFor('admin', 'review'), ['approve', 'reject']);
+});
+
+test('submit is open to writers; activate is privileged', () => {
+  assert.deepEqual(workflowActionsFor('user', 'draft'), ['submit_for_review']);
+  assert.deepEqual(workflowActionsFor('viewer', 'draft'), []);
+  assert.deepEqual(workflowActionsFor('user', 'approved'), []);
+  assert.deepEqual(workflowActionsFor('manager', 'approved'), ['activate']);
+  assert.deepEqual(workflowActionsFor('admin', 'active'), []);
+  assert.equal(canPerformWorkflowAction('admin', 'approve', 'draft'), false);
+  assert.equal(canPerformWorkflowAction('admin', 'nope', 'review'), false);
+});

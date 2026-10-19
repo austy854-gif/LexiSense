@@ -10,7 +10,7 @@ export const UPLOAD_ANALYZED_MESSAGE = 'Contract uploaded. Your analysis is read
 export const UPLOAD_NOT_ANALYZED_MESSAGE =
   "Contract saved. The analysis didn't finish, so re-upload it to try again.";
 export const BULK_ALL_FAILED_MESSAGE =
-  'None of those files uploaded. Check each is a PDF under 10 MB.';
+  'None of those files uploaded. Check each is a PDF or .txt file under 10 MB.';
 
 /** Outcome of a single upload, from the created contract in the response. */
 export function singleUploadFeedback(contract) {
@@ -57,6 +57,6 @@ export function bulkUploadFeedback(data) {
 
   return {
     type: 'warning',
-    message: `${successful} uploaded, ${failed} didn't. Check each is a PDF under 10 MB.`,
+    message: `${successful} uploaded, ${failed} didn't. Check each is a PDF or .txt file under 10 MB.`,
   };
 }

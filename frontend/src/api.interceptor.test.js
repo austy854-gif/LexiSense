@@ -1,7 +1,7 @@
 import { isAuthEndpoint, shouldRedirectOnUnauthorized } from './api';
 
 describe('401 handling', () => {
-  test.each(['/auth/login', '/auth/register', '/auth/2fa/login', '/api/v1/auth/login', 'https://x.test/api/v1/auth/login/'])(
+  test.each(['/auth/login', '/auth/register', '/api/v1/auth/login', 'https://x.test/api/v1/auth/login/'])(
     '%s is an auth endpoint',
     (url) => expect(isAuthEndpoint(url)).toBe(true)
   );

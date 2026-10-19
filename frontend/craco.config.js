@@ -2,10 +2,6 @@
 const path = require("path");
 require("dotenv").config();
 
-// Check if we're in development/preview mode (not production build)
-// Craco sets NODE_ENV=development for start, NODE_ENV=production for build
-const isDevServer = process.env.NODE_ENV !== "production";
-
 // Environment variable overrides
 const config = {
   enableHealthCheck: process.env.ENABLE_HEALTH_CHECK === "true",
@@ -39,6 +35,20 @@ let webpackConfig = {
         "react-hooks/set-state-in-effect": "off",
       },
     },
+  },
+  // Jest (react-scripts 5 ships Jest 27):
+  // - jest/exportsResolver.js adds package.json "exports" support, which Jest 27
+  //   lacks (react-router v7 and Radix import subpaths through it).
+  // - map the webpack `@` -> src alias used by the shadcn ui components.
+  jest: {
+    configure: (jestConfig) => ({
+      ...jestConfig,
+      resolver: path.resolve(__dirname, 'jest/exportsResolver.js'),
+      moduleNameMapper: {
+        ...(jestConfig.moduleNameMapper || {}),
+        '^@/(.*)$': '<rootDir>/src/$1',
+      },
+    }),
   },
   webpack: {
     alias: {
@@ -93,18 +103,6 @@ let webpackConfig = {
   },
 };
 
-// Jest does not read the webpack alias above, so mirror it here; without this
-// any test that renders a page using the shadcn `@/lib/utils` import fails.
-webpackConfig.jest = {
-  configure: (jestConfig) => ({
-    ...jestConfig,
-    moduleNameMapper: {
-      ...(jestConfig.moduleNameMapper || {}),
-      '^@/(.*)$': '<rootDir>/src/$1',
-    },
-  }),
-};
-
 webpackConfig.devServer = (devServerConfig) => {
   // Add health check endpoints if enabled
   if (config.enableHealthCheck && setupHealthEndpoints && healthPluginInstance) {
@@ -125,21 +123,5 @@ webpackConfig.devServer = (devServerConfig) => {
 
   return devServerConfig;
 };
-
-// Wrap with visual edits (automatically adds babel plugin, dev server, and overlay in dev mode)
-if (isDevServer) {
-  try {
-    const { withVisualEdits } = require("@emergentbase/visual-edits/craco");
-    webpackConfig = withVisualEdits(webpackConfig);
-  } catch (err) {
-    if (err.code === 'MODULE_NOT_FOUND' && err.message.includes('@emergentbase/visual-edits/craco')) {
-      console.warn(
-        "[visual-edits] @emergentbase/visual-edits not installed \u2014 visual editing disabled."
-      );
-    } else {
-      throw err;
-    }
-  }
-}
 
 module.exports = webpackConfig;
