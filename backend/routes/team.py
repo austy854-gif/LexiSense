@@ -244,7 +244,7 @@ async def _join_existing_account(invitation: dict, user: dict, password: str) ->
     if not user.get("isActive", True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account is switched off. Ask your LexiSense admin to turn it back on.",
+            detail="This account is deactivated. Contact your workspace admin.",
         )
     # 403, not 401: the frontend treats every 401 as an expired session.
     if not verify_password(password, user.get("passwordHash", "")):
