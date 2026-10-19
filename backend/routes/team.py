@@ -241,16 +241,19 @@ async def _join_existing_account(invitation: dict, user: dict, password: str) ->
             "alreadyMember": True,
         }
 
-    if not user.get("isActive", True):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account is deactivated. Contact your workspace admin.",
-        )
+    # Password first, then the active check (AD-FR-23): a wrong password gets the
+    # same generic error whether the account is active or deactivated, so only
+    # someone who already knows the password learns the account state.
     # 403, not 401: the frontend treats every 401 as an expired session.
     if not verify_password(password, user.get("passwordHash", "")):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="That password doesn't match your LexiSense account. Use the password you sign in with.",
+        )
+    if not user.get("isActive", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is deactivated. Contact your workspace admin.",
         )
 
     old_org_id = user.get("organizationId")
