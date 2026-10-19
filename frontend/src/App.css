@@ -2,11 +2,13 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+/*
+ * No global `* { margin: 0; padding: 0 }` reset here. Tailwind v4's preflight
+ * (pulled in by @import "tailwindcss" above) already zeroes margin/padding and
+ * sets box-sizing: border-box, inside @layer base. An unlayered reset beats
+ * every Tailwind utility (@layer utilities), so it silently disabled all
+ * p-*, m-*, mx-auto, space-y-*, gap-adjacent spacing and lg:pl-* layout classes.
+ */
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
