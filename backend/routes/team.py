@@ -22,6 +22,7 @@ from utils.rbac import (
 )
 from services.email_service import send_invitation_email
 from services.audit_service import log_action
+from utils.invite_tokens import find_invitation_by_token, generate_invite_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/team", tags=["Team"])
@@ -93,11 +94,14 @@ async def invite_member(
             detail="Invitation already sent to this email"
         )
 
+    # Only the hash is persisted; the raw token goes out in the email link.
+    raw_token, token_hash = generate_invite_token()
     invitation = Invitation(
         organizationId=current_user["organizationId"],
         email=invitation_data.email,
         role=invitation_data.role,
-        invitedBy=current_user["sub"]
+        invitedBy=current_user["sub"],
+        tokenHash=token_hash,
     )
 
     invite_doc = invitation.model_dump()
@@ -121,7 +125,7 @@ async def invite_member(
         inviter_name=inviter_name,
         organization_name=org_name,
         role=invitation_data.role,
-        token=invitation.token
+        token=raw_token
     )
 
     # The invitation token is a bearer secret -- never log its value.
@@ -160,7 +164,7 @@ async def list_invitations(current_user: dict = Depends(get_current_user)):
     """List all pending invitations for the organization."""
     invitations = await db.invitations.find(
         {"organizationId": current_user["organizationId"]},
-        {"_id": 0}
+        {"_id": 0, "token": 0, "tokenHash": 0}
     ).sort("createdAt", -1).to_list(1000)
 
     return [
@@ -187,7 +191,7 @@ async def accept_invitation(payload: AcceptInvitationRequest):
     ``pending -> accepted`` transition is a single conditional update, so two
     concurrent requests with the same token cannot both create an account.
     """
-    invitation = await db.invitations.find_one({"token": payload.token, "status": "pending"})
+    invitation = await find_invitation_by_token(db.invitations, payload.token, {"status": "pending"})
 
     if not invitation:
         raise HTTPException(
