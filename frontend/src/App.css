@@ -1,6 +1,9 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
-@import "tailwindcss";
-@config "../tailwind.config.js";
+/*
+ * Tailwind (and the Inter/JetBrains Mono font import) is loaded once, from
+ * index.css. @reference gives this file access to the theme for @apply
+ * without emitting a second copy of Tailwind's base/utilities.
+ */
+@reference "./index.css";
 
 /*
  * No global `* { margin: 0; padding: 0 }` reset here. Tailwind v4's preflight
