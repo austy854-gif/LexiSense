@@ -34,7 +34,7 @@ import {
 import { toast } from 'sonner';
 // Trial length and upload limits are deliberately not shown to users (copy
 // rule); only the trial's end date from the backend, when known.
-import { isTrialActive, trialEndsLabel } from '../lib/billingHelpers.mjs';
+import { isTrialActive, trialCardStatus, trialEndsLabel } from '../lib/billingHelpers.mjs';
 
 const StatusBadge = ({ status }) => {
   const configs = {
@@ -159,6 +159,9 @@ export default function BillingPage() {
   const trialEnds = trialActive ? trialEndsLabel(subscription?.trialEndDate) : null;
   const isTrial = subscription?.subscriptionTier === 'trial';
   const isTeam = subscription?.subscriptionTier === 'team';
+  // B6: the trial card is informational only (no CTA) and is hidden for paid or cancelled orgs.
+  const trialCard = trialCardStatus(subscription?.subscriptionTier, subscription?.trialEndDate);
+  const visiblePlans = plans?.filter((plan) => plan.id !== 'trial' || trialCard);
 
   return (
     <Layout>
@@ -299,9 +302,10 @@ export default function BillingPage() {
           </CardHeader>
           <CardContent>
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {plans?.map((plan) => (
+              {visiblePlans?.map((plan) => (
                 <div
                   key={plan.id}
+                  data-testid={`plan-card-${plan.id}`}
                   className={`relative p-6 border rounded-xl ${
                     plan.id === 'team' ? 'border-primary/30 bg-primary/5' : 'border-muted'
                   } ${subscription?.subscriptionTier === plan.id ? 'ring-2 ring-primary' : ''}`}
@@ -331,6 +335,19 @@ export default function BillingPage() {
                     ))}
                   </ul>
 
+                  {plan.id === 'trial' ? (
+                    <p
+                      className="flex w-full items-center justify-center gap-2 rounded-md border border-muted py-2 text-sm font-medium text-muted-foreground"
+                      data-testid="trial-plan-status"
+                    >
+                      {trialCard === 'Current plan' ? (
+                        <CheckCircle className="h-4 w-4" aria-hidden="true" />
+                      ) : (
+                        <Clock className="h-4 w-4" aria-hidden="true" />
+                      )}
+                      {trialCard}
+                    </p>
+                  ) : (
                   <Button
                     className="w-full gap-2"
                     variant={subscription?.subscriptionTier === plan.id ? 'outline' : 'default'}
@@ -342,11 +359,6 @@ export default function BillingPage() {
                         <CheckCircle className="h-4 w-4" />
                         Current plan
                       </>
-                    ) : plan.id === 'trial' ? (
-                      <>
-                        <Clock className="h-4 w-4" />
-                        {plan.cta}
-                      </>
                     ) : (
                       <>
                         <Crown className="h-4 w-4" />
@@ -354,6 +366,7 @@ export default function BillingPage() {
                       </>
                     )}
                   </Button>
+                  )}
                 </div>
               ))}
             </div>
