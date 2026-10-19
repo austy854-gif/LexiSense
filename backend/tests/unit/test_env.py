@@ -14,7 +14,7 @@ from utils.env import get_database_url, get_env
 
 VAR = "LEXISENSE_TEST_ENV_VAR"
 URI = (
-    "mongodb://user:pw@cluster0-a.example.net:27017,cluster0-b.example.net:27017/lexisense"
+    "mongodb://cluster0-a.example.net:27017,cluster0-b.example.net:27017/lexisense"
     "?replicaSet=rs0&retryWrites=true&w=majority"
 )
 
