@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
           cache-dependency-path: 'backend/requirements.txt'
       - name: Install dependencies
@@ -108,7 +108,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
           cache-dependency-path: 'backend/requirements.txt'
       - name: Install dependencies
@@ -174,7 +174,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
           cache-dependency-path: |
             backend/requirements.txt
@@ -337,6 +337,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Pin the interpreter pip-audit resolves requirements.txt with: numpy
+      # 2.5.x needs Python >= 3.12, matching the other backend jobs.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
       - name: Check Python dependencies
         run: |
           pip install pip-audit

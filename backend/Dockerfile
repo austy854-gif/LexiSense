@@ -1,5 +1,5 @@
 # Production Backend Dockerfile - Multi-stage build
-FROM python:3.11-slim as builder
+FROM python:3.12-slim as builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir --user -r requirements.txt && \
       -r requirements-emergent.txt
 
 # Production stage
-FROM python:3.11-slim as production
+FROM python:3.12-slim as production
 
 WORKDIR /app
 
