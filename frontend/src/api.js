@@ -140,9 +140,13 @@ export const auditAPI = {
 // Billing API
 export const billingAPI = {
   getSubscription: () => api.get('/billing/subscription'),
-  createCheckout: (priceId, successUrl, cancelUrl) => api.post('/billing/checkout', { priceId, successUrl, cancelUrl }),
+  // The server maps planId + interval to a Stripe price; the client never sends a price ID.
+  createCheckout: ({ planId = 'team', interval = 'monthly' } = {}, successUrl, cancelUrl) =>
+    api.post('/billing/checkout', { planId, interval, successUrl, cancelUrl }),
   createPortal: (returnUrl) => api.post('/billing/portal', { returnUrl }),
   getPlans: () => api.get('/billing/plans'),
+  // Runtime flags (BILLING_UI_ENABLED); public, no auth needed.
+  getConfig: () => api.get('/billing/config'),
 };
 
 // Agentic AI API

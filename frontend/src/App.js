@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
-import { ProtectedRoute } from './components/ProtectedRoute';
+import { ProtectedRoute, BillingUiRoute } from './components/ProtectedRoute';
 
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
@@ -103,7 +103,10 @@ function App() {
               path="/billing"
               element={
                 <ProtectedRoute allowedRoles={['admin']}>
-                  <BillingPage />
+                  {/* Hidden (redirects home) unless BILLING_UI_ENABLED is on. */}
+                  <BillingUiRoute>
+                    <BillingPage />
+                  </BillingUiRoute>
                 </ProtectedRoute>
               }
             />

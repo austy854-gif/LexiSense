@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { notificationsAPI } from '../api';
 import { hasRole, AUDIT_READER_ROLES, ADMIN_ROLES } from '../lib/apiHelpers.mjs';
+import { isBillingPath, useBillingUiEnabled } from '../lib/billingConfig';
 import {
   LayoutDashboard,
   FileText,
@@ -53,6 +54,8 @@ export function Layout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  // BILLING_UI_ENABLED (runtime, from the backend): hidden until it says "on".
+  const billingUiEnabled = useBillingUiEnabled();
 
   const fetchNotifications = useCallback(async () => {
     try {
@@ -157,6 +160,7 @@ export function Layout({ children }) {
           <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
             {navItems
               .filter((item) => !item.roles || hasRole(user?.role, item.roles))
+              .filter((item) => billingUiEnabled === true || !isBillingPath(item.path))
               .map((item) => {
                 const Icon = item.icon;
                 const isActive = location.pathname === item.path;

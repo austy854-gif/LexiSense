@@ -5,16 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '../components/ui/dialog';
 import { Skeleton } from '../components/ui/skeleton';
-import { Separator } from '../components/ui/separator';
 import {
   CreditCard,
   Crown,
@@ -23,15 +14,20 @@ import {
   XCircle,
   Loader2,
   ArrowRight,
-  Shield,
-  Users,
-  FileText,
-  Bell,
-  Download,
   Lock,
   HelpCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import {
+  CTA_CHECKOUT,
+  CTA_CONTACT,
+  CTA_PORTAL,
+  accessStateOf,
+  formatPrice,
+  getPlanCardState,
+  getPrimaryAction,
+  intervalLabel,
+} from '../lib/billingCta';
 
 const StatusBadge = ({ status }) => {
   const configs = {
@@ -67,20 +63,28 @@ const TierBadge = ({ tier }) => {
   );
 };
 
-const FeatureRow = ({ icon: Icon, children }) => (
-  <div className="flex items-start gap-3">
-    <Icon className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
-    <span className="text-sm text-muted-foreground">{children}</span>
-  </div>
-);
+function PlanPrice({ plan, interval }) {
+  const price = plan.prices?.[interval] || (plan.price !== null && plan.price !== undefined
+    ? { amount: plan.price, currency: plan.currency, interval: plan.interval }
+    : null);
+  if (!price) return null;
+  return (
+    <div className="flex items-baseline justify-center gap-1" data-testid={`plan-price-${plan.id}`}>
+      <span className="text-4xl font-bold">{formatPrice(price.amount, price.currency)}</span>
+      <span className="text-muted-foreground">/{intervalLabel(price.interval)}</span>
+    </div>
+  );
+}
 
 export default function BillingPage() {
   const { user } = useAuth();
   const [subscription, setSubscription] = useState(null);
   const [plans, setPlans] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
+  const [billingInterval, setBillingInterval] = useState('monthly');
 
   const isAdmin = user?.role === 'admin';
 
@@ -89,6 +93,8 @@ export default function BillingPage() {
   }, []);
 
   const fetchBillingData = async () => {
+    setLoading(true);
+    setLoadError(false);
     try {
       const [subRes, plansRes] = await Promise.all([
         billingAPI.getSubscription(),
@@ -97,20 +103,20 @@ export default function BillingPage() {
       setSubscription(subRes.data);
       setPlans(plansRes.data.plans);
     } catch (error) {
-      toast.error('Failed to load billing information');
+      setLoadError(true);
       console.error(error);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCheckout = async (priceId) => {
+  const handleCheckout = async () => {
     if (!isAdmin) return;
     setCheckoutLoading(true);
     try {
       const successUrl = `${window.location.origin}/billing?success=true`;
       const cancelUrl = `${window.location.origin}/billing?canceled=true`;
-      const res = await billingAPI.createCheckout(priceId, successUrl, cancelUrl);
+      const res = await billingAPI.createCheckout({ planId: 'team', interval: billingInterval }, successUrl, cancelUrl);
       window.location.href = res.data.url;
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to start checkout');
@@ -160,9 +166,88 @@ export default function BillingPage() {
     );
   }
 
-  const trialDaysLeft = subscription?.trialEndDate ? getTrialDaysLeft(subscription.trialEndDate) : 0;
-  const isTrial = subscription?.subscriptionTier === 'trial';
-  const isTeam = subscription?.subscriptionTier === 'team';
+  if (loadError || !subscription) {
+    return (
+      <Layout>
+        <Card data-testid="billing-load-error">
+          <CardHeader>
+            <CardTitle>We couldn't load your billing information</CardTitle>
+            <CardDescription>Please check your connection and try again.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={fetchBillingData} className="gap-2">
+              <ArrowRight className="h-4 w-4" />
+              Try again
+            </Button>
+          </CardContent>
+        </Card>
+      </Layout>
+    );
+  }
+
+  const accessState = accessStateOf(subscription);
+  const trialPlan = plans?.find((p) => p.id === 'trial');
+  const teamPlan = plans?.find((p) => p.id === 'team');
+  const intervals = teamPlan?.intervals || [];
+  const canChooseInterval = intervals.length > 1;
+  const checkoutAvailable = intervals.includes(billingInterval);
+  const trialDaysLeft = subscription.trialEndDate ? getTrialDaysLeft(subscription.trialEndDate) : 0;
+  const isTrial = accessState === 'trial';
+  const isTeam = subscription.subscriptionTier === 'team';
+  const trialLimit = subscription.trialContractsLimit ?? trialPlan?.uploadLimit ?? null;
+  const trialUsed = subscription.trialContractsUsed ?? 0;
+  const primary = getPrimaryAction(subscription, { isAdmin });
+
+  const statusLine = {
+    trial: `${trialDaysLeft} day${trialDaysLeft !== 1 ? 's' : ''} left in trial`,
+    trial_expired: 'Trial ended',
+    paid: subscription.currentPeriodEnd ? `Renews on ${formatDate(subscription.currentPeriodEnd)}` : 'Active subscription',
+    past_due_grace: 'Payment failed',
+    past_due: 'Payment failed: account is read-only',
+    cancelled: 'No active subscription',
+    inactive: 'Subscription not active',
+    unverified_plan: 'Subscription needs attention',
+  }[accessState] || 'No active subscription';
+
+  const renderAction = (action, { testId, full = false } = {}) => {
+    if (action.kind === CTA_CHECKOUT) {
+      return (
+        <Button
+          onClick={handleCheckout}
+          disabled={checkoutLoading || !checkoutAvailable}
+          className={`gap-2${full ? ' w-full' : ''}`}
+          data-testid={testId}
+        >
+          {checkoutLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Crown className="h-4 w-4" />}
+          {action.label}
+        </Button>
+      );
+    }
+    if (action.kind === CTA_PORTAL) {
+      return (
+        <Button
+          variant="outline"
+          onClick={handlePortal}
+          disabled={portalLoading}
+          className={`gap-2${full ? ' w-full' : ''}`}
+          data-testid={testId}
+        >
+          {portalLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
+          {action.label}
+        </Button>
+      );
+    }
+    if (action.kind === CTA_CONTACT) {
+      return (
+        <p className="text-sm text-muted-foreground" data-testid={testId}>
+          {action.description || 'Please contact support about your subscription.'}
+        </p>
+      );
+    }
+    return action.description ? (
+      <p className="text-sm text-muted-foreground" data-testid={testId}>{action.description}</p>
+    ) : null;
+  };
 
   return (
     <Layout>
@@ -182,7 +267,7 @@ export default function BillingPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <CreditCard className="h-5 w-5" />
-              Current Plan
+              Your subscription
             </CardTitle>
             <CardDescription>Your organization's current subscription status</CardDescription>
           </CardHeader>
@@ -198,42 +283,30 @@ export default function BillingPage() {
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <TierBadge tier={subscription?.subscriptionTier} />
-                    <StatusBadge status={subscription?.billingStatus} />
+                    <TierBadge tier={subscription.subscriptionTier} />
+                    <StatusBadge status={subscription.billingStatus} />
                   </div>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {isTrial ? (
-                      trialDaysLeft > 0
-                        ? `${trialDaysLeft} day${trialDaysLeft !== 1 ? 's' : ''} left in trial`
-                        : 'Trial ended'
-                    ) : isTeam ? (
-                      subscription?.currentPeriodEnd
-                        ? `Renews on ${formatDate(subscription.currentPeriodEnd)}`
-                        : 'Active subscription'
-                    ) : (
-                      'No active subscription'
-                    )}
+                  <p className="text-sm text-muted-foreground mt-1" data-testid="billing-status-line">
+                    {statusLine}
                   </p>
                 </div>
               </div>
-              
-              {isTrial && trialDaysLeft > 0 && (
-                <div className="text-right">
+
+              {isTrial && trialLimit !== null && (
+                <div className="text-right" data-testid="trial-usage">
                   <p className="text-sm text-muted-foreground">
-                    {subscription?.trialContractsUsed || 0} / {subscription?.trialContractsLimit || 3} contracts used
+                    {trialUsed} / {trialLimit} contracts used
                   </p>
                   <div className="w-48 h-2 bg-muted rounded-full overflow-hidden mt-1">
                     <div
                       className="h-full bg-primary transition-all"
-                      style={{
-                        width: `${((subscription?.trialContractsUsed || 0) / (subscription?.trialContractsLimit || 3)) * 100}%`
-                      }}
+                      style={{ width: `${trialLimit > 0 ? Math.min(100, (trialUsed / trialLimit) * 100) : 100}%` }}
                     />
                   </div>
                 </div>
               )}
 
-              {isTeam && subscription?.cancelAtPeriodEnd && (
+              {isTeam && subscription.cancelAtPeriodEnd && (
                 <div className="flex items-center gap-2 text-orange-500">
                   <XCircle className="h-4 w-4" />
                   <span className="text-sm">Cancels at period end</span>
@@ -255,53 +328,37 @@ export default function BillingPage() {
               </div>
             )}
 
+            {(accessState === 'past_due_grace' || accessState === 'past_due') && (
+              <div className="p-4 border border-orange-500/20 bg-orange-500/5 rounded-lg" data-testid="past-due-notice">
+                <div className="flex items-center gap-3">
+                  <Lock className="h-5 w-5 text-orange-500" />
+                  <p className="text-sm text-orange-700">
+                    {accessState === 'past_due'
+                      ? 'Your last payment failed, so your account is read-only. You can still view and download your contracts. Update your payment method to restore uploads, AI analysis, chat and invitations.'
+                      : subscription.warning || 'Your last payment failed. Please update your payment method.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {canChooseInterval && primary.kind === CTA_CHECKOUT && (
+              <div className="flex gap-2" role="group" aria-label="Billing interval" data-testid="interval-toggle">
+                {intervals.map((value) => (
+                  <Button
+                    key={value}
+                    size="sm"
+                    variant={billingInterval === value ? 'default' : 'outline'}
+                    aria-pressed={billingInterval === value}
+                    onClick={() => setBillingInterval(value)}
+                  >
+                    {value === 'annual' ? 'Billed annually' : 'Billed monthly'}
+                  </Button>
+                ))}
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-3 pt-2">
-              {isTrial && (
-                <>
-                  <Button 
-                    onClick={() => handleCheckout(plans?.find(p => p.id === 'team')?.priceId)}
-                    disabled={checkoutLoading}
-                    className="gap-2"
-                  >
-                    <Crown className="h-4 w-4" />
-                    Upgrade to Team Plan
-                  </Button>
-                </>
-              )}
-              {isTeam && (
-                <>
-                  <Button 
-                    variant="outline"
-                    onClick={handlePortal}
-                    disabled={portalLoading}
-                    className="gap-2"
-                  >
-                    <CreditCard className="h-4 w-4" />
-                    Manage Subscription
-                  </Button>
-                  {subscription?.cancelAtPeriodEnd && (
-                    <Button 
-                      variant="outline"
-                      onClick={handlePortal}
-                      disabled={portalLoading}
-                      className="gap-2 bg-green-500/10 text-green-500 border-green-500/20 hover:bg-green-500/20"
-                    >
-                      <ArrowRight className="h-4 w-4" />
-                      Resume Subscription
-                    </Button>
-                  )}
-                </>
-              )}
-              {subscription?.subscriptionTier === 'cancelled' && (
-                <Button 
-                  onClick={() => handleCheckout(plans?.find(p => p.id === 'team')?.priceId)}
-                  disabled={checkoutLoading}
-                  className="gap-2"
-                >
-                  <Crown className="h-4 w-4" />
-                  Reactivate Team Plan
-                </Button>
-              )}
+              {renderAction(primary, { testId: 'billing-primary-action' })}
             </div>
           </CardContent>
         </Card>
@@ -317,63 +374,54 @@ export default function BillingPage() {
           </CardHeader>
           <CardContent>
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {plans?.map((plan) => (
-                <div
-                  key={plan.id}
-                  className={`relative p-6 border rounded-xl ${
-                    plan.id === 'team' ? 'border-primary/30 bg-primary/5' : 'border-muted'
-                  } ${subscription?.subscriptionTier === plan.id ? 'ring-2 ring-primary' : ''}`}
-                >
-                  {plan.id === 'team' && (
-                    <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                      <Badge className="bg-primary text-primary-foreground px-3 py-1">
-                        Most Popular
-                      </Badge>
-                    </div>
-                  )}
-                  
-                  <div className="text-center mb-6">
-                    <div className="flex items-baseline justify-center gap-1">
-                      <span className="text-4xl font-bold">${plan.price}</span>
-                      <span className="text-muted-foreground">/{plan.interval}</span>
-                    </div>
-                    <p className="text-sm text-muted-foreground mt-1">{plan.name}</p>
-                  </div>
-
-                  <ul className="space-y-3 mb-6">
-                    {plan.features.map((feature, idx) => (
-                      <li key={idx} className="flex items-start gap-2 text-sm">
-                        <CheckCircle className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
-                        <span>{feature}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <Button
-                    className="w-full gap-2"
-                    variant={subscription?.subscriptionTier === plan.id ? 'outline' : 'default'}
-                    disabled={subscription?.subscriptionTier === plan.id || checkoutLoading}
-                    onClick={() => plan.priceId && handleCheckout(plan.priceId)}
+              {plans?.map((plan) => {
+                const card = getPlanCardState(plan, subscription, { isAdmin });
+                if (!card.show) return null;
+                const isCurrent = card.label && card.label.startsWith('Current plan');
+                return (
+                  <div
+                    key={plan.id}
+                    data-testid={`plan-card-${plan.id}`}
+                    className={`relative p-6 border rounded-xl ${
+                      plan.id === 'team' ? 'border-primary/30 bg-primary/5' : 'border-muted'
+                    } ${isCurrent ? 'ring-2 ring-primary' : ''}`}
                   >
-                    {subscription?.subscriptionTier === plan.id ? (
-                      <>
-                        <CheckCircle className="h-4 w-4" />
-                        Current Plan
-                      </>
-                    ) : plan.cta === 'Start Free Trial' ? (
-                      <>
-                        <Clock className="h-4 w-4" />
-                        {plan.cta}
-                      </>
-                    ) : (
-                      <>
-                        <Crown className="h-4 w-4" />
-                        {plan.cta}
-                      </>
+                    {plan.id === 'team' && (
+                      <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                        <Badge className="bg-primary text-primary-foreground px-3 py-1">
+                          Most Popular
+                        </Badge>
+                      </div>
                     )}
-                  </Button>
-                </div>
-              ))}
+
+                    <div className="text-center mb-6">
+                      <PlanPrice plan={plan} interval={plan.id === 'team' ? billingInterval : 'monthly'} />
+                      <p className="text-sm text-muted-foreground mt-1">{plan.name}</p>
+                    </div>
+
+                    <ul className="space-y-3 mb-6">
+                      {plan.features.map((feature, idx) => (
+                        <li key={idx} className="flex items-start gap-2 text-sm">
+                          <CheckCircle className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
+                          <span>{feature}</span>
+                        </li>
+                      ))}
+                    </ul>
+
+                    {card.action
+                      ? renderAction(card.action, { testId: `plan-action-${plan.id}`, full: true })
+                      : card.label && (
+                        <div
+                          className="flex items-center justify-center gap-2 text-sm font-medium text-muted-foreground"
+                          data-testid={`plan-label-${plan.id}`}
+                        >
+                          {isCurrent ? <CheckCircle className="h-4 w-4" /> : <Clock className="h-4 w-4" />}
+                          {card.label}
+                        </div>
+                      )}
+                  </div>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
@@ -397,7 +445,9 @@ export default function BillingPage() {
                 <tbody className="text-sm divide-y">
                   <tr>
                     <td className="py-3 font-medium">Contract uploads</td>
-                    <td className="py-3 text-center text-muted-foreground">3 per trial</td>
+                    <td className="py-3 text-center text-muted-foreground">
+                      {trialPlan?.uploadLimit != null ? `${trialPlan.uploadLimit} per trial` : 'Limited'}
+                    </td>
                     <td className="py-3 text-center text-green-500">
                       <CheckCircle className="h-4 w-4 mx-auto" />
                     </td>
@@ -507,7 +557,10 @@ export default function BillingPage() {
                   What happens when my trial ends?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  When your 7-day trial ends or you reach the 3-contract limit, you'll need to upgrade to the Team plan to continue using LexiSense. Your contracts and data will be preserved.
+                  {trialPlan
+                    ? `When your ${trialPlan.trialDays}-day trial ends or you reach the ${trialPlan.uploadLimit}-contract limit, you'll need to subscribe to the Team plan to keep uploading and analyzing contracts.`
+                    : "When your trial ends or you reach the trial's contract limit, you'll need to subscribe to the Team plan to keep uploading and analyzing contracts."}{' '}
+                  Your contracts and data are preserved, and you can still view and download them.
                 </p>
               </details>
               <details className="group border rounded-lg p-4">
@@ -534,7 +587,9 @@ export default function BillingPage() {
                   Is there a per-seat pricing?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  No, the Team plan is a flat $49/month for your entire team (up to 10 members). No per-seat fees.
+                  {teamPlan && teamPlan.price != null
+                    ? `No, the Team plan is a flat ${formatPrice(teamPlan.price, teamPlan.currency)}/${intervalLabel(teamPlan.interval)} for your entire team (${teamPlan.memberLimit ? `up to ${teamPlan.memberLimit} members` : 'unlimited members'}). No per-seat fees.`
+                    : 'No, the Team plan is a flat price for your entire team. No per-seat fees.'}
                 </p>
               </details>
               <details className="group border rounded-lg p-4">
@@ -543,7 +598,7 @@ export default function BillingPage() {
                   How do I update my payment method?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  Click "Manage Subscription" to open the Stripe Billing Portal where you can update payment methods, view invoices, and manage your subscription.
+                  Click "Manage subscription" (or "Update payment method" if a payment failed) to open the Stripe Billing Portal where you can update payment methods, view invoices, and manage your subscription.
                 </p>
               </details>
             </div>
