@@ -136,6 +136,22 @@ def get_email_template(template_type: str, data: dict) -> tuple[str, str]:
     if template_type == "invitation":
         subject, html, _text = render_invitation_email(data)
 
+    elif template_type == "password_reset":
+        from html import escape
+        reset_url = data.get("reset_url") or ""
+        safe_url = escape(str(reset_url), quote=True)
+        subject = "Reset your LexiSense password"
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <body style="margin:0;padding:24px;font-family:Segoe UI,Tahoma,sans-serif;background:#0f1318;color:#f3f4f6;">
+          <p>We received a request to reset your LexiSense password.</p>
+          <p><a href="{safe_url}" style="display:inline-block;padding:12px 20px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px;">Choose a new password</a></p>
+          <p style="color:#9ca3af;font-size:13px;">This link expires in one hour. If you did not ask for a reset, you can ignore this email.</p>
+        </body>
+        </html>
+        """
+
     elif template_type == "expiration_alert":
         days_remaining = data.get('days_remaining', 0)
         urgency_color = "#ef4444" if days_remaining <= 7 else "#f59e0b" if days_remaining <= 14 else "#22c55e"

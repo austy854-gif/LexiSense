@@ -74,8 +74,8 @@ export function Layout({ children }) {
     return () => clearInterval(interval);
   }, [fetchNotifications]);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/login');
   };
 

@@ -47,7 +47,12 @@ export function AuthProvider({ children }) {
     return userData;
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await authAPI.logout();
+    } catch {
+      // The local session is dropped either way. A 401 here means it was already dead.
+    }
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setUser(null);

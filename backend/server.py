@@ -188,14 +188,16 @@ async def lifespan(app: FastAPI):
     client.close()
 
 
-# Create the main app
+# Create the main app. Interactive docs stay off in production.
+_environment = get_env("ENVIRONMENT", "development").lower()
+_public_docs = _environment not in ("production", "prod")
 app = FastAPI(
     title="LexiSense API",
     description="Enterprise AI-powered Contract Lifecycle Management",
     version="2.0.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
+    docs_url="/api/docs" if _public_docs else None,
+    redoc_url="/api/redoc" if _public_docs else None,
+    openapi_url="/api/openapi.json" if _public_docs else None,
     lifespan=lifespan,
 )
 

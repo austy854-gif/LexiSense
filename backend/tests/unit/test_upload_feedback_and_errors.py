@@ -37,7 +37,7 @@ def patched_pipeline(monkeypatch, db):
     async def _release(org_id):
         released.append(org_id)
 
-    async def _s3(content, filename, org_id, mime):
+    async def _s3(content, filename, org_id, mime, extension=None):
         return f"{org_id}/{filename}"
 
     async def _log_action(**kwargs):
