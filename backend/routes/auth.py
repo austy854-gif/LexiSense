@@ -244,7 +244,7 @@ async def reset_password(body: ResetPasswordRequest):
     """Set a new password and sign every existing session out."""
     token_hash = hash_invite_token(body.token)
     user_doc = await db.users.find_one({"passwordResetHash": token_hash})
-    if not user_doc:
+    if not user_doc or not user_doc.get("isActive", True):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset link")
     expires_raw = user_doc.get("passwordResetExpires")
     try:

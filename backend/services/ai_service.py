@@ -96,9 +96,13 @@ def chunk_plan(
     spans = _windows(text, chunk_size, overlap)
     partial = len(spans) > limit
     if partial:
-        chosen = list(spans[: max(1, limit - 1)])
-        if spans[-1] not in chosen:
-            chosen.append(spans[-1])
+        # A single window cannot cover both ends; keep the opening and say so.
+        if limit < 2:
+            chosen = [spans[0]]
+        else:
+            chosen = list(spans[: limit - 1])
+            if spans[-1] not in chosen:
+                chosen.append(spans[-1])
     else:
         chosen = spans
     return [text[start:end] for start, end in chosen], {

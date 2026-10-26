@@ -25,6 +25,7 @@ from services.workflow_service import (
     validate_transition,
 )
 from routes.billing import (
+    assert_org_writable,
     reserve_trial_upload_atomic,
     release_trial_upload,
 )
@@ -432,7 +433,7 @@ async def upload_contract(
         logger.error(f"Contract upload failed after quota reservation: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload failed. Your trial quota was not consumed. Please retry."
+            detail="Upload failed. Nothing was saved. Please retry."
         )
 
     uploader = await db.users.find_one({"id": current_user["sub"]}, {"_id": 0, "email": 1})
@@ -662,6 +663,7 @@ async def update_contract(
     current_user: dict = Depends(get_current_user)
 ):
     """Update a contract's metadata and create a version history entry."""
+    await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
         {"_id": 0}
@@ -881,6 +883,7 @@ async def restore_contract_version(
     uploader. The restored status is a workflow transition, so it is validated
     against the state machine and recorded in workflowHistory + the audit log.
     """
+    await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]}
     )
@@ -1012,6 +1015,7 @@ async def delete_contract(
     current_user: dict = Depends(get_current_user)
 ):
     """Delete a contract."""
+    await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]}
     )

@@ -146,11 +146,32 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
     return True, ""
 
 
+async def assert_org_writable(org_id: str) -> None:
+    """Reject contract mutations once a subscription is read-only.
+
+    Uploads already go through :func:`reserve_trial_upload_atomic`. Edits,
+    deletes, restores and workflow changes use this so the billing page's
+    read-only state is actually enforced.
+    """
+    await get_or_create_billing(org_id)
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    if upload_gate(raw) == "readonly":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=READ_ONLY_MESSAGE,
+        )
+
+
 async def release_trial_upload(org_id: str) -> None:
     """Refund one trial upload slot. Used when an upload fails after reservation.
 
     Safe to call multiple times; will never take the counter below zero.
+    Paid and read-only orgs never consumed a slot, so a failed upload must
+    not decrement their counter.
     """
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    if upload_gate(raw) != "trial":
+        return
     now = datetime.now(timezone.utc).isoformat()
     await db.organization_billing.find_one_and_update(
         {
@@ -548,6 +569,7 @@ __all__ = [
     "check_trial_access",
     "reserve_trial_upload_atomic",
     "release_trial_upload",
+    "assert_org_writable",
     "increment_trial_usage",
     "get_or_create_billing",
     "init_db",

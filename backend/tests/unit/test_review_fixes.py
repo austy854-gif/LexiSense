@@ -9,12 +9,13 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
+from routes import billing as billing_route
 from services.ai_service import chunk_plan, merge_analyses, select_chat_context
 from utils.auth import create_access_token, get_current_user
 from utils.billing_access import grace_ends_at, upload_gate
 from utils.contract_fields import coerce_iso_date, fields_from_analysis
 from utils.uploads import UploadRejected, attachment_filename, validate_upload
-from tests.unit.conftest import seed_users
+from tests.unit.conftest import API_PREFIX, auth_headers, make_contract, seed_users
 
 
 def test_iso_dates_reject_prose_and_impossible_days():
@@ -159,3 +160,49 @@ async def test_revoked_token_and_rotated_session_are_rejected(db, db_authoritati
     })
     again = await get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=fresh))
     assert again["role"] == "admin"
+
+
+async def test_paid_upload_failure_does_not_drain_the_trial_counter(db):
+    billing_route.init_db(db)
+    await db.organization_billing.insert_one({
+        "organizationId": "org-paid",
+        "subscriptionTier": "team",
+        "billingStatus": "active",
+        "trialContractsUsed": 3,
+        "trialContractsLimit": 25,
+    })
+    ok, message = await billing_route.reserve_trial_upload_atomic("org-paid")
+    assert (ok, message) == (True, "")
+    await billing_route.release_trial_upload("org-paid")
+    stored = await db.organization_billing.find_one({"organizationId": "org-paid"})
+    assert stored["trialContractsUsed"] == 3
+
+
+async def test_cancelled_org_cannot_edit_a_contract(client, db, db_authoritative_auth):
+    now = datetime.now(timezone.utc).isoformat()
+    user = {
+        "id": "user-1",
+        "email": "owner@example.com",
+        "passwordHash": "not-checked",
+        "role": "admin",
+        "organizationId": "org-1",
+        "isActive": True,
+        "createdAt": now,
+    }
+    await seed_users(db, user)
+    contract = make_contract("org-1", user["id"], contract_id="c-1")
+    await db.contracts.insert_one(contract)
+    await db.organization_billing.insert_one({
+        "organizationId": "org-1",
+        "subscriptionTier": "cancelled",
+        "billingStatus": "cancelled",
+        "trialContractsUsed": 0,
+        "trialContractsLimit": 25,
+    })
+    response = await client.patch(
+        f"{API_PREFIX}/contracts/c-1",
+        headers=auth_headers(user),
+        json={"title": "Renamed"},
+    )
+    assert response.status_code == 403
+    assert "read-only" in response.text.lower()

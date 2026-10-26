@@ -6,6 +6,7 @@ import logging
 from utils.auth import get_current_user
 from services.audit_service import log_action, send_notification
 from utils.feature_flags import approval_emails_enabled
+from routes.billing import assert_org_writable
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contracts", tags=["Workflow"])
@@ -62,6 +63,7 @@ async def workflow_action(
     ``assignedManagerId``, else the first manager, else the first admin) with
     one-click Approve/Reject links.
     """
+    await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
         {"_id": 0},

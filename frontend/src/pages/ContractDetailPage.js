@@ -224,7 +224,13 @@ export default function ContractDetailPage() {
     setDownloading(true);
     try {
       const response = await contractsAPI.getFile(id);
-      window.open(response.data.url, '_blank', 'noopener,noreferrer');
+      const link = document.createElement('a');
+      link.href = response.data.url;
+      link.rel = 'noopener noreferrer';
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
     } catch (error) {
       toast.error(getErrorInfo(error).message || 'Download unavailable');
     } finally {
