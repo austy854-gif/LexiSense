@@ -176,6 +176,19 @@ export default function BillingPage() {
           </div>
         </div>
 
+        {subscription?.readOnly && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm" data-testid="billing-readonly">
+            This workspace is read-only until billing is updated. You can still open contracts you already have.
+          </div>
+        )}
+        {!subscription?.readOnly && subscription?.billingStatus === 'past_due' && (
+          <div className="rounded-lg border border-orange-500/40 bg-orange-500/5 p-4 text-sm" data-testid="billing-grace">
+            A payment failed. Uploads stay available
+            {subscription.graceEndsAt ? ` until ${formatDate(subscription.graceEndsAt)}` : ' during the grace period'}.
+            Update billing to avoid a read-only lock.
+          </div>
+        )}
+
         {/* Current Subscription Status */}
         <Card>
           <CardHeader>

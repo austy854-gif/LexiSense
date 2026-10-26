@@ -55,9 +55,9 @@ def describe_patterns(patterns):
     return ", ".join(patterns[:-1]) + (", or " if len(patterns) > 1 else "") + patterns[-1]
 
 
-# Test credentials
-TEST_EMAIL = "demo@lexisense.com"
-TEST_PASSWORD = "Demo1234!"
+# Test credentials. Never hard-code a live password in this file.
+TEST_EMAIL = os.environ.get("LEXISENSE_TEST_EMAIL", "")
+TEST_PASSWORD = os.environ.get("LEXISENSE_TEST_PASSWORD", "")
 
 class Colors:
     GREEN = '\033[92m'

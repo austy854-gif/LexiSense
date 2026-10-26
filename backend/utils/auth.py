@@ -142,6 +142,22 @@ def _unauthorized() -> HTTPException:
     )
 
 
+def _as_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def stored_version_mismatch(user: dict, payload: dict) -> bool:
+    """True when the token was issued before the account's session was rotated.
+
+    Missing ``sessionVersion`` / ``sv`` both mean 0, so tokens minted before
+    this check existed stay valid until the account changes its password.
+    """
+    return _as_int(user.get("sessionVersion")) != _as_int(payload.get("sv"))
+
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Return the authenticated principal.
 
@@ -174,6 +190,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "role": 1,
             "organizationId": 1,
             "isActive": 1,
+            "sessionVersion": 1,
         },
     )
 
@@ -187,6 +204,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is deactivated",
         )
+
+    if stored_version_mismatch(user, payload):
+        raise _unauthorized()
+
+    jti = payload.get("jti")
+    if isinstance(jti, str) and jti:
+        revoked = await _users_collection.database.revoked_tokens.find_one({"jti": jti}, {"_id": 1})
+        if revoked:
+            raise _unauthorized()
 
     payload["sub"] = user["id"]
     payload["role"] = normalize_role(user.get("role"))

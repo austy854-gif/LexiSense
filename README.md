@@ -18,6 +18,9 @@ LexiSense is focused on trustworthy, document-based contract intelligence. V1 su
 - ✅ Team management page
 - ✅ Team member invitation system
 - ✅ Digital-native PDF and TXT parsing (OCR is intentionally not included)
+- ✅ Original-file download and in-app extracted text
+- ✅ Password reset by email
+- ✅ Contract analysis covers the whole file, or says when it only covered part of it
 
 ### Phase 2 - Enhanced Features
 - ✅ Email service integration (Resend API)

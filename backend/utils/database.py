@@ -44,6 +44,9 @@ INDEX_SPECIFICATION: Dict[str, List[Dict[str, Any]]] = {
         {"keys": [("email", 1)], "unique": True, "name": "uq_users_email"},
         {"keys": [("id", 1)], "unique": True, "name": "uq_users_id"},
         {"keys": [("organizationId", 1), ("createdAt", -1)], "name": "ix_users_org_created"},
+        # One outstanding password-reset token per account. Sparse so accounts
+        # without a reset request are not indexed.
+        {"keys": [("passwordResetHash", 1)], "unique": True, "sparse": True, "name": "uq_users_reset_hash"},
     ],
     "organizations": [
         {"keys": [("id", 1)], "unique": True, "name": "uq_organizations_id"},
@@ -107,6 +110,11 @@ INDEX_SPECIFICATION: Dict[str, List[Dict[str, Any]]] = {
     ],
     "schema_migrations": [
         {"keys": [("version", 1)], "unique": True, "name": "uq_migrations_version"},
+    ],
+    "revoked_tokens": [
+        {"keys": [("jti", 1)], "unique": True, "name": "uq_revoked_jti"},
+        # Mongo drops the document once ``exp`` is in the past.
+        {"keys": [("exp", 1)], "expireAfterSeconds": 0, "name": "ttl_revoked_exp"},
     ],
 }
 

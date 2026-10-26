@@ -37,6 +37,7 @@ class OrganizationBilling(BaseModel):
     cancelledAt: Optional[str] = None
     trialContractsUsed: int = 0
     trialContractsLimit: int = 25
+    pastDueSince: Optional[str] = None
     createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -74,6 +75,8 @@ class SubscriptionInfo(BaseModel):
     trialContractsLimit: int = 25
     stripeCustomerId: Optional[str] = None
     stripeSubscriptionId: Optional[str] = None
+    readOnly: bool = False
+    graceEndsAt: Optional[str] = None
 
 
 class WebhookEvent(BaseModel):

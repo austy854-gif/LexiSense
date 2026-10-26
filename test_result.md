@@ -139,7 +139,7 @@ backend:
     status_history:
       - working: true
         agent: "testing"
-        comment: "POST /api/v1/auth/login with demo@lexisense.com / Demo1234! successfully returns access_token. Token used for all subsequent authenticated tests."
+        comment: "POST /api/v1/auth/login with the configured test account successfully returns access_token. Token used for all subsequent authenticated tests."
 
   - task: "Atomic trial quota (Gate 4)"
     implemented: true

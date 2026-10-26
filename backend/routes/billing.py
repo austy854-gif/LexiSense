@@ -17,7 +17,9 @@ from models.billing import (
     WebhookEvent
 )
 from utils.auth import get_current_user, require_role
+from utils.billing_access import READ_ONLY_MESSAGE, grace_ends_at, upload_gate
 from utils.env import get_env
+from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,13 @@ async def get_or_create_billing(org_id: str) -> OrganizationBilling:
         trialContractsUsed=0,
         trialContractsLimit=TRIAL_CONTRACT_LIMIT
     )
-    await db.organization_billing.insert_one(new_billing.model_dump())
+    try:
+        await db.organization_billing.insert_one(new_billing.model_dump())
+    except DuplicateKeyError:
+        existing = await db.organization_billing.find_one({"organizationId": org_id})
+        if existing:
+            return OrganizationBilling(**existing)
+        raise
     return new_billing
 
 
@@ -72,10 +80,12 @@ async def check_trial_access(org_id: str) -> tuple[bool, str]:
     Call this only for pre-flight UX messaging.
     """
     billing = await get_or_create_billing(org_id)
-
-    # If paid subscription, always allow
-    if billing.subscriptionTier == SubscriptionTier.TEAM and billing.billingStatus == BillingStatus.ACTIVE:
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    gate = upload_gate(raw)
+    if gate == "allow":
         return True, ""
+    if gate == "readonly":
+        return False, READ_ONLY_MESSAGE
 
     # Check if trial has expired
     if billing.trialEndDate:
@@ -106,13 +116,12 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
     now = datetime.now(timezone.utc).isoformat()
 
     # First check for paid subscription -- paid orgs never consume trial quota.
-    billing_doc = await db.organization_billing.find_one({"organizationId": org_id})
-    if (
-        billing_doc
-        and billing_doc.get("subscriptionTier") == SubscriptionTier.TEAM
-        and billing_doc.get("billingStatus") == BillingStatus.ACTIVE
-    ):
+    billing_doc = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    gate = upload_gate(billing_doc)
+    if gate == "allow":
         return True, ""
+    if gate == "readonly":
+        return False, READ_ONLY_MESSAGE
 
     # Check trial expiration BEFORE we try to reserve.
     trial_end_str = billing_doc.get("trialEndDate") if billing_doc else None
@@ -137,11 +146,32 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
     return True, ""
 
 
+async def assert_org_writable(org_id: str) -> None:
+    """Reject contract mutations once a subscription is read-only.
+
+    Uploads already go through :func:`reserve_trial_upload_atomic`. Edits,
+    deletes, restores and workflow changes use this so the billing page's
+    read-only state is actually enforced.
+    """
+    await get_or_create_billing(org_id)
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    if upload_gate(raw) == "readonly":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=READ_ONLY_MESSAGE,
+        )
+
+
 async def release_trial_upload(org_id: str) -> None:
     """Refund one trial upload slot. Used when an upload fails after reservation.
 
     Safe to call multiple times; will never take the counter below zero.
+    Paid and read-only orgs never consumed a slot, so a failed upload must
+    not decrement their counter.
     """
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    if upload_gate(raw) != "trial":
+        return
     now = datetime.now(timezone.utc).isoformat()
     await db.organization_billing.find_one_and_update(
         {
@@ -180,6 +210,7 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
         if datetime.now(timezone.utc) > trial_end:
             is_trial_expired = True
     
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
     return SubscriptionInfo(
         subscriptionTier=billing.subscriptionTier,
         billingStatus=billing.billingStatus,
@@ -189,7 +220,9 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
         trialContractsUsed=billing.trialContractsUsed,
         trialContractsLimit=billing.trialContractsLimit,
         stripeCustomerId=billing.stripeCustomerId,
-        stripeSubscriptionId=billing.stripeSubscriptionId
+        stripeSubscriptionId=billing.stripeSubscriptionId,
+        readOnly=upload_gate(raw) == "readonly",
+        graceEndsAt=grace_ends_at(raw),
     )
 
 
@@ -389,7 +422,8 @@ async def handle_subscription_deleted(subscription):
                 "cancelledAt": datetime.now(timezone.utc).isoformat(),
                 "stripeSubscriptionId": None,
                 "updatedAt": datetime.now(timezone.utc).isoformat()
-            }
+            },
+            "$unset": {"pastDueSince": ""},
         }
     )
 
@@ -401,9 +435,15 @@ async def handle_payment_failed(invoice):
     if not billing:
         return
     
+    now = datetime.now(timezone.utc).isoformat()
     await db.organization_billing.update_one(
         {"organizationId": billing["organizationId"]},
-        {"$set": {"billingStatus": BillingStatus.PAST_DUE, "updatedAt": datetime.now(timezone.utc).isoformat()}}
+        {"$set": {
+            "billingStatus": BillingStatus.PAST_DUE,
+            "subscriptionTier": SubscriptionTier.TEAM,
+            "pastDueSince": billing.get("pastDueSince") or now,
+            "updatedAt": now,
+        }}
     )
 
 
@@ -418,7 +458,10 @@ async def handle_invoice_paid(invoice):
     if billing.get("billingStatus") == BillingStatus.PAST_DUE:
         await db.organization_billing.update_one(
             {"organizationId": billing["organizationId"]},
-            {"$set": {"billingStatus": BillingStatus.ACTIVE, "updatedAt": datetime.now(timezone.utc).isoformat()}}
+            {
+                "$set": {"billingStatus": BillingStatus.ACTIVE, "updatedAt": datetime.now(timezone.utc).isoformat()},
+                "$unset": {"pastDueSince": ""},
+            }
         )
 
 
@@ -437,8 +480,9 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
     stripe_status = subscription.get("status", "incomplete")
     billing_status = status_map.get(stripe_status, BillingStatus.INCOMPLETE)
     
-    # Determine tier
-    if billing_status == BillingStatus.ACTIVE or billing_status == BillingStatus.TRIALING:
+    # A failed payment stays on the team plan during the grace window. Only a
+    # cancelled subscription (or an unfinished checkout) leaves the paid tier.
+    if billing_status in (BillingStatus.ACTIVE, BillingStatus.TRIALING, BillingStatus.PAST_DUE):
         tier = SubscriptionTier.TEAM
     elif billing_status == BillingStatus.CANCELLED:
         tier = SubscriptionTier.CANCELLED
@@ -453,23 +497,26 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
     if subscription.get("trial_end"):
         trial_end = datetime.fromtimestamp(subscription["trial_end"], tz=timezone.utc).isoformat()
     
-    await db.organization_billing.update_one(
-        {"organizationId": org_id},
-        {
-            "$set": {
-                "stripeCustomerId": customer_id,
-                "stripeSubscriptionId": subscription.get("id"),
-                "stripePriceId": subscription.get("items", {}).get("data", [{}])[0].get("price", {}).get("id"),
-                "subscriptionTier": tier,
-                "billingStatus": billing_status,
-                "currentPeriodStart": datetime.fromtimestamp(subscription.get("current_period_start", 0), tz=timezone.utc).isoformat() if subscription.get("current_period_start") else None,
-                "currentPeriodEnd": current_period_end,
-                "trialEndDate": trial_end,
-                "cancelAtPeriodEnd": subscription.get("cancel_at_period_end", False),
-                "updatedAt": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+    now = datetime.now(timezone.utc).isoformat()
+    fields = {
+        "stripeCustomerId": customer_id,
+        "stripeSubscriptionId": subscription.get("id"),
+        "stripePriceId": subscription.get("items", {}).get("data", [{}])[0].get("price", {}).get("id"),
+        "subscriptionTier": tier,
+        "billingStatus": billing_status,
+        "currentPeriodStart": datetime.fromtimestamp(subscription.get("current_period_start", 0), tz=timezone.utc).isoformat() if subscription.get("current_period_start") else None,
+        "currentPeriodEnd": current_period_end,
+        "trialEndDate": trial_end,
+        "cancelAtPeriodEnd": subscription.get("cancel_at_period_end", False),
+        "updatedAt": now,
+    }
+    update = {"$set": fields}
+    if billing_status == BillingStatus.PAST_DUE:
+        existing = await db.organization_billing.find_one({"organizationId": org_id}, {"pastDueSince": 1})
+        fields["pastDueSince"] = (existing or {}).get("pastDueSince") or now
+    else:
+        update["$unset"] = {"pastDueSince": ""}
+    await db.organization_billing.update_one({"organizationId": org_id}, update)
 
 
 @router.get("/plans")
@@ -522,6 +569,7 @@ __all__ = [
     "check_trial_access",
     "reserve_trial_upload_atomic",
     "release_trial_upload",
+    "assert_org_writable",
     "increment_trial_usage",
     "get_or_create_billing",
     "init_db",
