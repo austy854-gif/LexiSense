@@ -22,6 +22,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app/backend
 
+# Apply Debian security updates before installing Python packages. The image
+# scan fails the build on fixable HIGH/CRITICAL OS packages.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt backend/requirements-emergent.txt ./
 # emergentintegrations pins old litellm/openai; install it without deps.
 RUN pip install -r requirements.txt && \
