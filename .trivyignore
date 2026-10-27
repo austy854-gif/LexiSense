@@ -1,0 +1,4 @@
+# CVE-2026-112940 (filelock): needs a local attacker planting a file beside a
+# lock DB; not a fit for our single-tenant Linux container. Revisit when
+# litellm allows filelock>=4 (currently litellm requires filelock<4).
+CVE-2026-112940
