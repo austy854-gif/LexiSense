@@ -61,7 +61,11 @@ jobs:
           pip install --upgrade pip
           # emergentintegrations is only published on the Emergent index,
           # so the default PyPI index alone cannot resolve requirements.txt.
-          pip install -r requirements.txt
+          grep -v '^litellm==' requirements.txt | tr -d '\r' > /tmp/requirements-without-litellm.txt
+          pip install -r /tmp/requirements-without-litellm.txt
+          # litellm 1.105.1 caps filelock at <4. filelock 4.2.1 fixes CVE-2026-112940 on Python 3.13.
+          # Install litellm without deps so it cannot replace that pin. Do not move litellm to 1.107.0.
+          pip install --no-deps "$(grep '^litellm==' requirements.txt | tr -d '\r')"
           # emergentintegrations pins old litellm/openai; install without deps (matches Dockerfile).
           pip install --no-deps --require-hashes --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-emergent.txt
           pip install flake8 black mypy
@@ -117,7 +121,11 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           # emergentintegrations is only published on the Emergent index.
-          pip install -r requirements.txt
+          grep -v '^litellm==' requirements.txt | tr -d '\r' > /tmp/requirements-without-litellm.txt
+          pip install -r /tmp/requirements-without-litellm.txt
+          # litellm 1.105.1 caps filelock at <4. filelock 4.2.1 fixes CVE-2026-112940 on Python 3.13.
+          # Install litellm without deps so it cannot replace that pin. Do not move litellm to 1.107.0.
+          pip install --no-deps "$(grep '^litellm==' requirements.txt | tr -d '\r')"
           # emergentintegrations pins old litellm/openai; install without deps (matches Dockerfile).
           pip install --no-deps --require-hashes --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-emergent.txt
       - name: Run tests
@@ -185,7 +193,11 @@ jobs:
           source venv/bin/activate
           pip install --upgrade pip
           # emergentintegrations is only published on the Emergent index.
-          pip install -r requirements.txt
+          grep -v '^litellm==' requirements.txt | tr -d '\r' > /tmp/requirements-without-litellm.txt
+          pip install -r /tmp/requirements-without-litellm.txt
+          # litellm 1.105.1 caps filelock at <4. filelock 4.2.1 fixes CVE-2026-112940 on Python 3.13.
+          # Install litellm without deps so it cannot replace that pin. Do not move litellm to 1.107.0.
+          pip install --no-deps "$(grep '^litellm==' requirements.txt | tr -d '\r')"
           # emergentintegrations pins old litellm/openai; install without deps (matches Dockerfile).
           pip install --no-deps --require-hashes --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-emergent.txt
           pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ -r requirements-test.txt
