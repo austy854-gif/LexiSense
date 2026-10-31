@@ -89,6 +89,45 @@ def test_commit_sha_helper(health_server, monkeypatch, value, expected):
     assert health_server._commit_sha() == expected
 
 
+class _RaiseDB:
+    def __init__(self, exc):
+        self.exc = exc
+
+    async def command(self, name):
+        raise self.exc
+
+
+class ServerSelectionTimeoutError(Exception):
+    pass
+
+
+async def test_health_database_timeout_stays_degraded(health_server, monkeypatch):
+    monkeypatch.setattr(
+        health_server,
+        "db",
+        _RaiseDB(ServerSelectionTimeoutError("secret-host.mongodb.net")),
+    )
+    body = await _get_health(health_server)
+    assert body["status"] == "degraded"
+    assert body["checks"]["database"] == {
+        "status": "unhealthy",
+        "details": "Database probe timed out",
+    }
+    assert "secret-host" not in str(body)
+
+
+async def test_health_database_error_is_unreachable(health_server, monkeypatch):
+    monkeypatch.setattr(
+        health_server,
+        "db",
+        _RaiseDB(RuntimeError("auth failed for secret-db-user")),
+    )
+    body = await _get_health(health_server)
+    assert body["status"] == "degraded"
+    assert body["checks"]["database"]["details"] == "Database unreachable"
+    assert "secret-db-user" not in str(body)
+
+
 async def test_existing_health_fields_unchanged(health_server, monkeypatch):
     monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", FULL_SHA)
     body = await _get_health(health_server)

@@ -45,9 +45,16 @@ install_access_log_redaction()
 #     can serve health checks.
 #   * serverSelectionTimeoutMS bounds how long a request waits for a primary,
 #     so a database outage fails fast instead of hanging every request.
+#     /health and /ready wait at least this long (see _database_probe_timeout_seconds).
+#     A shorter probe cancels selection and reports the database down before
+#     the driver has a result.
 mongo_url = get_database_url()
 if not mongo_url:
     raise RuntimeError("DATABASE_URL (or MONGO_URL) must be set at runtime")
+
+# Milliseconds. Kept in one place so the readiness probe cannot drift shorter
+# than the timeout the shared client actually uses.
+SERVER_SELECTION_TIMEOUT_MS = 5_000
 
 
 def _resolve_db_name(url: str) -> str:
@@ -69,7 +76,7 @@ client = AsyncIOMotorClient(
     minPoolSize=0,
     maxIdleTimeMS=45_000,
     connectTimeoutMS=10_000,
-    serverSelectionTimeoutMS=5_000,
+    serverSelectionTimeoutMS=SERVER_SELECTION_TIMEOUT_MS,
     socketTimeoutMS=45_000,
     appname="lexisense-api",
 )
@@ -285,7 +292,51 @@ async def root():
 
 
 # Timeout budget for a single dependency probe inside the health check.
+# The database probe waits at least SERVER_SELECTION_TIMEOUT_MS; this value
+# still bounds the storage probe and can raise the database budget further.
 HEALTH_PROBE_TIMEOUT_SECONDS = float(os.environ.get("HEALTH_PROBE_TIMEOUT_SECONDS", "3"))
+# Extra wait so asyncio does not cancel a ping a few milliseconds before
+# pymongo reports server selection itself.
+_DB_PROBE_MARGIN_SECONDS = 0.25
+
+
+def _database_probe_timeout_seconds() -> float:
+    """How long /health and /ready wait for ``ping``.
+
+    Must outlast the client's server-selection timeout. A shorter
+    ``asyncio.wait_for`` cancels selection and reports the database down
+    before pymongo has a result.
+    """
+    selection_s = SERVER_SELECTION_TIMEOUT_MS / 1000.0
+    return max(HEALTH_PROBE_TIMEOUT_SECONDS, selection_s) + _DB_PROBE_MARGIN_SECONDS
+
+
+async def _probe_database() -> str:
+    """Ping MongoDB. Return ``ok``, ``timeout``, or ``error``.
+
+    ``timeout`` means the driver (or this backstop) gave up waiting for a
+    server. ``error`` is any other failure. The exception text stays out of
+    the return value and the logs: this result is shown unauthenticated, and
+    driver errors include hostnames and can include the connection target.
+    """
+    try:
+        await asyncio.wait_for(
+            db.command("ping"),
+            timeout=_database_probe_timeout_seconds(),
+        )
+        return "ok"
+    except TimeoutError:
+        logger.warning("Health check database probe timed out")
+        return "timeout"
+    except Exception as exc:
+        kind = type(exc).__name__
+        # Server selection and socket deadlines surface under these names.
+        # They are not an application-level rejection from MongoDB.
+        if kind in {"ServerSelectionTimeoutError", "NetworkTimeout", "AutoReconnect"}:
+            logger.warning("Health check database probe timed out (%s)", kind)
+            return "timeout"
+        logger.warning("Health check database probe failed: %s", kind)
+        return "error"
 
 
 async def _probe_storage() -> dict:
@@ -354,22 +405,22 @@ async def health_check():
     """Health check endpoint with detailed service status.
 
     Dependency failures are reported as a *status*, never as raw exception
-    text, and the underlying error goes to the logs instead: this endpoint is
-    unauthenticated, so echoing driver/proxy error strings leaks internal
-    topology and credentials-adjacent detail to anonymous callers.
+    text. The database probe logs the exception type only: this endpoint is
+    unauthenticated, and driver errors include hostnames and can include the
+    connection target.
     """
     checks = {}
     overall_healthy = True
 
-    # Database check
-    try:
-        await asyncio.wait_for(db.command("ping"), timeout=HEALTH_PROBE_TIMEOUT_SECONDS)
+    # Database check. Same probe as /ready so the two endpoints cannot disagree
+    # about a timeout versus a failed ping.
+    db_status = await _probe_database()
+    if db_status == "ok":
         checks["database"] = {"status": "healthy", "details": "Connected"}
-    except asyncio.TimeoutError:
+    elif db_status == "timeout":
         checks["database"] = {"status": "unhealthy", "details": "Database probe timed out"}
         overall_healthy = False
-    except Exception as exc:
-        logger.warning("Health check database probe failed: %s", exc)
+    else:
         checks["database"] = {"status": "unhealthy", "details": "Database unreachable"}
         overall_healthy = False
 
@@ -393,15 +444,18 @@ async def health_check():
 async def readiness_check():
     """Readiness probe: 503 until the DB answers a ping and bootstrap is done.
 
+    ``database`` stays a boolean so existing callers keep working.
+    ``database_status`` says whether that boolean is a successful ping
+    (``ok``), a driver or probe timeout (``timeout``), or another failure
+    (``error``). A timeout is not reported as a bare false with no reason:
+    that was read as "the database is down" when the probe had not heard
+    back yet.
+
     ``/api/v1/health`` stays a liveness probe (always 200 while the process is
     serving) so the platform does not restart the container during a DB outage.
     """
-    db_ok = False
-    try:
-        await asyncio.wait_for(db.command("ping"), timeout=HEALTH_PROBE_TIMEOUT_SECONDS)
-        db_ok = True
-    except Exception:
-        db_ok = False
+    db_status = await _probe_database()
+    db_ok = db_status == "ok"
     bootstrap_ok = bool(getattr(app.state, "bootstrap_ok", False))
     redis_status = await _probe_redis()
     ready = db_ok and bootstrap_ok and redis_status != "unhealthy"
@@ -409,7 +463,12 @@ async def readiness_check():
         status_code=200 if ready else 503,
         content={
             "status": "ready" if ready else "not_ready",
-            "checks": {"database": db_ok, "bootstrap": bootstrap_ok, "redis": redis_status},
+            "checks": {
+                "database": db_ok,
+                "database_status": db_status,
+                "bootstrap": bootstrap_ok,
+                "redis": redis_status,
+            },
         },
     )
 
