@@ -121,7 +121,87 @@ def _patch_redis(monkeypatch, behaviour):
 async def test_ready_redis_skipped_when_unset(ready_app):
     r = await _get_ready(ready_app)
     assert r.status_code == 200
-    assert r.json()["checks"]["redis"] == "skipped"
+    body = r.json()
+    assert body["checks"]["redis"] == "skipped"
+    assert body["checks"]["database"] is True
+    assert body["checks"]["database_status"] == "ok"
+
+
+def test_database_probe_waits_for_server_selection(ready_app):
+    """The probe budget must cover the driver's server-selection timeout.
+
+    A shorter asyncio timeout was the production failure mode: /ready
+    returned 503 with database false, and /health said the probe timed out,
+    while pymongo was still selecting a server.
+    """
+    timeout_s = ready_app._database_probe_timeout_seconds()
+    selection_s = ready_app.SERVER_SELECTION_TIMEOUT_MS / 1000.0
+    assert timeout_s >= selection_s + ready_app._DB_PROBE_MARGIN_SECONDS - 1e-9
+
+
+class _SlowDB:
+    def __init__(self, delay):
+        self.delay = delay
+
+    async def command(self, name):
+        await asyncio.sleep(self.delay)
+        return {"ok": 1}
+
+
+class _RaiseDB:
+    def __init__(self, exc):
+        self.exc = exc
+
+    async def command(self, name):
+        raise self.exc
+
+
+class ServerSelectionTimeoutError(Exception):
+    """Stand-in with the driver's exception name. The probe classifies by name."""
+
+
+async def test_ready_slow_ping_inside_driver_budget_is_up(ready_app, monkeypatch):
+    monkeypatch.setattr(ready_app, "db", _SlowDB(0.05))
+    monkeypatch.setattr(ready_app, "_database_probe_timeout_seconds", lambda: 0.5)
+    r = await _get_ready(ready_app)
+    assert r.status_code == 200
+    checks = r.json()["checks"]
+    assert checks["database"] is True
+    assert checks["database_status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TimeoutError(),
+        ServerSelectionTimeoutError("timed out contacting secret-host.mongodb.net"),
+    ],
+)
+async def test_ready_database_timeout_is_named(ready_app, monkeypatch, caplog, exc):
+    monkeypatch.setattr(ready_app, "db", _RaiseDB(exc))
+    r = await _get_ready(ready_app)
+    assert r.status_code == 503
+    checks = r.json()["checks"]
+    assert checks["database"] is False
+    assert checks["database_status"] == "timeout"
+    assert "secret-host" not in r.text
+    assert "secret-host" not in caplog.text
+
+
+async def test_ready_database_error_hides_driver_text(ready_app, monkeypatch, caplog):
+    monkeypatch.setattr(
+        ready_app,
+        "db",
+        _RaiseDB(RuntimeError("auth failed for user secret-db-user")),
+    )
+    r = await _get_ready(ready_app)
+    assert r.status_code == 503
+    checks = r.json()["checks"]
+    assert checks["database"] is False
+    assert checks["database_status"] == "error"
+    assert "secret-db-user" not in r.text
+    assert "secret-db-user" not in caplog.text
+    assert "RuntimeError" in caplog.text
 
 
 async def test_ready_redis_ping_ok(ready_app, monkeypatch):
