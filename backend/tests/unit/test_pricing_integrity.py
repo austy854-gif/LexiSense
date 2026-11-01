@@ -213,12 +213,20 @@ def _paid(plan, status="active"):
 
 
 class TestSeatCap:
+    async def test_unknown_price_blocks_invites_as_unverified(self, client, db, org_id):
+        # A paid org on an unconfigured price is "unverified_plan": no paid seats, no invites.
+        admin = await _seed(db, org_id, members=0, invites=0,
+                            billing={"subscriptionTier": "team", "billingStatus": "active",
+                                     "stripePriceId": "price_unknown"})
+        r = await client.post(INVITE_URL, json={"email": "x@x.com"}, headers=auth_headers(admin))
+        assert r.status_code == 403
+        assert "verify your subscription plan" in r.json()["detail"]
+
     @pytest.mark.parametrize("billing,cap", [
         (None, 3),
         (_paid("starter"), 5),
         (_paid("team"), 15),
         (_paid("business"), 30),
-        ({"subscriptionTier": "team", "billingStatus": "active", "stripePriceId": "price_unknown"}, 3),
         ({**_paid("business"), "subscriptionTier": "cancelled", "billingStatus": "cancelled"}, 3),
     ])
     async def test_cap_per_tier(self, client, db, org_id, billing, cap):
