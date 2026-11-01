@@ -81,6 +81,12 @@ class SubscriptionInfo(BaseModel):
     stripeSubscriptionId: Optional[str] = None
     readOnly: bool = False
     graceEndsAt: Optional[str] = None
+    #: paid | grace | trial | trial_expired | past_due | cancelled | unverified_plan
+    accessState: Optional[str] = None
+    planId: Optional[str] = None
+    maxMembers: Optional[int] = None
+    accessMessage: Optional[str] = None
+    billingUiEnabled: bool = False
 
 
 class WebhookEvent(BaseModel):

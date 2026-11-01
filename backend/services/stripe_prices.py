@@ -12,7 +12,7 @@ from typing import Dict, Optional, Tuple
 
 import stripe
 
-from utils.plans import CHECKOUT_INTERVALS, PlanConfig
+from utils.plans import CHECKOUT_INTERVALS, PlanConfig, price_label, tax_behavior
 
 logger = logging.getLogger(__name__)
 
@@ -40,22 +40,25 @@ def _fetch_price(price_id: str) -> Optional[dict]:
         "unit_amount": price.get("unit_amount"),
         "currency": price.get("currency"),
         "interval": (price.get("recurring") or {}).get("interval"),
+        "tax_behavior": price.get("tax_behavior"),
     }
     _cache[price_id] = (now, data)
     return data
 
 
 def display_price(plan: PlanConfig, interval: str) -> dict:
-    """``{"priceId", "amount", "currency", "source"}`` for plan + interval.
+    """``{"priceId", "amount", "currency", "source", "taxBehavior", "taxInclusive", "priceLabel"}`` for plan + interval.
 
     ``source`` is ``"stripe"`` (amount of the exact price checkout charges),
     ``"config"`` (env fallback, Stripe unreachable) or ``None`` (unknown).
     """
     price_id = plan.price_for_interval(interval)
     fallback = plan.fallback_prices.get(interval)
-    result = {"priceId": price_id, "amount": None, "currency": "usd", "source": None}
+    configured_tax = tax_behavior()
+    result = {"priceId": price_id, "amount": None, "currency": "usd", "source": None,
+              "taxBehavior": configured_tax}
     if not price_id:
-        return result
+        return _with_tax_label(result)
     stripe_price = _fetch_price(price_id)
     if stripe_price and stripe_price.get("unit_amount") is not None:
         amount = stripe_price["unit_amount"] / 100
@@ -67,7 +70,18 @@ def display_price(plan: PlanConfig, interval: str) -> dict:
         if fallback is not None and fallback != amount:
             logger.error("Display price mismatch for %s %s: config %s, Stripe %s (showing Stripe)",
                          plan.id, interval, fallback, amount)
-        result.update(amount=amount, currency=stripe_price.get("currency") or "usd", source="stripe")
+        stripe_tax = stripe_price.get("tax_behavior")
+        if stripe_tax and stripe_tax != configured_tax:
+            logger.error("Tax behaviour mismatch for %s %s: config %s, Stripe %s (showing Stripe)",
+                         plan.id, interval, configured_tax, stripe_tax)
+        result.update(amount=amount, currency=stripe_price.get("currency") or "usd", source="stripe",
+                      taxBehavior=stripe_tax or configured_tax)
     elif fallback is not None:
         result.update(amount=fallback, source="config")
+    return _with_tax_label(result)
+
+
+def _with_tax_label(result: dict) -> dict:
+    result["taxInclusive"] = result["taxBehavior"] == "inclusive"
+    result["priceLabel"] = price_label(result["currency"], result["taxBehavior"])
     return result
