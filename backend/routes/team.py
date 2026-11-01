@@ -24,7 +24,7 @@ from utils.rbac import (
 from services.email_service import send_invitation_email
 from services.audit_service import log_action
 from utils.invite_tokens import find_invitation_by_token, generate_invite_token
-from routes.billing import member_limit_for_org
+from routes.billing import ensure_invite_access, member_limit_for_org
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/team", tags=["Team"])
@@ -121,6 +121,9 @@ async def invite_member(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invitation already sent to this email"
         )
+
+    # Read-only (past due after grace) or unverified plan: no new invitations.
+    await ensure_invite_access(current_user["organizationId"])
 
     # Seat cap for the org's tier: active users + pending invites (utils.plans).
     limit = await _enforce_member_limit(current_user["organizationId"])

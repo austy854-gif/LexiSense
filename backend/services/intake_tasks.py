@@ -150,6 +150,24 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
             status=IntakeStatus.RECEIVED,
         )
 
+        # Billing gate BEFORE storing attachments or calling the AI classifier:
+        # an emailed contract is an upload plus AI work, so orgs without AI
+        # entitlement (trial ended, cancelled, read-only past due, unverified
+        # plan) get a record of the email for manual review and nothing else.
+        from routes.billing import SKIPPED_NO_ENTITLEMENT, background_ai_entitlement
+
+        if await background_ai_entitlement(organization_id, db, f"email intake from {from_email}") is None:
+            intake.status = IntakeStatus.MANUAL_REVIEW
+            intake_doc = intake.model_dump()
+            intake_doc.update({
+                "error_message": "Not processed: the organization's plan does not include uploads or AI analysis right now.",
+                "processing_skip_reason": "no_ai_entitlement",
+                "playbook_analysis_status": SKIPPED_NO_ENTITLEMENT,
+                "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+            await db.contract_intakes.insert_one(intake_doc)
+            return {"status": SKIPPED_NO_ENTITLEMENT, "intake_id": intake.id, "reason": "no_ai_entitlement"}
+
         # Process attachments
         processed_attachments = []
         for attachment in attachments:
@@ -256,6 +274,9 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
         )
         
         if playbook_id:
+            # Keep the in-memory record in sync: _create_contract_from_intake
+            # reads intake.playbook_id to decide whether to run the playbook.
+            intake.playbook_id = playbook_id
             await db.contract_intakes.update_one(
                 {"id": intake.id},
                 {"$set": {"playbook_id": playbook_id}}
@@ -444,10 +465,30 @@ async def _create_contract_from_intake(intake: ContractIntake, classification: D
         from services.obligation_tasks import extract_obligations_from_contract
         extract_obligations_from_contract.delay(contract.id, force_refresh=True)
     
-    # Trigger playbook analysis if playbook assigned
+    # Trigger playbook analysis if playbook assigned -- only for orgs entitled
+    # to AI; otherwise record that it was skipped (no crash, no AI call).
     if intake.playbook_id:
-        from services.playbook_tasks import analyze_contract_with_playbook
-        analyze_contract_with_playbook.delay(contract.id, intake.playbook_id, auto_apply=False)
+        from routes.billing import SKIPPED_NO_ENTITLEMENT, background_ai_entitlement
+
+        entitled = await background_ai_entitlement(
+            intake.organizationId, db, f"intake playbook analysis of {contract.id}"
+        )
+        if entitled is None:
+            await db.contract_intakes.update_one(
+                {"id": intake.id, "organizationId": intake.organizationId},
+                {"$set": {
+                    "playbook_analysis_status": SKIPPED_NO_ENTITLEMENT,
+                    "playbook_analysis_skip_reason": "no_ai_entitlement",
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+        else:
+            from services.playbook_tasks import analyze_contract_with_playbook
+            analyze_contract_with_playbook.delay(contract.id, intake.playbook_id, auto_apply=False)
+            await db.contract_intakes.update_one(
+                {"id": intake.id, "organizationId": intake.organizationId},
+                {"$set": {"playbook_analysis_status": "queued"}},
+            )
     
     return contract.id
 
