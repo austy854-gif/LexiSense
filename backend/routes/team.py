@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from typing import List
+from typing import List, Optional
 from datetime import datetime, timezone
 import logging
 
@@ -24,6 +24,7 @@ from utils.rbac import (
 from services.email_service import send_invitation_email
 from services.audit_service import log_action
 from utils.invite_tokens import find_invitation_by_token, generate_invite_token
+from routes.billing import member_limit_for_org
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/team", tags=["Team"])
@@ -37,6 +38,32 @@ db = None
 def init_db(database):
     global db
     db = database
+
+
+def _member_limit_detail(limit: int) -> str:
+    return (
+        f"Your plan allows up to {limit} team members, and pending invitations count "
+        "toward that limit. Upgrade to a higher plan, remove a member, or cancel a "
+        "pending invitation to invite someone new."
+    )
+
+
+async def _seats_used(org_id: str) -> int:
+    """Active members plus pending, unexpired invitations for the org."""
+    active = await db.users.count_documents({"organizationId": org_id, "isActive": {"$ne": False}})
+    now = datetime.now(timezone.utc).isoformat()
+    pending = await db.invitations.count_documents(
+        {"organizationId": org_id, "status": "pending", "expiresAt": {"$gt": now}}
+    )
+    return active + pending
+
+
+async def _enforce_member_limit(org_id: str) -> Optional[int]:
+    """403 when the org's tier seat cap is reached. Returns the cap (None = unlimited)."""
+    limit = await member_limit_for_org(org_id)
+    if limit is not None and await _seats_used(org_id) >= limit:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_member_limit_detail(limit))
+    return limit
 
 
 @router.get("/members", response_model=List[UserResponse])
@@ -95,6 +122,9 @@ async def invite_member(
             detail="Invitation already sent to this email"
         )
 
+    # Seat cap for the org's tier: active users + pending invites (utils.plans).
+    limit = await _enforce_member_limit(current_user["organizationId"])
+
     # Only the hash is persisted; the raw token goes out in the email link.
     raw_token, token_hash = generate_invite_token()
     invitation = Invitation(
@@ -107,6 +137,14 @@ async def invite_member(
 
     invite_doc = invitation.model_dump()
     await db.invitations.insert_one(invite_doc)
+
+    # Race guard: two concurrent invites can both pass the pre-check. Re-count
+    # after our insert; if the org is now over the cap, withdraw this invite
+    # before any email is sent. Concurrent requests may both withdraw, which
+    # fails closed rather than exceeding the cap.
+    if limit is not None and await _seats_used(current_user["organizationId"]) > limit:
+        await db.invitations.delete_one({"id": invitation.id})
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_member_limit_detail(limit))
 
     # Get inviter details and organization name
     inviter = await db.users.find_one(
