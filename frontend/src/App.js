@@ -22,6 +22,7 @@ import AuditLogPage from './pages/AuditLogPage';
 // Agentic subsystem is stripped for launch. Backend code kept, UI removed.
 // import AgenticDashboardPage from './pages/AgenticDashboardPage';
 import BillingPage from './pages/BillingPage';
+import { BillingUiGate } from './components/BillingUiGate';
 import ApprovalRespondPage from './pages/ApprovalRespondPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
 
@@ -114,7 +115,9 @@ function App() {
               path="/billing"
               element={
                 <ProtectedRoute allowedRoles={['admin']}>
-                  <BillingPage />
+                  <BillingUiGate>
+                    <BillingPage />
+                  </BillingUiGate>
                 </ProtectedRoute>
               }
             />

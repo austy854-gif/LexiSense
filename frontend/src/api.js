@@ -160,7 +160,10 @@ export const auditAPI = {
 // Billing API
 export const billingAPI = {
   getSubscription: () => api.get('/billing/subscription'),
-  createCheckout: (priceId, successUrl, cancelUrl) => api.post('/billing/checkout', { priceId, successUrl, cancelUrl }),
+  // Checkout by plan + interval; the server maps it to one of its six Stripe prices.
+  createCheckout: ({ planId, interval = 'monthly' }, successUrl, cancelUrl) =>
+    api.post('/billing/checkout', { planId, interval, successUrl, cancelUrl }),
+  getConfig: () => api.get('/billing/config'),
   createPortal: (returnUrl) => api.post('/billing/portal', { returnUrl }),
   getPlans: () => api.get('/billing/plans'),
 };

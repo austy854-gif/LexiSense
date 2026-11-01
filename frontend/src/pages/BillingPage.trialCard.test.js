@@ -66,10 +66,12 @@ test.each(['team', 'cancelled'])('%s org: the trial card is hidden', async (tier
   expect(container.textContent).toContain('Team plan');
 });
 
-test('no button on the page ever checks out without a price id', async () => {
+test('checkout sends planId + interval, never a raw price id', async () => {
   await renderWith({ subscriptionTier: 'trial', billingStatus: 'trialing', trialEndDate: future() });
   const upgrade = [...container.querySelectorAll('button')].filter((b) => b.textContent.includes('Upgrade to Team'));
   billingAPI.createCheckout.mockResolvedValue({ data: {} });
   await act(async () => { upgrade.at(-1).click(); });
-  expect(billingAPI.createCheckout).toHaveBeenCalledWith('price_team', expect.any(String), expect.any(String));
+  expect(billingAPI.createCheckout).toHaveBeenCalledWith(
+    { planId: 'team', interval: 'monthly' }, expect.any(String), expect.any(String),
+  );
 });
