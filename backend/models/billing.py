@@ -47,7 +47,11 @@ class OrganizationBillingCreate(BaseModel):
 
 
 class CheckoutSessionRequest(BaseModel):
-    priceId: str
+    #: Preferred: plan + interval, mapped server-side to an allow-listed price.
+    planId: Optional[str] = None
+    interval: str = "monthly"
+    #: Legacy clients send a Stripe price id; it must be on the allowlist.
+    priceId: Optional[str] = None
     successUrl: str
     cancelUrl: str
 

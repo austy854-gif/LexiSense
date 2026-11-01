@@ -19,6 +19,8 @@ from models.billing import (
 from utils.auth import get_current_user, require_role
 from utils.billing_access import READ_ONLY_MESSAGE, grace_ends_at, upload_gate
 from utils.env import get_env
+from utils import plans as plan_config
+from services.stripe_prices import display_price
 from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger(__name__)
@@ -43,7 +45,70 @@ def init_db(database):
 
 TRIAL_DAYS = 7
 TRIAL_CONTRACT_LIMIT = 25
-TEAM_PLAN_PRICE_ID = get_env("STRIPE_TEAM_PRICE_ID")  # price_... from Stripe Dashboard
+CHECKOUT_PRICE_REJECTED = "This plan is not available for checkout."
+
+
+def resolve_checkout_price(request: CheckoutSessionRequest) -> str:
+    """Map the request to a server-approved Stripe price id, or raise 400.
+
+    Only the six STRIPE_PRICE_* ids from utils.plans are accepted, whether the
+    client names a plan + interval or (legacy) a price id. An empty allowlist
+    fails closed.
+    """
+    allowed = plan_config.allowed_price_ids()
+    if not allowed:
+        logger.error(
+            "Checkout rejected: Stripe price allowlist is empty (set %s)",
+            ", ".join(plan_config.STRIPE_PRICE_ENV_VARS),
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=CHECKOUT_PRICE_REJECTED)
+    if request.planId:
+        plan = plan_config.get_paid_plan(request.planId)
+        price_id = plan.price_for_interval(request.interval) if plan else None
+    else:
+        price_id = (request.priceId or "").strip()
+    if not price_id or price_id not in allowed:
+        logger.warning(
+            "Checkout rejected: price not in allowlist",
+            extra={"plan_id": request.planId, "interval": request.interval, "price_id": request.priceId},
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=CHECKOUT_PRICE_REJECTED)
+    return price_id
+
+
+def has_used_in_app_trial(billing: OrganizationBilling) -> bool:
+    """True once the org has started (or used) the in-app trial.
+
+    get_or_create_billing creates every record as a trial with trialStartDate
+    and trialEndDate set, so in practice any org reaching checkout has already
+    had its trial and must not get a second one from Stripe.
+    """
+    return bool(billing.trialStartDate or billing.trialEndDate)
+
+
+def checkout_subscription_data(billing: OrganizationBilling, org_id: str) -> dict:
+    data: dict = {"metadata": {"organizationId": org_id}}
+    if not has_used_in_app_trial(billing):
+        # "No trial" is expressed by omitting the key; never send 0.
+        data["trial_period_days"] = TRIAL_DAYS
+    return data
+
+
+async def member_limit_for_org(org_id: str) -> Optional[int]:
+    """Seat cap for the org's current tier, from utils.plans.
+
+    Live paid subscriptions get their plan's cap (looked up from the stored
+    Stripe price). Everything else -- trial, cancelled, or a price that isn't
+    allow-listed -- gets the trial cap (fail closed to the smallest tier).
+    """
+    billing = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    live = billing.get("billingStatus") in (BillingStatus.ACTIVE, BillingStatus.TRIALING, BillingStatus.PAST_DUE)
+    if billing.get("subscriptionTier") == SubscriptionTier.TEAM and live:
+        plan = plan_config.plan_for_price_id(billing.get("stripePriceId"))
+        if plan:
+            return plan.max_members
+        logger.error("Org %s has a subscription on an unknown Stripe price; applying trial seat cap", org_id)
+    return plan_config.trial_max_members()
 
 
 async def get_or_create_billing(org_id: str) -> OrganizationBilling:
@@ -238,6 +303,8 @@ async def create_checkout_session(
             detail="Billing not configured. Please contact support."
         )
     
+    price_id = resolve_checkout_price(request)
+
     org_id = current_user["organizationId"]
     billing = await get_or_create_billing(org_id)
     
@@ -258,16 +325,13 @@ async def create_checkout_session(
             customer=billing.stripeCustomerId,
             payment_method_types=["card"],
             line_items=[{
-                "price": request.priceId or TEAM_PLAN_PRICE_ID,
+                "price": price_id,
                 "quantity": 1,
             }],
             mode="subscription",
             success_url=request.successUrl,
             cancel_url=request.cancelUrl,
-            subscription_data={
-                "trial_period_days": TRIAL_DAYS,
-                "metadata": {"organizationId": org_id}
-            },
+            subscription_data=checkout_subscription_data(billing, org_id),
             metadata={"organizationId": org_id}
         )
         return CheckoutSessionResponse(sessionId=session.id, url=session.url)
@@ -519,9 +583,39 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
     await db.organization_billing.update_one({"organizationId": org_id}, update)
 
 
+def _plan_card(plan: plan_config.PlanConfig) -> dict:
+    monthly = display_price(plan, "monthly")
+    annual = display_price(plan, "annual")
+    seats = f"Up to {plan.max_members} team members" if plan.max_members else "Unlimited team members"
+    return {
+        "id": plan.id,
+        "name": f"{plan.name} plan",
+        # Same Stripe price id checkout charges for (planId, "monthly").
+        "price": monthly["amount"],
+        "interval": "month",
+        "priceId": monthly["priceId"],
+        "priceSource": monthly["source"],
+        "currency": monthly["currency"],
+        "annual": {"price": annual["amount"], "interval": "year", "priceId": annual["priceId"],
+                   "priceSource": annual["source"]},
+        "maxMembers": plan.max_members,
+        "features": [
+            "AI contract analysis",
+            "Contract repository",
+            seats,
+            "Role-based access control",
+            "Contract templates library",
+            "PDF export",
+        ],
+        "cta": f"Upgrade to {plan.name}",
+        "available": bool(monthly["priceId"] or annual["priceId"]),
+    }
+
+
 @router.get("/plans")
 async def get_plans():
-    """Get available pricing plans"""
+    """Available plans. Prices come from the same Stripe price IDs checkout uses."""
+    trial_seats = plan_config.trial_max_members()
     return {
         "plans": [
             {
@@ -529,36 +623,18 @@ async def get_plans():
                 "name": "Free trial",
                 "price": 0,
                 "interval": "month",
+                "maxMembers": trial_seats,
                 "features": [
                     "Free trial",
                     "Limited contract uploads",
+                    f"Up to {trial_seats} team members" if trial_seats else "Unlimited team members",
                     "AI contract analysis",
                     "Contract repository",
                     "Basic dashboard"
                 ],
                 "cta": "Start free trial"
             },
-            {
-                "id": "team",
-                "name": "Team plan",
-                "price": 49,
-                "interval": "month",
-                "features": [
-                    "Unlimited contract uploads",
-                    "AI contract analysis",
-                    "Contract repository",
-                    "Advanced dashboard & analytics",
-                    "Team collaboration (up to 10 members)",
-                    "Role-based access control",
-                    "Approval workflows",
-                    "Contract templates library",
-                    "PDF export",
-                    "Audit logs",
-                    "Priority support"
-                ],
-                "cta": "Upgrade to Team plan",
-                "priceId": TEAM_PLAN_PRICE_ID
-            }
+            *[_plan_card(p) for p in plan_config.get_paid_plans().values()],
         ]
     }
 
@@ -573,4 +649,5 @@ __all__ = [
     "increment_trial_usage",
     "get_or_create_billing",
     "init_db",
+    "member_limit_for_org",
 ]
