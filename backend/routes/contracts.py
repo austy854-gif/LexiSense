@@ -9,7 +9,14 @@ from models.contract import Contract, ContractCreate, ContractResponse, Contract
 from models.contract_version import ContractVersion, ContractVersionResponse
 from utils.auth import get_current_user
 from utils.pagination import normalize_date_bound, resolve_pagination
-from utils.rbac import ROLE_ADMIN, ROLE_MANAGER, WRITE_ROLES
+from utils.rbac import (
+    ROLE_ADMIN,
+    ROLE_MANAGER,
+    WRITE_ROLES,
+    RateLimiterUnavailable,
+    make_org_limiter,
+)
+from utils.env import get_env
 from services.ai_service import analyze_contract, get_chat_response
 from services.storage_service import upload_file_to_s3, delete_file_from_s3, generate_presigned_url
 from services.pdf_service import FileRejected, extract_text_from_file
@@ -26,12 +33,50 @@ from services.workflow_service import (
 )
 from routes.billing import (
     assert_org_writable,
+    ensure_ai_access,
     reserve_trial_upload_atomic,
     release_trial_upload,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contracts", tags=["Contracts"])
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(get_env(name) or default)
+    except (TypeError, ValueError):
+        logger.error("%s is not an integer; using default %s", name, default)
+        return default
+    return value if value > 0 else default
+
+
+#: Contract chat spends AI credits on every call: rate-limited per user and per
+#: org (per minute). Redis-backed when configured; falls back to the in-process
+#: window if Redis is down (fail open, like the other single-request limiters).
+CHAT_USER_LIMITER = make_org_limiter(_env_int("CHAT_RATE_LIMIT_PER_USER_PER_MINUTE", 10), 60.0, prefix="rl")
+CHAT_ORG_LIMITER = make_org_limiter(_env_int("CHAT_RATE_LIMIT_PER_ORG_PER_MINUTE", 60), 60.0, prefix="rl")
+
+
+async def _chat_rate_limited_user(current_user: dict = Depends(get_current_user)) -> dict:
+    """Auth first (anonymous callers can't burn a budget), then both limits."""
+    org = current_user.get("organizationId") or "unknown"
+    user = current_user.get("sub") or current_user.get("id") or "unknown"
+    for limiter, key, scope in (
+        (CHAT_USER_LIMITER, f"contracts:chat:user:{org}:{user}", "your account"),
+        (CHAT_ORG_LIMITER, f"contracts:chat:org:{org}", "your organization"),
+    ):
+        try:
+            allowed, retry_after = await limiter.acheck(key)
+        except RateLimiterUnavailable:
+            allowed, retry_after = True, 0.0
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many contract questions for {scope}. Please wait a moment and try again.",
+                headers={"Retry-After": str(int(retry_after) + 1)},
+            )
+    return current_user
 
 db = None
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -607,9 +652,11 @@ async def bulk_upload_contracts(
 async def chat_with_contract(
     contract_id: str,
     message: ChatMessage,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(_chat_rate_limited_user)
 ):
     """Ask a question about a contract."""
+    # Chat spends AI credits: only an active trial, a paid plan or past-due grace.
+    await ensure_ai_access(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
         {"_id": 0}

@@ -162,12 +162,15 @@ async def test_revoked_token_and_rotated_session_are_rejected(db, db_authoritati
     assert again["role"] == "admin"
 
 
-async def test_paid_upload_failure_does_not_drain_the_trial_counter(db):
+async def test_paid_upload_failure_does_not_drain_the_trial_counter(db, monkeypatch):
+    # A paid org is only entitled when its Stripe price is one we configured.
+    monkeypatch.setenv("STRIPE_PRICE_TEAM_MONTHLY", "price_team_monthly_test")
     billing_route.init_db(db)
     await db.organization_billing.insert_one({
         "organizationId": "org-paid",
         "subscriptionTier": "team",
         "billingStatus": "active",
+        "stripePriceId": "price_team_monthly_test",
         "trialContractsUsed": 3,
         "trialContractsLimit": 25,
     })
@@ -205,4 +208,5 @@ async def test_cancelled_org_cannot_edit_a_contract(client, db, db_authoritative
         json={"title": "Renamed"},
     )
     assert response.status_code == 403
-    assert "read-only" in response.text.lower()
+    # Message is flag-dependent (support vs. resubscribe); both say cancelled.
+    assert "cancelled" in response.text.lower()

@@ -138,7 +138,8 @@ class AgentExecutionLog(BaseModel):
     actions_taken: List[Dict[str, Any]] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
     duration_ms: int = 0
-    status: AgentStatus = AgentStatus.COMPLETED
+    #: "skipped" = the run did not execute (e.g. no AI entitlement); see skip_reason.
+    status: Union[AgentStatus, Literal["skipped"]] = AgentStatus.COMPLETED
 
 
 class ContractAgent(BaseModel):

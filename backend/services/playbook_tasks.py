@@ -22,8 +22,12 @@ def set_database(database):
 
 
 def get_db():
-    """Get the database reference."""
-    return _db
+    """Database for the current task (ContextVar set per task by
+    services.celery_app), falling back to an explicitly set module database."""
+    from services.task_db import current_db
+
+    db = current_db.get()
+    return db if db is not None else _db
 
 
 # Common clause patterns for extraction
@@ -233,7 +237,15 @@ async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: s
         if not contract:
             return {"status": "error", "message": "Contract not found"}
 
-        playbook = await db.legal_playbooks.find_one({"id": playbook_id}, {"_id": 0})
+        # Billing gate before any analysis work (background path: skip, don't raise).
+        from routes.billing import background_ai_entitlement
+
+        org_id = contract.get("organizationId")
+        if await background_ai_entitlement(org_id, db, f"playbook analysis of {contract_id}") is None:
+            return {"status": "skipped", "reason": "no_ai_entitlement", "contract_id": contract_id}
+
+        # Org scoping: the playbook must belong to the contract's org.
+        playbook = await db.legal_playbooks.find_one({"id": playbook_id, "organizationId": org_id}, {"_id": 0})
         if not playbook:
             return {"status": "error", "message": "Playbook not found"}
 

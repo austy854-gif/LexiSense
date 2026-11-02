@@ -47,7 +47,11 @@ class OrganizationBillingCreate(BaseModel):
 
 
 class CheckoutSessionRequest(BaseModel):
-    priceId: str
+    #: Preferred: plan + interval, mapped server-side to an allow-listed price.
+    planId: Optional[str] = None
+    interval: str = "monthly"
+    #: Legacy clients send a Stripe price id; it must be on the allowlist.
+    priceId: Optional[str] = None
     successUrl: str
     cancelUrl: str
 
@@ -77,6 +81,12 @@ class SubscriptionInfo(BaseModel):
     stripeSubscriptionId: Optional[str] = None
     readOnly: bool = False
     graceEndsAt: Optional[str] = None
+    #: paid | grace | trial | trial_expired | past_due | cancelled | unverified_plan
+    accessState: Optional[str] = None
+    planId: Optional[str] = None
+    maxMembers: Optional[int] = None
+    accessMessage: Optional[str] = None
+    billingUiEnabled: bool = False
 
 
 class WebhookEvent(BaseModel):

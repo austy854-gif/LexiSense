@@ -6,6 +6,7 @@ Covers:
 * bulk per-file failures from unexpected exceptions return friendly copy;
 * trial-ended copy does not state a trial length.
 """
+from utils.billing_access import ACCESS_TRIAL_EXPIRED, blocked_message
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -204,7 +205,7 @@ class TestTrialCopy:
         await self._expired_trial(billing_db, org_id)
         ok, message = await billing_route.reserve_trial_upload_atomic(org_id)
         assert ok is False
-        assert message == billing_route.TRIAL_ENDED_MESSAGE
+        assert message == blocked_message(ACCESS_TRIAL_EXPIRED)
         assert "day" not in message.lower()
         assert str(billing_route.TRIAL_DAYS) not in message
 
@@ -212,7 +213,7 @@ class TestTrialCopy:
         await self._expired_trial(billing_db, org_id)
         ok, message = await billing_route.check_trial_access(org_id)
         assert ok is False
-        assert message == billing_route.TRIAL_ENDED_MESSAGE
+        assert message == blocked_message(ACCESS_TRIAL_EXPIRED)
 
     async def test_plans_feature_list_has_no_trial_length(self):
         plans = await billing_route.get_plans()

@@ -24,10 +24,13 @@ WORKDIR /app/backend
 
 COPY backend/requirements.txt backend/requirements-emergent.txt ./
 # emergentintegrations pins old litellm/openai; install it without deps.
-RUN pip install -r requirements.txt && \
+RUN grep -v '^litellm==' requirements.txt | tr -d '\r' > /tmp/requirements-without-litellm.txt && \
+    pip install -r /tmp/requirements-without-litellm.txt && \
+    pip install --no-deps "$(grep '^litellm==' requirements.txt | tr -d '\r')" && \
     pip install --no-deps --require-hashes \
       --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
       -r requirements-emergent.txt && \
+    # litellm 1.105.1 caps filelock<4. Keep filelock 4.2.1 (CVE-2026-112940). Do not use litellm 1.107.0.
     # pip is not needed at runtime and its vendored libs trip image scanners.
     python -m pip uninstall -y pip
 
