@@ -201,10 +201,21 @@ def before_breadcrumb(crumb, hint=None):
 
 
 def sentry_init_options() -> Dict[str, Any]:
-    """Privacy-related ``sentry_sdk.init`` options (merged in by ``server.py``)."""
+    """Privacy-related ``sentry_sdk.init`` options (merged in by ``server.py``).
+
+    No default PII: neither ``send_default_pii`` nor ``data_collection`` is
+    passed, on purpose. Every sentry-sdk release treats an unset
+    ``send_default_pii`` as ``False``. Since 2.72, passing it at all emits a
+    DeprecationWarning, and with both options unset the SDK resolves
+    ``data_collection`` from ``send_default_pii=False``: the same collection
+    as before, with the default EventScrubber. Passing an explicit
+    ``data_collection`` dict would instead fill omitted categories with
+    collect-by-default values and switch off the EventScrubber, which widens
+    collection, so it is avoided. tests/unit/test_sentry_data_collection.py
+    locks this in.
+    """
     return {
         "include_local_variables": False,
-        "send_default_pii": False,
         "max_request_body_size": "never",
         "before_send": before_send,
         "before_send_transaction": before_send,

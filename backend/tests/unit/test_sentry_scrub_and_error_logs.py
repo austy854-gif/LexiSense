@@ -206,7 +206,8 @@ seen = {}
 sentry_sdk.init = lambda **kw: seen.update(kw)
 import server
 from utils import sentry_scrub
-print(json.dumps({"locals": seen.get("include_local_variables"), "pii": seen.get("send_default_pii"),
+print(json.dumps({"locals": seen.get("include_local_variables"),
+    "pii": seen.get("send_default_pii", "unset"), "data_collection": seen.get("data_collection", "unset"),
     "before_send": seen.get("before_send") is sentry_scrub.before_send,
     "before_breadcrumb": seen.get("before_breadcrumb") is sentry_scrub.before_breadcrumb,
     "before_send_transaction": seen.get("before_send_transaction") is sentry_scrub.before_send}))
@@ -215,7 +216,10 @@ print(json.dumps({"locals": seen.get("include_local_variables"), "pii": seen.get
                JWT_SECRET=os.environ.get("JWT_SECRET", "test-secret"), MONGO_URL="mongodb://localhost:27017")
     out = subprocess.run([sys.executable, "-c", probe], cwd=BACKEND, env=env, capture_output=True, text=True, check=True)
     assert json.loads(out.stdout.strip().splitlines()[-1]) == {
-        "locals": False, "pii": False, "before_send": True, "before_breadcrumb": True, "before_send_transaction": True,
+        # Neither PII option is passed: the SDK default is "no default PII" (see
+        # utils/sentry_scrub.sentry_init_options and test_sentry_data_collection).
+        "locals": False, "pii": "unset", "data_collection": "unset",
+        "before_send": True, "before_breadcrumb": True, "before_send_transaction": True,
     }
 
 
