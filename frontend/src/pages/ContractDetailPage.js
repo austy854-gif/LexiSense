@@ -3,7 +3,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, versionsAPI, workflowAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
-import { canPerformWorkflowAction, canRestore, canSubmitForReview, canApprove, canReject, canActivate, getErrorInfo } from '../lib/apiHelpers.mjs';
+import { canPerformWorkflowAction, getErrorInfo } from '../lib/apiHelpers.mjs';
+import { hasCapability, hasContractCapability } from '../lib/access.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -74,23 +75,25 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+const WORKFLOW_CAPABILITY = {
+  submit_for_review: 'canSubmitForReview',
+  approve: 'canApprove',
+  reject: 'canReject',
+  activate: 'canActivate',
+};
+
 export default function ContractDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user, capabilities = {} } = useAuth();
-  const canDo = (action) => {
-    const fallback = {
-      submit_for_review: canSubmitForReview(user?.role),
-      approve: canApprove(user?.role),
-      reject: canReject(user?.role),
-      activate: canActivate(user?.role),
-    }[action] && canPerformWorkflowAction(user?.role, action, contract?.status);
-    const capability = { submit_for_review: 'canSubmitForReview', approve: 'canApprove', reject: 'canReject', activate: 'canActivate' }[action];
-    return (capabilities[capability] ?? fallback) && canPerformWorkflowAction(user?.role, action, contract?.status);
-  };
-  const restoreAllowed = capabilities.canRestore ?? canRestore(user?.role);
+  const { user, access } = useAuth();
   const [contract, setContract] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Workflow buttons need the server capability AND a legal transition from
+  // the current status (canPerformWorkflowAction mirrors routes/workflow.py).
+  const canDo = (action) =>
+    hasCapability(access, WORKFLOW_CAPABILITY[action]) &&
+    canPerformWorkflowAction(user?.role, action, contract?.status);
+  const restoreAllowed = hasContractCapability(access, 'canRestore', 'canRestoreOwn', contract, user);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);

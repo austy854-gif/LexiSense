@@ -13,7 +13,8 @@ import {
   SomethingWentWrongIllustration,
   UploadFailedIllustration,
 } from '../components/illustrations/Illustrations';
-import { canUpload, canDelete, getErrorInfo, parseTotalCount } from '../lib/apiHelpers.mjs';
+import { getErrorInfo, parseTotalCount } from '../lib/apiHelpers.mjs';
+import { hasCapability } from '../lib/access.mjs';
 import { bulkUploadFeedback, singleUploadFeedback } from '../lib/uploadFeedback';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -191,10 +192,10 @@ export function ContractsEmptyState({ searchQuery, filters, canUpload: canUpload
 }
 
 export default function ContractsPage() {
-  const { user, capabilities = {} } = useAuth();
+  const { access } = useAuth();
   const navigate = useNavigate();
-  const uploadAllowed = capabilities.canUpload ?? canUpload(user?.role);
-  const deleteAllowed = capabilities.canDelete ?? canDelete(user?.role);
+  const uploadAllowed = hasCapability(access, 'canUpload');
+  const deleteAllowed = hasCapability(access, 'canDelete');
   const [contracts, setContracts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');

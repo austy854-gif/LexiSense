@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Layout } from '../components/Layout';
 import { templatesAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
-import { canManageTemplates } from '../lib/apiHelpers.mjs';
+import { hasCapability } from '../lib/access.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
@@ -44,8 +44,8 @@ const CONTRACT_TYPES = [
 ];
 
 export default function TemplatesPage() {
-  const { user, capabilities = {} } = useAuth();
-  const manageTemplates = capabilities.canManageTemplates ?? canManageTemplates(user?.role);
+  const { access } = useAuth();
+  const manageTemplates = hasCapability(access, 'canManageTemplates');
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');

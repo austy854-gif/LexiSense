@@ -5,10 +5,26 @@ import logging
 import os
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
-from services.alert_service import scan_expiration_alerts
+from services.alert_service import retry_failed_alerts, scan_expiration_alerts
 
 logger = logging.getLogger(__name__)
+
+RETRY_INTERVAL_MINUTES = 15
+
+
+def _env_int(name: str, default: int, low: int, high: int) -> int:
+    """Parse an optional int env var; a typo must never stop API startup."""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return default
+    return max(low, min(high, value))
 
 
 def build_alert_scheduler(db) -> AsyncIOScheduler:
@@ -21,8 +37,16 @@ def build_alert_scheduler(db) -> AsyncIOScheduler:
         except Exception:
             logger.exception("Daily expiration alert scan failed")
 
-    hour = max(0, min(23, int(os.environ.get("ALERT_SCAN_UTC_HOUR", "8"))))
-    minute = max(0, min(59, int(os.environ.get("ALERT_SCAN_UTC_MINUTE", "0"))))
+    async def run_retries():
+        try:
+            result = await retry_failed_alerts(db)
+            if result.get("queued"):
+                logger.info("Expiration alert retry pass complete", extra=result)
+        except Exception:
+            logger.exception("Expiration alert retry pass failed")
+
+    hour = _env_int("ALERT_SCAN_UTC_HOUR", 8, 0, 23)
+    minute = _env_int("ALERT_SCAN_UTC_MINUTE", 0, 0, 59)
     scheduler.add_job(
         run_scan,
         CronTrigger(hour=hour, minute=minute, timezone="UTC"),
@@ -31,5 +55,15 @@ def build_alert_scheduler(db) -> AsyncIOScheduler:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
+    )
+    # Failed deliveries are retried (bounded by MAX_ATTEMPTS, persisted on each
+    # record) without waiting for the next daily scan.
+    scheduler.add_job(
+        run_retries,
+        IntervalTrigger(minutes=RETRY_INTERVAL_MINUTES, timezone="UTC"),
+        id="expiration-alert-retries",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     return scheduler

@@ -10,16 +10,13 @@ from models.contract_version import ContractVersion, ContractVersionResponse
 from utils.auth import get_current_user
 from utils.pagination import normalize_date_bound, resolve_pagination
 from utils.rbac import (
-    ROLE_ADMIN,
-    ROLE_MANAGER,
-    WRITE_ROLES,
     RateLimiterUnavailable,
     make_org_limiter,
 )
-from utils.policy import require_capability, require_owner_or_capability, require_uploader_for_user
+from utils.policy import require_capability, require_contract_write, require_owner_or_capability
 from utils.env import get_env
 from services.ai_service import analyze_contract, get_chat_response
-from services.storage_service import upload_file_to_s3, delete_file_from_s3, generate_presigned_url
+from services.storage_service import upload_file_to_s3, delete_file_from_s3, generate_presigned_url, purge_uploaded_object
 from services.pdf_service import FileRejected, extract_text_from_file
 from services.audit_service import log_action
 from utils.contract_fields import fields_from_analysis
@@ -364,6 +361,30 @@ async def download_contract_file(
     return {"url": url, "fileName": filename, "expiresIn": DOWNLOAD_URL_TTL_SECONDS}
 
 
+
+async def _rollback_failed_upload(org_id: str, storage_key: Optional[str], contract_id: Optional[str]) -> None:
+    """Undo every partial artifact of a failed upload; the quota refund always runs.
+
+    Each step is isolated so a storage or database error in one step cannot
+    skip the others (or the trial-slot refund).
+    """
+    try:
+        if contract_id:
+            await db.contracts.delete_one({"id": contract_id, "organizationId": org_id})
+    except Exception:
+        logger.exception("Upload rollback: failed to delete partial contract record")
+    try:
+        if storage_key:
+            await purge_uploaded_object(storage_key)
+    except Exception:
+        logger.exception("Upload rollback: failed to delete stored object")
+    finally:
+        try:
+            await release_trial_upload(org_id)
+        except Exception:
+            logger.exception("Upload rollback: failed to release trial upload slot")
+
+
 @router.post("", response_model=ContractResponse)
 async def upload_contract(
     file: UploadFile = File(...),
@@ -393,7 +414,6 @@ async def upload_contract(
             detail=trial_message
         )
 
-    quota_released = False
     storage_key = None
     contract_inserted = False
     try:
@@ -471,23 +491,15 @@ async def upload_contract(
         )
     except HTTPException:
         # Refund the reserved slot and remove every partial artifact.
-        if contract_inserted:
-            await db.contracts.delete_one({"id": contract.id, "organizationId": current_user["organizationId"]})
-        if storage_key:
-            await delete_file_from_s3(storage_key)
-        if not quota_released:
-            await release_trial_upload(current_user["organizationId"])
-            quota_released = True
+        await _rollback_failed_upload(
+            current_user["organizationId"], storage_key, contract.id if contract_inserted else None
+        )
         raise
     except Exception as e:
         # Unknown failure -- refund quota and remove every partial artifact.
-        if contract_inserted:
-            await db.contracts.delete_one({"id": contract.id, "organizationId": current_user["organizationId"]})
-        if storage_key:
-            await delete_file_from_s3(storage_key)
-        if not quota_released:
-            await release_trial_upload(current_user["organizationId"])
-            quota_released = True
+        await _rollback_failed_upload(
+            current_user["organizationId"], storage_key, contract.id if contract_inserted else None
+        )
         logger.error(f"Contract upload failed after quota reservation: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -527,6 +539,7 @@ async def bulk_upload_contracts(
     current_user: dict = Depends(get_current_user)
 ):
     """Bulk upload multiple contracts at once."""
+    require_capability(current_user, "upload")
     if len(files) > 10:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -569,6 +582,7 @@ async def bulk_upload_contracts(
                 continue
 
             file_upload_ok = False
+            storage_key = None
             try:
                 storage_key = await upload_file_to_s3(
                     file_content,
@@ -642,9 +656,10 @@ async def bulk_upload_contracts(
                     "riskLevel": risk_level
                 })
             finally:
-                # If the DB insert never succeeded, refund the reserved slot.
+                # If the DB insert never succeeded, delete the verified S3
+                # object (no contract references it) and refund the slot.
                 if not file_upload_ok:
-                    await release_trial_upload(current_user["organizationId"])
+                    await _rollback_failed_upload(current_user["organizationId"], storage_key, None)
 
         except Exception:
             logger.exception("Bulk upload failed for %r", file.filename)
@@ -735,7 +750,7 @@ async def update_contract(
             detail="Contract not found"
         )
 
-    require_owner_or_capability(current_user, contract, "contract_edit")
+    require_contract_write(current_user, contract, "contract_edit")
 
     title = payload.title
     counterparty = payload.counterparty
@@ -953,7 +968,7 @@ async def restore_contract_version(
             detail="Version not found"
         )
 
-    require_owner_or_capability(current_user, contract, "restore")
+    require_contract_write(current_user, contract, "restore")
 
     # The restored status is a workflow transition: validate it against the
     # state machine so a restore cannot bypass the workflow (e.g. draft->approved).

@@ -163,9 +163,49 @@ async def delete_file_from_s3(storage_key: str) -> bool:
         await asyncio.to_thread(s3_client.delete_object, Bucket=get_bucket_name(), Key=storage_key)
         logger.info(f"Deleted file from S3: {storage_key}")
         return True
-    except ClientError as e:
-        logger.error(f"Failed to delete from S3: {e}")
+    except (BotoCoreError, ClientError) as e:
+        logger.error("Failed to delete from S3: %s", type(e).__name__)
         return False
+
+
+async def purge_uploaded_object(storage_key: str) -> bool:
+    """Permanently remove an object written by a failed upload.
+
+    On a versioned bucket a plain ``delete_object`` only adds a delete marker
+    and leaves the uploaded bytes behind, so every version (and marker) of the
+    key is deleted explicitly. Upload keys are unique per upload, so all
+    versions under the exact key belong to this upload. Falls back to a plain
+    key delete when versions cannot be listed (unversioned bucket or missing
+    ``s3:ListBucketVersions``).
+    """
+    s3_client = get_s3_client()
+    if not s3_client:
+        logger.info(f"Mock purge: {storage_key}")
+        return True
+    bucket = get_bucket_name()
+    try:
+        listing = await asyncio.to_thread(s3_client.list_object_versions, Bucket=bucket, Prefix=storage_key)
+        entries = [
+            item
+            for group in ("Versions", "DeleteMarkers")
+            for item in (listing.get(group) or [])
+            if item.get("Key") == storage_key and item.get("VersionId") not in (None, "null")
+        ]
+    except (BotoCoreError, ClientError) as e:
+        logger.warning("Could not list object versions for rollback (%s); deleting by key", type(e).__name__)
+        entries = []
+    if not entries:
+        return await delete_file_from_s3(storage_key)
+    ok = True
+    for item in entries:
+        try:
+            await asyncio.to_thread(
+                s3_client.delete_object, Bucket=bucket, Key=storage_key, VersionId=item["VersionId"]
+            )
+        except (BotoCoreError, ClientError) as e:
+            logger.error("Failed to delete object version during rollback: %s", type(e).__name__)
+            ok = False
+    return ok
 
 
 async def ensure_bucket_exists():

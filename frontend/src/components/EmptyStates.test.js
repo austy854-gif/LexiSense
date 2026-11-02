@@ -75,7 +75,7 @@ describe('illustrations', () => {
 describe('ContractsEmptyState', () => {
   const base = { statusFilter: '', typeFilter: '', riskFilter: '', expiringFilter: '' };
   const renderState = (props) =>
-    render(<ContractsEmptyState searchQuery="" filters={base} canWrite onUpload={() => {}} onClearFilters={() => {}} {...props} />);
+    render(<ContractsEmptyState searchQuery="" filters={base} canUpload onUpload={() => {}} onClearFilters={() => {}} {...props} />);
 
   test('first run: no contracts yet, with upload button for writers', () => {
     renderState();
@@ -84,7 +84,7 @@ describe('ContractsEmptyState', () => {
   });
 
   test('first run for read-only roles has no upload button', () => {
-    renderState({ canWrite: false });
+    renderState({ canUpload: false });
     expect(container.querySelector('button')).toBeNull();
   });
 

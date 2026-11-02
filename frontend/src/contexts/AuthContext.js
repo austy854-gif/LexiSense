@@ -1,20 +1,22 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import { authAPI, billingAPI } from '../api';
+import { FAILED_ACCESS, LOADING_ACCESS, normalizeAccess } from '../lib/access.mjs';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [access, setAccess] = useState({ state: null, readOnly: false, message: null, capabilities: {} });
+  // Fail closed: every capability is false until /billing/capabilities answers.
+  const [access, setAccess] = useState(LOADING_ACCESS);
 
   const refreshAccess = async () => {
     try {
       const response = await billingAPI.getCapabilities();
-      setAccess(response.data);
+      setAccess(normalizeAccess(response?.data));
     } catch {
-      // Keep the least-privileged UI state while billing is unavailable.
-      setAccess({ state: 'unavailable', readOnly: true, message: 'Workspace access could not be verified.', capabilities: {} });
+      // Least-privileged state: all capabilities false, workspace read-only.
+      setAccess(FAILED_ACCESS);
     }
   };
 
@@ -70,7 +72,7 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setUser(null);
-    setAccess({ state: null, readOnly: false, message: null, capabilities: {} });
+    setAccess(LOADING_ACCESS);
   };
 
   return (

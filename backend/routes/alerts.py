@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException, status, Depends, BackgroundTasks
+from fastapi.responses import JSONResponse
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 import logging
 
-from models.alerts import ExpirationAlert, AlertSettings
+from models.alerts import AlertSettings
 from utils.auth import get_current_user
-from services.email_service import send_expiration_alert
 from services.alert_service import scan_expiration_alerts
 from utils.policy import require_capability
 from routes.billing import assert_org_writable
@@ -103,11 +103,27 @@ async def check_and_send_alerts(
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
-    """Manually trigger the same idempotent scan used by the daily worker."""
+    """Queue the same idempotent scan used by the daily worker.
+
+    Delivery talks to the email provider once per (contract x window x
+    recipient), so it runs as a background task instead of on the request path;
+    the endpoint answers 202 immediately and results appear in alert history.
+    """
     require_capability(current_user, "alert_trigger")
     await assert_org_writable(current_user["organizationId"])
-    result = await scan_expiration_alerts(db, current_user["organizationId"], current_user["sub"])
-    return {"message": "Alert check completed", "alertsSent": result["sent"], **result}
+    background_tasks.add_task(_run_manual_scan, current_user["organizationId"], current_user["sub"])
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={"message": "Alert check started", "status": "accepted"},
+    )
+
+
+async def _run_manual_scan(organization_id: str, actor_id: str) -> None:
+    try:
+        result = await scan_expiration_alerts(db, organization_id, actor_id)
+        logger.info("Manual expiration alert scan complete", extra=result)
+    except Exception:
+        logger.exception("Manual expiration alert scan failed")
 
 
 @router.get("/history")
@@ -123,7 +139,15 @@ async def get_alert_history(
     contract_ids = [c["id"] for c in contracts]
     contract_titles = {c["id"]: c["title"] for c in contracts}
     alerts = await db.expiration_alerts.find(
-        {"organizationId": current_user["organizationId"], "contractId": {"$in": contract_ids}},
+        {
+            "contractId": {"$in": contract_ids},
+            # Legacy ExpirationAlert rows predate organizationId; the contractId
+            # predicate already scopes them to this organization.
+            "$or": [
+                {"organizationId": current_user["organizationId"]},
+                {"organizationId": {"$exists": False}},
+            ],
+        },
         {"_id": 0}
     ).sort("createdAt", -1).limit(limit).to_list(limit)
     

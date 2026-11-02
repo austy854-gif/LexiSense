@@ -42,7 +42,7 @@ const UrgencyBadge = ({ days }) => {
 };
 
 export default function AlertsPage() {
-  const { user, capabilities = {} } = useAuth();
+  const { access } = useAuth();
   const [loading, setLoading] = useState(true);
   const [expiringContracts, setExpiringContracts] = useState([]);
   const [alertHistory, setAlertHistory] = useState([]);
@@ -50,8 +50,8 @@ export default function AlertsPage() {
   const [sendingAlerts, setSendingAlerts] = useState(false);
   const [alertDaysInput, setAlertDaysInput] = useState('30, 14, 7, 1');
 
-  const canTriggerAlerts = capabilities.canTriggerAlerts ?? user?.role === 'admin';
-  const canUpdateAlertSettings = capabilities.canUpdateAlertSettings ?? user?.role === 'admin';
+  const canTriggerAlerts = hasCapability(access, 'canTriggerAlerts');
+  const canUpdateAlertSettings = hasCapability(access, 'canUpdateAlertSettings');
 
   useEffect(() => {
     fetchData();
@@ -78,8 +78,9 @@ export default function AlertsPage() {
   const handleSendAlerts = async () => {
     setSendingAlerts(true);
     try {
-      const result = await alertsAPI.checkAndSend();
-      toast.success(`${result.data.alertsSent} alert(s) sent`);
+      // The scan runs in the background (202); results land in alert history.
+      await alertsAPI.checkAndSend();
+      toast.success('Alert check started. Sent alerts will appear in history shortly.');
       fetchData();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to send alerts');

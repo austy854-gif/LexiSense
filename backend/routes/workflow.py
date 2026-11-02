@@ -73,8 +73,6 @@ async def workflow_action(
         raise HTTPException(status_code=404, detail="Contract not found")
 
     current_status = contract.get("status", "draft")
-    user_role = current_user["role"]
-
     # Determine new status based on action
     action_map = {
         "submit_for_review": "review",
@@ -87,8 +85,7 @@ async def workflow_action(
         raise HTTPException(status_code=400, detail=f"Invalid action: {action}")
 
     new_status = action_map[action]
-    capability = "submit_for_review" if action == "submit_for_review" else action
-    require_capability(current_user, capability)
+    require_capability(current_user, action)
     require_uploader_for_user(current_user, contract)
 
     # Validate transition
