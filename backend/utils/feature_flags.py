@@ -37,3 +37,13 @@ APPROVAL_EMAILS_FLAG = "APPROVAL_EMAILS_ENABLED"
 
 def approval_emails_enabled(env_flag: Callable[[str], bool] = flag_enabled) -> bool:
     return env_flag(APPROVAL_EMAILS_FLAG)
+
+
+#: Billing UI (Billing page, nav entry, Upgrade buttons, prices). Default OFF.
+#: Read at request time and exposed via GET /billing/config, so flipping it needs
+#: no frontend rebuild. Enforcement and webhooks do not depend on it.
+BILLING_UI_FLAG = "BILLING_UI_ENABLED"
+
+
+def billing_ui_enabled(env_flag: Callable[[str], bool] = flag_enabled) -> bool:
+    return env_flag(BILLING_UI_FLAG)

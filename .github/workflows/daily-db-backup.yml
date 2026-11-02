@@ -1,0 +1,329 @@
+# Daily encrypted MongoDB backup -> Cloudflare R2.
+#
+# The repo is PUBLIC, so:
+#   * the dump is encrypted with age (recipients in ops/backup/age-recipients.txt)
+#     before it touches disk; plaintext only ever exists inside the pipe.
+#   * nothing is uploaded as a workflow artifact (never use actions/upload-artifact).
+#   * logs avoid secrets, the runner IP (masked) and collection names/counts
+#     (those go into the encrypted manifest instead).
+#
+# Network: no 0.0.0.0/0. The job adds a temporary <runner-ip>/32 entry to the
+# Atlas project access list (with a deleteAfterDate backstop) and removes it
+# right after the dump, in an `if: always()` step.
+#
+# Runbook and one-time setup: docs/ops/db-backup-restore.md
+name: daily-db-backup
+
+on:
+  schedule:
+    # 09:00 UTC = 03:00 MDT (summer) / 02:00 MST (winter). GitHub cron is UTC
+    # and scheduled runs can start late under load.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Atlas does not support concurrent access-list POSTs, and two dumps at once
+  # would race on the same R2 keys. Queue, never cancel a running backup.
+  group: daily-db-backup
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MONGODB_TOOLS_VERSION: "100.19.1"
+  MONGODB_TOOLS_SHA256: "f34b84a67ab96b4ff52571ec5d15e2148d96cb140b1ea9ef8c29ac33c48e3480"
+  AGE_VERSION: "v1.3.2"
+  AGE_SHA256: "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
+  RECIPIENTS_FILE: ops/backup/age-recipients.txt
+  # Database name: the backend uses DB_NAME, else the database in the URI path,
+  # else "lexisense" (backend/server.py _resolve_db_name). Mirror that with a
+  # repository variable; it is not secret.
+  MONGODB_DB_NAME: ${{ vars.MONGODB_DB_NAME || 'lexisense' }}
+  # Encrypted archive must be at least this many bytes to count as a backup.
+  BACKUP_MIN_BYTES: ${{ vars.BACKUP_MIN_BYTES || '2048' }}
+  KEEP_DAILY: "7"
+  KEEP_WEEKLY: "4"
+
+jobs:
+  backup:
+    name: Dump, encrypt, upload
+    # Do not run from forks; they have no secrets and no business here.
+    if: github.repository == 'austy854-gif/LexiSense'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out backup scripts and recipients only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            ops/backup
+          sparse-checkout-cone-mode: false
+
+      - name: Preflight (secrets present, recipients set)
+        env:
+          MONGODB_BACKUP_URI: ${{ secrets.MONGODB_BACKUP_URI }}
+          ATLAS_PUBLIC_KEY: ${{ secrets.ATLAS_PUBLIC_KEY }}
+          ATLAS_PRIVATE_KEY: ${{ secrets.ATLAS_PRIVATE_KEY }}
+          ATLAS_PROJECT_ID: ${{ secrets.ATLAS_PROJECT_ID }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in MONGODB_BACKUP_URI ATLAS_PUBLIC_KEY ATLAS_PRIVATE_KEY ATLAS_PROJECT_ID \
+                      R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing secret ${name}"
+              missing=1
+            fi
+          done
+          if ! grep -Eq '^age1[02-9ac-hj-np-z]{58}$' "$RECIPIENTS_FILE"; then
+            echo "::error::${RECIPIENTS_FILE} has no age1... public key yet (placeholder?)"
+            missing=1
+          fi
+          if [[ ! "$MONGODB_DB_NAME" =~ ^[A-Za-z0-9_-]{1,63}$ ]]; then
+            echo "::error::MONGODB_DB_NAME has unexpected characters"
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Ping healthcheck (start)
+        env:
+          HEALTHCHECKS_URL: ${{ secrets.HEALTHCHECKS_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${HEALTHCHECKS_URL:-}" ]]; then
+            curl -fsS -m 10 --retry 3 -o /dev/null "${HEALTHCHECKS_URL%/}/start" || true
+          fi
+
+      - name: Compute backup date
+        run: |
+          set -euo pipefail
+          # 09:00 UTC is the same calendar day in Edmonton, so the UTC date is used.
+          {
+            echo "BACKUP_DATE=$(date -u +%F)"
+            echo "BACKUP_DOW=$(date -u +%u)"   # 7 = Sunday
+            echo "BACKUP_DIR=${RUNNER_TEMP}/backup"
+          } >>"$GITHUB_ENV"
+
+      - name: Install MongoDB Database Tools and age (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          tools="mongodb-database-tools-ubuntu2404-x86_64-${MONGODB_TOOLS_VERSION}"
+          curl -fsSL --retry 3 -o tools.tgz "https://fastdl.mongodb.org/tools/db/${tools}.tgz"
+          echo "${MONGODB_TOOLS_SHA256}  tools.tgz" | sha256sum -c -
+          tar -xzf tools.tgz
+          echo "${RUNNER_TEMP}/${tools}/bin" >>"$GITHUB_PATH"
+
+          curl -fsSL --retry 3 -o age.tgz \
+            "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz"
+          echo "${AGE_SHA256}  age.tgz" | sha256sum -c -
+          tar -xzf age.tgz
+          echo "${RUNNER_TEMP}/age" >>"$GITHUB_PATH"
+
+      - name: Show tool versions
+        run: |
+          set -euo pipefail
+          mongodump --version
+          age --version
+          aws --version
+
+      - name: Detect runner public IP
+        run: |
+          set -euo pipefail
+          ip="$(curl -fsS -m 10 --retry 3 https://api.ipify.org)"
+          if [[ ! "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            echo "::error::Could not determine an IPv4 egress address"
+            exit 1
+          fi
+          echo "::add-mask::${ip}"
+          echo "RUNNER_IP=${ip}" >>"$GITHUB_ENV"
+
+      - name: Open temporary Atlas access for this runner
+        env:
+          ATLAS_PUBLIC_KEY: ${{ secrets.ATLAS_PUBLIC_KEY }}
+          ATLAS_PRIVATE_KEY: ${{ secrets.ATLAS_PRIVATE_KEY }}
+          ATLAS_PROJECT_ID: ${{ secrets.ATLAS_PROJECT_ID }}
+          ATLAS_COMMENT: gha-backup-${{ github.run_id }}
+          ATLAS_TTL_MINUTES: "60"
+        run: |
+          set -euo pipefail
+          rc=0
+          ops/backup/atlas-access-list.sh exists "$RUNNER_IP" || rc=$?
+          case "$rc" in
+            0)
+              # Someone already allow-listed this exact IP. Use it, but do not
+              # touch or delete an entry this run did not create.
+              echo "Runner IP already on the access list; leaving it as is."
+              ;;
+            1)
+              # Record ownership BEFORE the POST so cleanup runs even if the
+              # POST succeeds server-side but the response is lost.
+              echo "ATLAS_ENTRY_OWNED=true" >>"$GITHUB_ENV"
+              ops/backup/atlas-access-list.sh add "$RUNNER_IP"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+          ops/backup/atlas-access-list.sh wait "$RUNNER_IP"
+          # Small settle time for the entry to reach every node.
+          sleep 10
+
+      - name: Dump and encrypt (plaintext never touches disk)
+        env:
+          MONGODB_BACKUP_URI: ${{ secrets.MONGODB_BACKUP_URI }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$BACKUP_DIR"
+          out="${BACKUP_DIR}/${BACKUP_DATE}.archive.gz.age"
+          log="${BACKUP_DIR}/mongodump.log"
+
+          # mongodump writes a gzipped archive to stdout; age encrypts it in the
+          # pipe. Only ciphertext is written. mongodump's progress log (collection
+          # names and counts) goes to a private file, not the public job log.
+          if ! mongodump --uri "$MONGODB_BACKUP_URI" --db "$MONGODB_DB_NAME" \
+                 --archive --gzip 2>"$log" \
+               | age --encrypt -R "$RECIPIENTS_FILE" -o "$out"; then
+            echo "::error::mongodump | age failed. Last log lines (URIs redacted):"
+            tail -n 15 "$log" | sed -E 's#mongodb(\+srv)?://[^[:space:]]+#<redacted-uri>#g'
+            exit 1
+          fi
+
+          # Encrypted manifest with per-collection counts, for restore checks.
+          {
+            echo "date=${BACKUP_DATE} run_id=${GITHUB_RUN_ID} db=${MONGODB_DB_NAME}"
+            echo "mongodump=${MONGODB_TOOLS_VERSION}"
+            sed -E 's#mongodb(\+srv)?://[^[:space:]]+#<redacted-uri>#g' "$log"
+          } | age --encrypt -R "$RECIPIENTS_FILE" -o "${BACKUP_DIR}/${BACKUP_DATE}.manifest.txt.age"
+          rm -f "$log"
+
+          size="$(stat -c %s "$out")"
+          echo "Encrypted archive size: ${size} bytes"
+          if (( size < BACKUP_MIN_BYTES )); then
+            echo "::error::Encrypted archive is ${size} bytes (< ${BACKUP_MIN_BYTES}); refusing to upload"
+            exit 1
+          fi
+          echo "BACKUP_SIZE=${size}" >>"$GITHUB_ENV"
+
+      - name: Remove temporary Atlas access (always)
+        if: always() && env.ATLAS_ENTRY_OWNED == 'true'
+        env:
+          ATLAS_PUBLIC_KEY: ${{ secrets.ATLAS_PUBLIC_KEY }}
+          ATLAS_PRIVATE_KEY: ${{ secrets.ATLAS_PRIVATE_KEY }}
+          ATLAS_PROJECT_ID: ${{ secrets.ATLAS_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          # 404 is treated as success; deleteAfterDate is the backstop if this fails.
+          ops/backup/atlas-access-list.sh remove "$RUNNER_IP"
+
+      - name: Upload to R2 (daily, plus weekly on Sundays)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          prefixes=(daily)
+          if [[ "$BACKUP_DOW" == 7 ]]; then
+            prefixes+=(weekly)
+          fi
+          for prefix in "${prefixes[@]}"; do
+            for kind in archive.gz manifest.txt; do
+              aws s3 cp --only-show-errors --endpoint-url "$R2_ENDPOINT" \
+                "${BACKUP_DIR}/${BACKUP_DATE}.${kind}.age" \
+                "s3://${R2_BUCKET}/${prefix}/${BACKUP_DATE}.${kind}.age"
+            done
+            echo "Uploaded ${prefix}/${BACKUP_DATE}.*"
+          done
+          echo "UPLOADED_PREFIXES=${prefixes[*]}" >>"$GITHUB_ENV"
+
+      - name: Verify uploaded objects
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          for prefix in $UPLOADED_PREFIXES; do
+            key="${prefix}/${BACKUP_DATE}.archive.gz.age"
+            remote="$(aws s3api head-object --endpoint-url "$R2_ENDPOINT" \
+              --bucket "$R2_BUCKET" --key "$key" --query ContentLength --output text)"
+            if [[ "$remote" != "$BACKUP_SIZE" ]] || (( remote < BACKUP_MIN_BYTES )); then
+              echo "::error::${key}: remote size ${remote} != local ${BACKUP_SIZE} or below ${BACKUP_MIN_BYTES}"
+              exit 1
+            fi
+            aws s3api head-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" \
+              --key "${prefix}/${BACKUP_DATE}.manifest.txt.age" >/dev/null
+            echo "Verified ${key} (${remote} bytes) and its manifest"
+          done
+
+      - name: Prune old backups (keep 7 daily, 4 weekly)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          prune() {
+            local prefix="$1" keep="$2" listing
+            listing="$(aws s3api list-objects-v2 --endpoint-url "$R2_ENDPOINT" \
+              --bucket "$R2_BUCKET" --prefix "${prefix}/" \
+              --query 'Contents[].Key' --output text)"
+            # Text output is tab-separated; "None" means the prefix is empty.
+            mapfile -t doomed < <(printf '%s\n' "$listing" | tr '\t' '\n' \
+              | grep -v -x 'None' | ops/backup/prune-keys.sh "$prefix" "$keep")
+            if (( ${#doomed[@]} == 0 )); then
+              echo "${prefix}: nothing to prune"
+              return 0
+            fi
+            for key in "${doomed[@]}"; do
+              aws s3 rm --only-show-errors --endpoint-url "$R2_ENDPOINT" "s3://${R2_BUCKET}/${key}"
+              echo "${prefix}: deleted ${key}"
+            done
+          }
+          prune daily "$KEEP_DAILY"
+          prune weekly "$KEEP_WEEKLY"
+
+      - name: Remove local ciphertext
+        if: always()
+        run: rm -rf "${BACKUP_DIR:-/nonexistent}"
+
+      - name: Ping healthcheck (result)
+        if: always()
+        env:
+          HEALTHCHECKS_URL: ${{ secrets.HEALTHCHECKS_URL }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${HEALTHCHECKS_URL:-}" ]]; then
+            echo "HEALTHCHECKS_URL not set; skipping"
+            exit 0
+          fi
+          url="${HEALTHCHECKS_URL%/}"
+          if [[ "$JOB_STATUS" != success ]]; then
+            url="${url}/fail"
+          fi
+          curl -fsS -m 10 --retry 3 -o /dev/null "$url" || echo "::warning::healthcheck ping failed"

@@ -194,6 +194,52 @@ def rate_limit(limiter: SlidingWindowRateLimiter, scope: str):
     return _dependency
 
 
+def auth_rate_limit(scope: str):
+    """Per-IP limit for login, register, and password reset.
+
+    Always enforces the in-process window (what the unit suite resets). When
+    ``RATE_LIMIT_REDIS_URL`` or ``REDIS_URL`` is set, the same key is also
+    counted in Redis so the limit holds across workers.
+    """
+    async def _dependency(request: Request):
+        key = f"{scope}:{client_key(request)}"
+        allowed, retry_after = AUTH_RATE_LIMITER.check(key)
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests. Please slow down and try again later.",
+                headers={"Retry-After": str(int(retry_after) + 1)},
+            )
+        shared = _shared_auth_limiter()
+        if shared is None:
+            return
+        try:
+            allowed, retry_after = await shared.acheck(key)
+        except RateLimiterUnavailable:
+            logger.warning("Shared auth rate limiter unavailable; using the in-process limit only")
+            return
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests. Please slow down and try again later.",
+                headers={"Retry-After": str(int(retry_after) + 1)},
+            )
+
+    return _dependency
+
+
+_shared_auth_limiter_cache = None
+
+
+def _shared_auth_limiter():
+    """Redis limiter, or ``None`` when Redis is not configured. Cached."""
+    global _shared_auth_limiter_cache
+    if _shared_auth_limiter_cache is None:
+        candidate = make_org_limiter(10, 60.0, "auth-ip")
+        _shared_auth_limiter_cache = candidate if isinstance(candidate, RedisRateLimiter) else False
+    return _shared_auth_limiter_cache or None
+
+
 #: Auth endpoints: 10 attempts / minute / client IP.
 AUTH_RATE_LIMITER = SlidingWindowRateLimiter(
     max_requests=10, window_seconds=60.0, max_keys=10_000

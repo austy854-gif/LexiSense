@@ -50,6 +50,7 @@ from mongomock_motor import AsyncMongoMockClient  # noqa: E402
 from models.contract import Contract  # noqa: E402
 from models.invitation import Invitation  # noqa: E402
 from routes import contracts as contracts_route  # noqa: E402
+from routes import billing as billing_route  # noqa: E402
 from routes import team as team_route  # noqa: E402
 from services import audit_service, email_service  # noqa: E402
 from utils import rbac as rbac_module  # noqa: E402
@@ -86,11 +87,13 @@ def _reset_rate_limiters():
     to do with the behaviour under test. Dedicated rate-limit tests drive the
     limiter directly instead.
     """
-    rbac_module.AUTH_RATE_LIMITER.reset()
-    rbac_module.INVITE_RATE_LIMITER.reset()
+    for limiter in (rbac_module.AUTH_RATE_LIMITER, rbac_module.INVITE_RATE_LIMITER,
+                    contracts_route.CHAT_USER_LIMITER, contracts_route.CHAT_ORG_LIMITER):
+        limiter.reset()
     yield
-    rbac_module.AUTH_RATE_LIMITER.reset()
-    rbac_module.INVITE_RATE_LIMITER.reset()
+    for limiter in (rbac_module.AUTH_RATE_LIMITER, rbac_module.INVITE_RATE_LIMITER,
+                    contracts_route.CHAT_USER_LIMITER, contracts_route.CHAT_ORG_LIMITER):
+        limiter.reset()
 
 
 @pytest.fixture
@@ -109,6 +112,7 @@ def app(db, monkeypatch):
     """
     contracts_route.init_db(db)
     team_route.init_db(db)
+    billing_route.init_db(db)
     audit_service.init_db(db)
 
     async def _no_send_email(*args, **kwargs):

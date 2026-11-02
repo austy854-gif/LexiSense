@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { BrandLockup } from './BrandLockup';
 import './avatar-initials.css';
+import { isBillingPath, useBillingUiEnabled } from '../lib/billingConfig';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Avatar, AvatarFallback } from './ui/avatar';
@@ -48,6 +49,7 @@ const navItems = [
 
 export function Layout({ children }) {
   const { user, logout } = useAuth();
+  const billingUiEnabled = useBillingUiEnabled();
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
@@ -74,8 +76,8 @@ export function Layout({ children }) {
     return () => clearInterval(interval);
   }, [fetchNotifications]);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/login');
   };
 
@@ -158,6 +160,8 @@ export function Layout({ children }) {
           <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
             {navItems
               .filter((item) => !item.roles || hasRole(user?.role, item.roles))
+              // BILLING_UI_ENABLED (GET /billing/config): hidden until the server says on.
+              .filter((item) => billingUiEnabled === true || !isBillingPath(item.path))
               .map((item) => {
                 const Icon = item.icon;
                 const isActive = location.pathname === item.path;

@@ -10,6 +10,7 @@ from fastapi import APIRouter, FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from routes import approvals as approvals_route
+from routes import billing as billing_route
 from routes import workflow as workflow_route
 from services import approval_service, approval_tasks, audit_service, email_service
 from services.approval_service import ApprovalTokenError
@@ -43,6 +44,7 @@ def flag_on(monkeypatch):
 @pytest.fixture
 async def http(db, flag_on, sent):
     workflow_route.init_db(db)
+    billing_route.init_db(db)
     approvals_route.init_db(db)
     audit_service.init_db(db)
     approvals_route.APPROVAL_LINK_LIMITER.reset()

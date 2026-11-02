@@ -27,7 +27,7 @@ api.interceptors.request.use((config) => {
 // Endpoints where a 401 means "wrong credentials", not "session expired".
 // The calling page shows its own error for these, so the interceptor must not
 // clear the session and hard-reload /login (that wiped the toast).
-const AUTH_ENDPOINT_PATTERN = /\/auth\/(login|register)\/?(\?.*)?$/;
+const AUTH_ENDPOINT_PATTERN = /\/auth\/(login|register|forgot-password|reset-password)\/?(\?.*)?$/;
 
 export function isAuthEndpoint(url) {
   return typeof url === 'string' && AUTH_ENDPOINT_PATTERN.test(url);
@@ -56,6 +56,8 @@ export const authAPI = {
   register: (data) => api.post('/auth/register', data),
   getMe: () => api.get('/auth/me'),
   logout: () => api.post('/auth/logout'),
+  forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
+  resetPassword: (token, password) => api.post('/auth/reset-password', { token, password }),
 };
 
 // Contracts API
@@ -71,6 +73,8 @@ export const contractsAPI = {
   update: (id, data) => api.patch(`/contracts/${id}`, data),
   delete: (id) => api.delete(`/contracts/${id}`),
   chat: (id, question) => api.post(`/contracts/${id}/chat`, { question }),
+  getText: (id) => api.get(`/contracts/${id}/text`),
+  getFile: (id) => api.get(`/contracts/${id}/file`),
 };
 
 // Team API
@@ -156,7 +160,10 @@ export const auditAPI = {
 // Billing API
 export const billingAPI = {
   getSubscription: () => api.get('/billing/subscription'),
-  createCheckout: (priceId, successUrl, cancelUrl) => api.post('/billing/checkout', { priceId, successUrl, cancelUrl }),
+  // Checkout by plan + interval; the server maps it to one of its six Stripe prices.
+  createCheckout: ({ planId, interval = 'monthly' }, successUrl, cancelUrl) =>
+    api.post('/billing/checkout', { planId, interval, successUrl, cancelUrl }),
+  getConfig: () => api.get('/billing/config'),
   createPortal: (returnUrl) => api.post('/billing/portal', { returnUrl }),
   getPlans: () => api.get('/billing/plans'),
 };

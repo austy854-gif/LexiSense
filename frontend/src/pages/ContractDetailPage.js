@@ -30,6 +30,7 @@ import {
   XCircle,
   ArrowRight,
   Zap,
+  Download,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -91,6 +92,9 @@ export default function ContractDetailPage() {
   const [restoringVersion, setRestoringVersion] = useState(null);
   const [workflowData, setWorkflowData] = useState(null);
   const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [docText, setDocText] = useState(null);
+  const [docLoading, setDocLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const chatEndRef = useRef(null);
 
   useEffect(() => {
@@ -202,6 +206,38 @@ export default function ContractDetailPage() {
     }
   };
 
+  const loadDocumentText = async () => {
+    if (docText !== null || docLoading) return;
+    setDocLoading(true);
+    try {
+      const response = await contractsAPI.getText(id);
+      setDocText(response.data.text || '');
+    } catch (error) {
+      setDocText('');
+      toast.error(getErrorInfo(error).message || 'Could not load the contract text');
+    } finally {
+      setDocLoading(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      const response = await contractsAPI.getFile(id);
+      const link = document.createElement('a');
+      link.href = response.data.url;
+      link.rel = 'noopener noreferrer';
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      toast.error(getErrorInfo(error).message || 'Download unavailable');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   if (loading) {
     return (
       <Layout>
@@ -253,7 +289,17 @@ export default function ContractDetailPage() {
             <p className="text-muted-foreground mt-1">
               {contract.contractType} • Uploaded by {contract.uploaderEmail || 'Unknown'}
             </p>
+            {contract.aiAnalysis?.coverage?.partial && (
+              <p className="mt-2 text-sm text-amber-600 dark:text-amber-400" data-testid="analysis-coverage">
+                {contract.aiAnalysis.coverageNote ||
+                  'Only part of this contract was analyzed. Read the document before relying on dates or risk.'}
+              </p>
+            )}
           </div>
+          <Button variant="outline" size="sm" onClick={handleDownload} disabled={downloading} data-testid="download-original">
+            {downloading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
+            Download
+          </Button>
         </div>
 
         {/* Workflow Actions */}
@@ -374,10 +420,11 @@ export default function ContractDetailPage() {
 
             {/* Analysis Tabs */}
             <Card>
-              <Tabs defaultValue="summary" className="w-full">
+              <Tabs defaultValue="summary" className="w-full" onValueChange={(value) => { if (value === 'document') loadDocumentText(); }}>
                 <CardHeader className="pb-0">
-                  <TabsList className="grid w-full grid-cols-5">
+                  <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6">
                     <TabsTrigger value="summary">Summary</TabsTrigger>
+                    <TabsTrigger value="document">Document</TabsTrigger>
                     <TabsTrigger value="risks">Risks</TabsTrigger>
                     <TabsTrigger value="terms">Key Terms</TabsTrigger>
                     <TabsTrigger value="recommendations">Recommendations</TabsTrigger>
@@ -415,6 +462,16 @@ export default function ContractDetailPage() {
                       <p className="text-muted-foreground">Analysis in progress…</p>
                     ) : (
                       <p className="text-muted-foreground">No summary available</p>
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="document" className="mt-0">
+                    {docLoading ? (
+                      <p className="text-muted-foreground">Loading the contract…</p>
+                    ) : (
+                      <pre className="whitespace-pre-wrap text-sm leading-relaxed max-h-[32rem] overflow-auto" data-testid="contract-text">
+                        {docText || 'No extracted text is stored for this contract.'}
+                      </pre>
                     )}
                   </TabsContent>
 

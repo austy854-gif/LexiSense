@@ -17,7 +17,22 @@ from models.billing import (
     WebhookEvent
 )
 from utils.auth import get_current_user, require_role
+from utils.billing_access import (
+    ACCESS_CANCELLED,
+    ACCESS_GRACE,
+    ACCESS_PAID,
+    ACCESS_PAST_DUE,
+    ACCESS_UNVERIFIED_PLAN,
+    Entitlement,
+    compute_entitlement,
+    grace_ends_at,
+    upload_gate,
+)
+from utils.feature_flags import billing_ui_enabled
 from utils.env import get_env
+from utils import plans as plan_config
+from services.stripe_prices import display_price
+from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +56,114 @@ def init_db(database):
 
 TRIAL_DAYS = 7
 TRIAL_CONTRACT_LIMIT = 25
-TEAM_PLAN_PRICE_ID = get_env("STRIPE_TEAM_PRICE_ID")  # price_... from Stripe Dashboard
+CHECKOUT_PRICE_REJECTED = "This plan is not available for checkout."
 
 
-async def get_or_create_billing(org_id: str) -> OrganizationBilling:
-    """Get existing billing record or create a new one for trial"""
-    billing = await db.organization_billing.find_one({"organizationId": org_id})
+def resolve_checkout_price(request: CheckoutSessionRequest) -> str:
+    """Map the request to a server-approved Stripe price id, or raise 400.
+
+    Only the six STRIPE_PRICE_* ids from utils.plans are accepted, whether the
+    client names a plan + interval or (legacy) a price id. An empty allowlist
+    fails closed.
+    """
+    allowed = plan_config.allowed_price_ids()
+    if not allowed:
+        logger.error(
+            "Checkout rejected: Stripe price allowlist is empty (set %s)",
+            ", ".join(plan_config.STRIPE_PRICE_ENV_VARS),
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=CHECKOUT_PRICE_REJECTED)
+    if request.planId:
+        plan = plan_config.get_paid_plan(request.planId)
+        price_id = plan.price_for_interval(request.interval) if plan else None
+    else:
+        price_id = (request.priceId or "").strip()
+    if not price_id or price_id not in allowed:
+        logger.warning(
+            "Checkout rejected: price not in allowlist",
+            extra={"plan_id": request.planId, "interval": request.interval, "price_id": request.priceId},
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=CHECKOUT_PRICE_REJECTED)
+    return price_id
+
+
+def has_used_in_app_trial(billing: OrganizationBilling) -> bool:
+    """True once the org has started (or used) the in-app trial.
+
+    get_or_create_billing creates every record as a trial with trialStartDate
+    and trialEndDate set, so in practice any org reaching checkout has already
+    had its trial and must not get a second one from Stripe.
+    """
+    return bool(billing.trialStartDate or billing.trialEndDate)
+
+
+#: Stripe rejects a trial_end less than 48 hours away; keep a small margin.
+STRIPE_MIN_TRIAL_END = timedelta(hours=48, minutes=5)
+
+
+def checkout_subscription_data(billing: OrganizationBilling, org_id: str, now: Optional[datetime] = None) -> dict:
+    """Subscription data for checkout.
+
+    Never a second, fresh Stripe trial once the in-app trial has started. If
+    in-app trial time remains (and Stripe's 48h minimum allows it), the
+    remainder is carried over as ``trial_end`` so upgrading early loses nothing.
+    """
+    data: dict = {"metadata": {"organizationId": org_id}}
+    if not has_used_in_app_trial(billing):
+        # "No trial" is expressed by omitting the key; never send 0.
+        data["trial_period_days"] = TRIAL_DAYS
+        return data
+    now = now or datetime.now(timezone.utc)
+    if billing.subscriptionTier == SubscriptionTier.TRIAL and billing.trialEndDate:
+        try:
+            end = datetime.fromisoformat(billing.trialEndDate.replace("Z", "+00:00"))
+        except ValueError:
+            return data
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        if end - now >= STRIPE_MIN_TRIAL_END:
+            data["trial_end"] = int(end.timestamp())
+    return data
+
+
+#: Statuses of a subscription that still exists and bills the customer.
+LIVE_BILLING_STATUSES = frozenset({BillingStatus.ACTIVE, BillingStatus.TRIALING, BillingStatus.PAST_DUE})
+LIVE_STRIPE_STATUSES = frozenset({"active", "trialing", "past_due", "unpaid"})
+MSG_ALREADY_SUBSCRIBED = (
+    "Your organization already has a subscription. Use the billing portal to manage or change it."
+)
+
+
+def has_live_subscription(billing: OrganizationBilling) -> bool:
+    return billing.subscriptionTier == SubscriptionTier.TEAM and billing.billingStatus in LIVE_BILLING_STATUSES
+
+
+def _stripe_has_live_subscription(customer_id: str) -> bool:
+    subs = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
+    return any(sub.get("status") in LIVE_STRIPE_STATUSES for sub in (subs.get("data") or []))
+
+
+async def member_limit_for_org(org_id: str) -> Optional[int]:
+    """Seat cap for the org's current tier, from utils.plans.
+
+    Live paid subscriptions get their plan's cap (looked up from the stored
+    Stripe price). Everything else -- trial, cancelled, or a price that isn't
+    configured -- gets the trial cap (fail closed to the smallest tier).
+    """
+    billing = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    entitlement = compute_entitlement(billing)
+    if entitlement.state == ACCESS_UNVERIFIED_PLAN:
+        logger.error("Org %s has a subscription on an unknown Stripe price; applying trial seat cap", org_id)
+    return entitlement.max_members
+
+
+async def get_or_create_billing(org_id: str, database=None) -> OrganizationBilling:
+    """Get existing billing record or create a new one for trial.
+
+    ``database`` lets Celery workers (own Motor handle per task) share this.
+    """
+    database = db if database is None else database
+    billing = await database.organization_billing.find_one({"organizationId": org_id})
     if billing:
         return OrganizationBilling(**billing)
     
@@ -60,7 +177,13 @@ async def get_or_create_billing(org_id: str) -> OrganizationBilling:
         trialContractsUsed=0,
         trialContractsLimit=TRIAL_CONTRACT_LIMIT
     )
-    await db.organization_billing.insert_one(new_billing.model_dump())
+    try:
+        await database.organization_billing.insert_one(new_billing.model_dump())
+    except DuplicateKeyError:
+        existing = await database.organization_billing.find_one({"organizationId": org_id})
+        if existing:
+            return OrganizationBilling(**existing)
+        raise
     return new_billing
 
 
@@ -72,20 +195,16 @@ async def check_trial_access(org_id: str) -> tuple[bool, str]:
     Call this only for pre-flight UX messaging.
     """
     billing = await get_or_create_billing(org_id)
-
-    # If paid subscription, always allow
-    if billing.subscriptionTier == SubscriptionTier.TEAM and billing.billingStatus == BillingStatus.ACTIVE:
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    entitlement = compute_entitlement(raw)
+    if entitlement.state in (ACCESS_PAID, ACCESS_GRACE):
         return True, ""
-
-    # Check if trial has expired
-    if billing.trialEndDate:
-        trial_end = datetime.fromisoformat(billing.trialEndDate.replace("Z", "+00:00"))
-        if datetime.now(timezone.utc) > trial_end:
-            return False, TRIAL_ENDED_MESSAGE
+    if entitlement.blocked:
+        return False, entitlement.message
 
     # Check contract upload limit
     if billing.trialContractsUsed >= billing.trialContractsLimit:
-        return False, f"You've used all {TRIAL_CONTRACT_LIMIT} trial uploads. Upgrade to keep adding contracts."
+        return False, trial_limit_message()
 
     return True, ""
 
@@ -106,20 +225,12 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
     now = datetime.now(timezone.utc).isoformat()
 
     # First check for paid subscription -- paid orgs never consume trial quota.
-    billing_doc = await db.organization_billing.find_one({"organizationId": org_id})
-    if (
-        billing_doc
-        and billing_doc.get("subscriptionTier") == SubscriptionTier.TEAM
-        and billing_doc.get("billingStatus") == BillingStatus.ACTIVE
-    ):
+    billing_doc = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    entitlement = compute_entitlement(billing_doc)
+    if entitlement.state in (ACCESS_PAID, ACCESS_GRACE):
         return True, ""
-
-    # Check trial expiration BEFORE we try to reserve.
-    trial_end_str = billing_doc.get("trialEndDate") if billing_doc else None
-    if trial_end_str:
-        trial_end = datetime.fromisoformat(trial_end_str.replace("Z", "+00:00"))
-        if datetime.now(timezone.utc) > trial_end:
-            return False, TRIAL_ENDED_MESSAGE
+    if entitlement.blocked:
+        return False, entitlement.message
 
     # Atomic conditional increment: only succeeds if we're strictly below the limit.
     result = await db.organization_billing.find_one_and_update(
@@ -133,15 +244,78 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
         },
     )
     if result is None:
-        return False, f"You've used all {TRIAL_CONTRACT_LIMIT} trial uploads. Upgrade to keep adding contracts."
+        return False, trial_limit_message()
     return True, ""
+
+
+async def assert_org_writable(org_id: str) -> None:
+    """Reject contract mutations once a subscription is read-only.
+
+    Uploads already go through :func:`reserve_trial_upload_atomic`. Edits,
+    deletes, restores and workflow changes use this so the billing page's
+    read-only state is actually enforced.
+    """
+    await get_or_create_billing(org_id)
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    entitlement = compute_entitlement(raw)
+    if entitlement.state in (ACCESS_PAST_DUE, ACCESS_CANCELLED, ACCESS_UNVERIFIED_PLAN):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
+
+
+def trial_limit_message() -> str:
+    step = "Upgrade to keep adding contracts." if billing_ui_enabled() else "Please contact support to continue."
+    return f"You've used all your trial uploads. {step}"
+
+
+async def get_entitlement(org_id: str, database=None) -> Entitlement:
+    database = db if database is None else database
+    await get_or_create_billing(org_id, database)
+    raw = await database.organization_billing.find_one({"organizationId": org_id}) or {}
+    return compute_entitlement(raw)
+
+
+async def ensure_ai_access(org_id: str) -> Entitlement:
+    """403 unless the org may spend AI credits (trial, paid, or past-due grace)."""
+    entitlement = await get_entitlement(org_id)
+    if entitlement.blocked:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
+    return entitlement
+
+
+async def ensure_invite_access(org_id: str) -> Entitlement:
+    """403 for read-only (past due after grace) and unverified-plan orgs."""
+    entitlement = await get_entitlement(org_id)
+    if entitlement.read_only or entitlement.state == ACCESS_UNVERIFIED_PLAN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
+    return entitlement
+
+
+#: Recorded status for background AI work skipped by the entitlement gate.
+SKIPPED_NO_ENTITLEMENT = "skipped"
+
+
+async def background_ai_entitlement(org_id: Optional[str], database, task: str) -> Optional[Entitlement]:
+    """Worker-side gate: returns the entitlement, or logs and returns None (skip, don't raise)."""
+    if not org_id:
+        logger.warning("Skipping %s: no organization id", task)
+        return None
+    entitlement = await get_entitlement(org_id, database)
+    if entitlement.blocked:
+        logger.info("Skipping %s for org %s: no AI entitlement (state=%s)", task, org_id, entitlement.state)
+        return None
+    return entitlement
 
 
 async def release_trial_upload(org_id: str) -> None:
     """Refund one trial upload slot. Used when an upload fails after reservation.
 
     Safe to call multiple times; will never take the counter below zero.
+    Paid and read-only orgs never consumed a slot, so a failed upload must
+    not decrement their counter.
     """
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    if upload_gate(raw) != "trial":
+        return
     now = datetime.now(timezone.utc).isoformat()
     await db.organization_billing.find_one_and_update(
         {
@@ -180,6 +354,8 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
         if datetime.now(timezone.utc) > trial_end:
             is_trial_expired = True
     
+    raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    entitlement = compute_entitlement(raw)
     return SubscriptionInfo(
         subscriptionTier=billing.subscriptionTier,
         billingStatus=billing.billingStatus,
@@ -189,8 +365,21 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
         trialContractsUsed=billing.trialContractsUsed,
         trialContractsLimit=billing.trialContractsLimit,
         stripeCustomerId=billing.stripeCustomerId,
-        stripeSubscriptionId=billing.stripeSubscriptionId
+        stripeSubscriptionId=billing.stripeSubscriptionId,
+        readOnly=upload_gate(raw) == "readonly",
+        graceEndsAt=grace_ends_at(raw),
+        accessState=entitlement.state,
+        planId=entitlement.plan_id,
+        maxMembers=entitlement.max_members,
+        accessMessage=entitlement.message,
+        billingUiEnabled=billing_ui_enabled(),
     )
+
+
+@router.get("/config")
+async def get_billing_config():
+    """Runtime billing flags for the frontend (no auth; nothing sensitive)."""
+    return {"billingUiEnabled": billing_ui_enabled()}
 
 
 @router.post("/checkout", response_model=CheckoutSessionResponse)
@@ -205,9 +394,25 @@ async def create_checkout_session(
             detail="Billing not configured. Please contact support."
         )
     
+    price_id = resolve_checkout_price(request)
+
     org_id = current_user["organizationId"]
     billing = await get_or_create_billing(org_id)
-    
+
+    # One subscription per org: a second checkout would bill the customer twice.
+    if has_live_subscription(billing):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MSG_ALREADY_SUBSCRIBED)
+    # Webhooks can lag behind a just-completed checkout, so ask Stripe as well.
+    if billing.stripeCustomerId:
+        try:
+            live = _stripe_has_live_subscription(billing.stripeCustomerId)
+        except stripe.StripeError as e:
+            logger.error("Could not list subscriptions for org %s: %s", org_id, type(e).__name__)
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="Billing is temporarily unavailable. Please try again.")
+        if live:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MSG_ALREADY_SUBSCRIBED)
+
     # Create or get Stripe customer
     if not billing.stripeCustomerId:
         customer = stripe.Customer.create(
@@ -225,16 +430,13 @@ async def create_checkout_session(
             customer=billing.stripeCustomerId,
             payment_method_types=["card"],
             line_items=[{
-                "price": request.priceId or TEAM_PLAN_PRICE_ID,
+                "price": price_id,
                 "quantity": 1,
             }],
             mode="subscription",
             success_url=request.successUrl,
             cancel_url=request.cancelUrl,
-            subscription_data={
-                "trial_period_days": TRIAL_DAYS,
-                "metadata": {"organizationId": org_id}
-            },
+            subscription_data=checkout_subscription_data(billing, org_id),
             metadata={"organizationId": org_id}
         )
         return CheckoutSessionResponse(sessionId=session.id, url=session.url)
@@ -379,7 +581,13 @@ async def handle_subscription_deleted(subscription):
                 org_id = billing["organizationId"]
     if not org_id:
         return
-    
+    current = (await db.organization_billing.find_one({"organizationId": org_id}) or {}).get("stripeSubscriptionId")
+    if _is_foreign_subscription(current, subscription.get("id")):
+        # Deleting a duplicate or abandoned subscription must not cancel the org.
+        logger.warning("Ignoring deletion of subscription %s for org %s (current %s)",
+                       subscription.get("id"), org_id, current)
+        return
+
     await db.organization_billing.update_one(
         {"organizationId": org_id},
         {
@@ -389,9 +597,25 @@ async def handle_subscription_deleted(subscription):
                 "cancelledAt": datetime.now(timezone.utc).isoformat(),
                 "stripeSubscriptionId": None,
                 "updatedAt": datetime.now(timezone.utc).isoformat()
-            }
+            },
+            "$unset": {"pastDueSince": ""},
         }
     )
+
+
+def _invoice_subscription_id(invoice) -> Optional[str]:
+    """Subscription an invoice belongs to (pre- and post-2025 Stripe API shapes)."""
+    sub = invoice.get("subscription")
+    if not sub:
+        parent = invoice.get("parent") or {}
+        sub = (parent.get("subscription_details") or {}).get("subscription")
+    if sub is not None and not isinstance(sub, str):
+        sub = sub.get("id")
+    return sub or None
+
+
+def _is_foreign_subscription(current: Optional[str], subscription_id: Optional[str]) -> bool:
+    return bool(subscription_id and current and subscription_id != current)
 
 
 async def handle_payment_failed(invoice):
@@ -400,10 +624,19 @@ async def handle_payment_failed(invoice):
     billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
     if not billing:
         return
+    if _is_foreign_subscription(billing.get("stripeSubscriptionId"), _invoice_subscription_id(invoice)):
+        logger.warning("Ignoring payment failure for a non-current subscription of org %s", billing["organizationId"])
+        return
     
+    now = datetime.now(timezone.utc).isoformat()
     await db.organization_billing.update_one(
         {"organizationId": billing["organizationId"]},
-        {"$set": {"billingStatus": BillingStatus.PAST_DUE, "updatedAt": datetime.now(timezone.utc).isoformat()}}
+        {"$set": {
+            "billingStatus": BillingStatus.PAST_DUE,
+            "subscriptionTier": SubscriptionTier.TEAM,
+            "pastDueSince": billing.get("pastDueSince") or now,
+            "updatedAt": now,
+        }}
     )
 
 
@@ -413,12 +646,17 @@ async def handle_invoice_paid(invoice):
     billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
     if not billing:
         return
-    
+    if _is_foreign_subscription(billing.get("stripeSubscriptionId"), _invoice_subscription_id(invoice)):
+        return
+
     # If was past_due, restore to active
     if billing.get("billingStatus") == BillingStatus.PAST_DUE:
         await db.organization_billing.update_one(
             {"organizationId": billing["organizationId"]},
-            {"$set": {"billingStatus": BillingStatus.ACTIVE, "updatedAt": datetime.now(timezone.utc).isoformat()}}
+            {
+                "$set": {"billingStatus": BillingStatus.ACTIVE, "updatedAt": datetime.now(timezone.utc).isoformat()},
+                "$unset": {"pastDueSince": ""},
+            }
         )
 
 
@@ -437,8 +675,9 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
     stripe_status = subscription.get("status", "incomplete")
     billing_status = status_map.get(stripe_status, BillingStatus.INCOMPLETE)
     
-    # Determine tier
-    if billing_status == BillingStatus.ACTIVE or billing_status == BillingStatus.TRIALING:
+    # A failed payment stays on the team plan during the grace window. Only a
+    # cancelled subscription (or an unfinished checkout) leaves the paid tier.
+    if billing_status in (BillingStatus.ACTIVE, BillingStatus.TRIALING, BillingStatus.PAST_DUE):
         tier = SubscriptionTier.TEAM
     elif billing_status == BillingStatus.CANCELLED:
         tier = SubscriptionTier.CANCELLED
@@ -453,28 +692,81 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
     if subscription.get("trial_end"):
         trial_end = datetime.fromtimestamp(subscription["trial_end"], tz=timezone.utc).isoformat()
     
-    await db.organization_billing.update_one(
-        {"organizationId": org_id},
-        {
-            "$set": {
-                "stripeCustomerId": customer_id,
-                "stripeSubscriptionId": subscription.get("id"),
-                "stripePriceId": subscription.get("items", {}).get("data", [{}])[0].get("price", {}).get("id"),
-                "subscriptionTier": tier,
-                "billingStatus": billing_status,
-                "currentPeriodStart": datetime.fromtimestamp(subscription.get("current_period_start", 0), tz=timezone.utc).isoformat() if subscription.get("current_period_start") else None,
-                "currentPeriodEnd": current_period_end,
-                "trialEndDate": trial_end,
-                "cancelAtPeriodEnd": subscription.get("cancel_at_period_end", False),
-                "updatedAt": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+    existing = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    current = existing.get("stripeSubscriptionId")
+    if (_is_foreign_subscription(current, subscription.get("id"))
+            and existing.get("billingStatus") in LIVE_BILLING_STATUSES
+            and billing_status not in LIVE_BILLING_STATUSES):
+        # A dead duplicate must not overwrite the org's live subscription.
+        logger.warning("Ignoring %s subscription %s for org %s (current %s is live)",
+                       stripe_status, subscription.get("id"), org_id, current)
+        return
+
+    price_id = subscription.get("items", {}).get("data", [{}])[0].get("price", {}).get("id")
+    if tier == SubscriptionTier.TEAM and plan_config.plan_for_price_id(price_id) is None:
+        # B4: recorded, but compute_entitlement grants no access (unverified_plan).
+        logger.error("Subscription %s for org %s uses unconfigured Stripe price %s",
+                     subscription.get("id"), org_id, price_id)
+
+    now = datetime.now(timezone.utc).isoformat()
+    fields = {
+        "stripeCustomerId": customer_id,
+        "stripeSubscriptionId": subscription.get("id"),
+        "stripePriceId": price_id,
+        "subscriptionTier": tier,
+        "billingStatus": billing_status,
+        "currentPeriodStart": datetime.fromtimestamp(subscription.get("current_period_start", 0), tz=timezone.utc).isoformat() if subscription.get("current_period_start") else None,
+        "currentPeriodEnd": current_period_end,
+        # Never erase the in-app trial end when Stripe has no trial.
+        "trialEndDate": trial_end or existing.get("trialEndDate"),
+        "cancelAtPeriodEnd": subscription.get("cancel_at_period_end", False),
+        "updatedAt": now,
+    }
+    update = {"$set": fields}
+    if billing_status == BillingStatus.PAST_DUE:
+        fields["pastDueSince"] = existing.get("pastDueSince") or now
+    else:
+        update["$unset"] = {"pastDueSince": ""}
+    await db.organization_billing.update_one({"organizationId": org_id}, update)
+
+
+def _plan_card(plan: plan_config.PlanConfig) -> dict:
+    monthly = display_price(plan, "monthly")
+    annual = display_price(plan, "annual")
+    seats = f"Up to {plan.max_members} team members" if plan.max_members else "Unlimited team members"
+    return {
+        "id": plan.id,
+        "name": f"{plan.name} plan",
+        # Same Stripe price id checkout charges for (planId, "monthly").
+        "price": monthly["amount"],
+        "interval": "month",
+        "priceId": monthly["priceId"],
+        "priceSource": monthly["source"],
+        "currency": monthly["currency"],
+        "taxBehavior": monthly["taxBehavior"],
+        "taxInclusive": monthly["taxInclusive"],
+        "priceLabel": monthly["priceLabel"],
+        "annual": {"price": annual["amount"], "interval": "year", "priceId": annual["priceId"],
+                   "priceSource": annual["source"], "taxInclusive": annual["taxInclusive"],
+                   "priceLabel": annual["priceLabel"]},
+        "maxMembers": plan.max_members,
+        "features": [
+            "AI contract analysis",
+            "Contract repository",
+            seats,
+            "Role-based access control",
+            "Contract templates library",
+            "PDF export",
+        ],
+        "cta": f"Upgrade to {plan.name}",
+        "available": bool(monthly["priceId"] or annual["priceId"]),
+    }
 
 
 @router.get("/plans")
 async def get_plans():
-    """Get available pricing plans"""
+    """Available plans. Prices come from the same Stripe price IDs checkout uses."""
+    trial_seats = plan_config.trial_max_members()
     return {
         "plans": [
             {
@@ -482,36 +774,18 @@ async def get_plans():
                 "name": "Free trial",
                 "price": 0,
                 "interval": "month",
+                "maxMembers": trial_seats,
                 "features": [
                     "Free trial",
                     "Limited contract uploads",
+                    f"Up to {trial_seats} team members" if trial_seats else "Unlimited team members",
                     "AI contract analysis",
                     "Contract repository",
                     "Basic dashboard"
                 ],
                 "cta": "Start free trial"
             },
-            {
-                "id": "team",
-                "name": "Team plan",
-                "price": 49,
-                "interval": "month",
-                "features": [
-                    "Unlimited contract uploads",
-                    "AI contract analysis",
-                    "Contract repository",
-                    "Advanced dashboard & analytics",
-                    "Team collaboration (up to 10 members)",
-                    "Role-based access control",
-                    "Approval workflows",
-                    "Contract templates library",
-                    "PDF export",
-                    "Audit logs",
-                    "Priority support"
-                ],
-                "cta": "Upgrade to Team plan",
-                "priceId": TEAM_PLAN_PRICE_ID
-            }
+            *[_plan_card(p) for p in plan_config.get_paid_plans().values()],
         ]
     }
 
@@ -522,7 +796,15 @@ __all__ = [
     "check_trial_access",
     "reserve_trial_upload_atomic",
     "release_trial_upload",
+    "assert_org_writable",
     "increment_trial_usage",
     "get_or_create_billing",
     "init_db",
+    "member_limit_for_org",
+    "get_entitlement",
+    "ensure_ai_access",
+    "ensure_invite_access",
+    "background_ai_entitlement",
+    "SKIPPED_NO_ENTITLEMENT",
+    "compute_entitlement",
 ]

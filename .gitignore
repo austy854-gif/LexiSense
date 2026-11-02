@@ -79,6 +79,9 @@ agenthub/agents/youtube/db
 # Mobile development
 android-sdk/
 
+# Agent identity left by hosted coding environments. Not part of the app.
+.gitconfig
+
 # Environment and credential files
 # NOTE: `.env.*` would also match the committed `.env.example` templates, so
 # they are explicitly re-included below. Keep these negations last.

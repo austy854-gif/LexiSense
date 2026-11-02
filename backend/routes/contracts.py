@@ -9,11 +9,20 @@ from models.contract import Contract, ContractCreate, ContractResponse, Contract
 from models.contract_version import ContractVersion, ContractVersionResponse
 from utils.auth import get_current_user
 from utils.pagination import normalize_date_bound, resolve_pagination
-from utils.rbac import ROLE_ADMIN, ROLE_MANAGER, WRITE_ROLES
+from utils.rbac import (
+    ROLE_ADMIN,
+    ROLE_MANAGER,
+    WRITE_ROLES,
+    RateLimiterUnavailable,
+    make_org_limiter,
+)
+from utils.env import get_env
 from services.ai_service import analyze_contract, get_chat_response
-from services.storage_service import upload_file_to_s3, delete_file_from_s3
-from services.pdf_service import extract_text_from_file
+from services.storage_service import upload_file_to_s3, delete_file_from_s3, generate_presigned_url
+from services.pdf_service import FileRejected, extract_text_from_file
 from services.audit_service import log_action
+from utils.contract_fields import fields_from_analysis
+from utils.uploads import UploadRejected, attachment_filename, validate_upload
 from services.workflow_service import (
     PRIVILEGED_TRANSITION_ROLES,
     TRANSITION_ROLES,
@@ -23,6 +32,8 @@ from services.workflow_service import (
     validate_transition,
 )
 from routes.billing import (
+    assert_org_writable,
+    ensure_ai_access,
     reserve_trial_upload_atomic,
     release_trial_upload,
 )
@@ -30,9 +41,71 @@ from routes.billing import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contracts", tags=["Contracts"])
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(get_env(name) or default)
+    except (TypeError, ValueError):
+        logger.error("%s is not an integer; using default %s", name, default)
+        return default
+    return value if value > 0 else default
+
+
+#: Contract chat spends AI credits on every call: rate-limited per user and per
+#: org (per minute). Redis-backed when configured; falls back to the in-process
+#: window if Redis is down (fail open, like the other single-request limiters).
+CHAT_USER_LIMITER = make_org_limiter(_env_int("CHAT_RATE_LIMIT_PER_USER_PER_MINUTE", 10), 60.0, prefix="rl")
+CHAT_ORG_LIMITER = make_org_limiter(_env_int("CHAT_RATE_LIMIT_PER_ORG_PER_MINUTE", 60), 60.0, prefix="rl")
+
+
+async def _chat_rate_limited_user(current_user: dict = Depends(get_current_user)) -> dict:
+    """Auth first (anonymous callers can't burn a budget), then both limits."""
+    org = current_user.get("organizationId") or "unknown"
+    user = current_user.get("sub") or current_user.get("id") or "unknown"
+    for limiter, key, scope in (
+        (CHAT_USER_LIMITER, f"contracts:chat:user:{org}:{user}", "your account"),
+        (CHAT_ORG_LIMITER, f"contracts:chat:org:{org}", "your organization"),
+    ):
+        try:
+            allowed, retry_after = await limiter.acheck(key)
+        except RateLimiterUnavailable:
+            allowed, retry_after = True, 0.0
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many contract questions for {scope}. Please wait a moment and try again.",
+                headers={"Retry-After": str(int(retry_after) + 1)},
+            )
+    return current_user
+
 db = None
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-ALLOWED_MIME_TYPES = ["application/pdf", "text/plain"]
+DOWNLOAD_URL_TTL_SECONDS = 300
+
+
+def _analysis_columns(ai_analysis):
+    """Persisted date/value/risk columns. Invalid model output becomes None."""
+    if isinstance(ai_analysis, dict) and ai_analysis.get("error"):
+        return {"riskLevel": None, "effectiveDate": None, "expiryDate": None, "value": None}
+    return fields_from_analysis(ai_analysis)
+
+
+async def _read_contract_file(filename: str, file_content: bytes):
+    """Validate bytes, then extract text. Raises HTTPException with user-facing copy."""
+    try:
+        content_type, extension = validate_upload(filename or "", file_content)
+    except UploadRejected as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    try:
+        extracted = await extract_text_from_file(file_content, content_type)
+    except FileRejected as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if not extracted or not extracted.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not extract text from file. The file may be empty or corrupted.",
+        )
+    return content_type, extension, extracted
 
 # User-facing analysis outcomes. These strings are stored on the contract and
 # shown verbatim in the UI, so they must never carry exception text; the
@@ -239,6 +312,56 @@ async def get_contract(
         uploaderEmail=uploader["email"] if uploader else None
     )
 
+@router.get("/{contract_id}/text")
+async def get_contract_text(
+    contract_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Extracted text of a contract the caller can already open."""
+    contract = await db.contracts.find_one(
+        {"id": contract_id, "organizationId": current_user["organizationId"]},
+        {"_id": 0, "originalText": 1},
+    )
+    if not contract:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found")
+    text = contract.get("originalText") or ""
+    if not text.strip():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contract text not available")
+    return {"text": text, "characters": len(text)}
+
+
+@router.get("/{contract_id}/file")
+async def download_contract_file(
+    contract_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Short-lived attachment URL for the original upload. Org-scoped."""
+    contract = await db.contracts.find_one(
+        {"id": contract_id, "organizationId": current_user["organizationId"]},
+        {"_id": 0, "originalText": 0},
+    )
+    if not contract:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found")
+    storage_key = contract.get("storageKey")
+    if not storage_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Original file is not available")
+
+    extension = "pdf" if (contract.get("mimeType") == "application/pdf" or str(storage_key).endswith(".pdf")) else "txt"
+    filename = attachment_filename(contract.get("fileName") or contract.get("title") or "contract", extension)
+    content_type = "application/pdf" if extension == "pdf" else "text/plain"
+    url = await generate_presigned_url(
+        storage_key,
+        expiration=DOWNLOAD_URL_TTL_SECONDS,
+        download_name=filename,
+        content_type=content_type,
+    )
+    if not url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The original file isn't available for download right now.",
+        )
+    return {"url": url, "fileName": filename, "expiresIn": DOWNLOAD_URL_TTL_SECONDS}
+
 
 @router.post("", response_model=ContractResponse)
 async def upload_contract(
@@ -249,27 +372,15 @@ async def upload_contract(
     current_user: dict = Depends(get_current_user)
 ):
     """Upload and analyze a new contract."""
-    if file.content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file type. Only PDF and TXT files are allowed."
-        )
-    
     file_content = await file.read()
-    
+
     if len(file_content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File size exceeds maximum allowed (10MB)"
         )
-    
-    extracted_text = await extract_text_from_file(file_content, file.content_type)
-    
-    if not extracted_text or len(extracted_text.strip()) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Could not extract text from file. The file may be empty or corrupted."
-        )
+
+    content_type, extension, extracted_text = await _read_contract_file(file.filename, file_content)
     
     # Atomically reserve one trial upload slot BEFORE any storage/DB writes.
     # Concurrent requests can never exceed the cap, and we can refund on failure.
@@ -286,7 +397,8 @@ async def upload_contract(
             file_content,
             file.filename,
             current_user["organizationId"],
-            file.content_type
+            content_type,
+            extension=extension,
         )
 
         ai_analysis = None
@@ -305,11 +417,11 @@ async def upload_contract(
                 if ai_analysis.get("error"):
                     logger.warning("AI analysis returned an error for %r: %s", title, ai_analysis.get("error"))
                     ai_error = ANALYSIS_FAILED_MESSAGE
-                risk_level = ai_analysis.get("riskLevel")
-                dates = ai_analysis.get("dates", {}) or {}
-                effective_date = dates.get("effectiveDate")
-                expiry_date = dates.get("expiryDate")
-                contract_value = ai_analysis.get("value")
+                columns = _analysis_columns(ai_analysis)
+                risk_level = columns["riskLevel"]
+                effective_date = columns["effectiveDate"]
+                expiry_date = columns["expiryDate"]
+                contract_value = columns["value"]
         except Exception:
             logger.exception("AI analysis failed for %r", title)
             ai_error = ANALYSIS_FAILED_MESSAGE
@@ -330,7 +442,7 @@ async def upload_contract(
             storageKey=storage_key,
             fileName=file.filename,
             fileSize=len(file_content),
-            mimeType=file.content_type
+            mimeType=content_type
         )
 
         contract_doc = contract.model_dump()
@@ -366,7 +478,7 @@ async def upload_contract(
         logger.error(f"Contract upload failed after quota reservation: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload failed. Your trial quota was not consumed. Please retry."
+            detail="Upload failed. Nothing was saved. Please retry."
         )
 
     uploader = await db.users.find_one({"id": current_user["sub"]}, {"_id": 0, "email": 1})
@@ -415,28 +527,21 @@ async def bulk_upload_contracts(
     
     for file in files:
         try:
-            if file.content_type not in ALLOWED_MIME_TYPES:
-                results["failed"].append({
-                    "filename": file.filename,
-                    "error": "Invalid file type. Only PDF and TXT files are allowed."
-                })
-                continue
-            
             file_content = await file.read()
-            
+
             if len(file_content) > MAX_FILE_SIZE:
                 results["failed"].append({
                     "filename": file.filename,
                     "error": "File size exceeds maximum allowed (10MB)"
                 })
                 continue
-            
-            extracted_text = await extract_text_from_file(file_content, file.content_type)
-            
-            if not extracted_text or len(extracted_text.strip()) == 0:
+
+            try:
+                content_type, extension, extracted_text = await _read_contract_file(file.filename, file_content)
+            except HTTPException as exc:
                 results["failed"].append({
                     "filename": file.filename,
-                    "error": "Could not extract text from file"
+                    "error": exc.detail if isinstance(exc.detail, str) else "Could not read this file",
                 })
                 continue
             
@@ -456,7 +561,8 @@ async def bulk_upload_contracts(
                     file_content,
                     file.filename,
                     current_user["organizationId"],
-                    file.content_type
+                    content_type,
+                    extension=extension,
                 )
 
                 # Generate title from filename
@@ -480,11 +586,11 @@ async def bulk_upload_contracts(
                                 "AI analysis returned an error for %r: %s", file.filename, ai_analysis.get("error")
                             )
                             ai_error = ANALYSIS_FAILED_MESSAGE
-                        risk_level = ai_analysis.get("riskLevel")
-                        dates = ai_analysis.get("dates", {}) or {}
-                        effective_date = dates.get("effectiveDate")
-                        expiry_date = dates.get("expiryDate")
-                        contract_value = ai_analysis.get("value")
+                        columns = _analysis_columns(ai_analysis)
+                        risk_level = columns["riskLevel"]
+                        effective_date = columns["effectiveDate"]
+                        expiry_date = columns["expiryDate"]
+                        contract_value = columns["value"]
                 except Exception:
                     logger.exception("AI analysis failed for %r", file.filename)
                     ai_error = ANALYSIS_FAILED_MESSAGE
@@ -504,7 +610,7 @@ async def bulk_upload_contracts(
                     storageKey=storage_key,
                     fileName=file.filename,
                     fileSize=len(file_content),
-                    mimeType=file.content_type
+                    mimeType=content_type
                 )
 
                 contract_doc = contract.model_dump()
@@ -546,9 +652,11 @@ async def bulk_upload_contracts(
 async def chat_with_contract(
     contract_id: str,
     message: ChatMessage,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(_chat_rate_limited_user)
 ):
     """Ask a question about a contract."""
+    # Chat spends AI credits: only an active trial, a paid plan or past-due grace.
+    await ensure_ai_access(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
         {"_id": 0}
@@ -602,6 +710,7 @@ async def update_contract(
     current_user: dict = Depends(get_current_user)
 ):
     """Update a contract's metadata and create a version history entry."""
+    await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
         {"_id": 0}
@@ -821,6 +930,7 @@ async def restore_contract_version(
     uploader. The restored status is a workflow transition, so it is validated
     against the state machine and recorded in workflowHistory + the audit log.
     """
+    await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]}
     )
@@ -952,6 +1062,7 @@ async def delete_contract(
     current_user: dict = Depends(get_current_user)
 ):
     """Delete a contract."""
+    await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]}
     )

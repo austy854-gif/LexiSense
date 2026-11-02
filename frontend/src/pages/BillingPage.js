@@ -35,6 +35,14 @@ import { toast } from 'sonner';
 // Trial length and upload limits are deliberately not shown to users (copy
 // rule); only the trial's end date from the backend, when known.
 import { isTrialActive, trialCardStatus, trialEndsLabel } from '../lib/billingHelpers.mjs';
+import {
+  CTA_CONTACT,
+  CTA_PORTAL,
+  formatPrice,
+  getPlanCardState,
+  getPrimaryAction,
+  priceLabelOf,
+} from '../lib/billingCta';
 
 const StatusBadge = ({ status }) => {
   const configs = {
@@ -54,13 +62,16 @@ const StatusBadge = ({ status }) => {
   );
 };
 
-const TierBadge = ({ tier }) => {
+const TierBadge = ({ tier, planId }) => {
   const configs = {
     trial: { color: 'bg-gray-500/10 text-gray-500', icon: Clock, label: 'Free trial' },
     team: { color: 'bg-purple-500/10 text-purple-500', icon: Crown, label: 'Team plan' },
     cancelled: { color: 'bg-gray-500/10 text-gray-500', icon: XCircle, label: 'Cancelled' },
   };
-  const config = configs[tier] || configs.trial;
+  let config = configs[tier] || configs.trial;
+  if (tier === 'team' && planId) {
+    config = { ...config, label: `${planId.charAt(0).toUpperCase()}${planId.slice(1)} plan` };
+  }
   const Icon = config.icon;
   return (
     <Badge variant="outline" className={config.color}>
@@ -107,13 +118,13 @@ export default function BillingPage() {
     }
   };
 
-  const handleCheckout = async (priceId) => {
-    if (!isAdmin) return;
+  const handleCheckout = async (planId, interval = 'monthly') => {
+    if (!isAdmin || !planId) return;
     setCheckoutLoading(true);
     try {
       const successUrl = `${window.location.origin}/billing?success=true`;
       const cancelUrl = `${window.location.origin}/billing?canceled=true`;
-      const res = await billingAPI.createCheckout(priceId, successUrl, cancelUrl);
+      const res = await billingAPI.createCheckout({ planId, interval }, successUrl, cancelUrl);
       window.location.href = res.data.url;
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to start checkout');
@@ -162,6 +173,7 @@ export default function BillingPage() {
   // B6: the trial card is informational only (no CTA) and is hidden for paid or cancelled orgs.
   const trialCard = trialCardStatus(subscription?.subscriptionTier, subscription?.trialEndDate);
   const visiblePlans = plans?.filter((plan) => plan.id !== 'trial' || trialCard);
+  const primary = getPrimaryAction(subscription, { isAdmin });
 
   return (
     <Layout>
@@ -175,6 +187,19 @@ export default function BillingPage() {
             </p>
           </div>
         </div>
+
+        {subscription?.readOnly && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm" data-testid="billing-readonly">
+            This workspace is read-only until billing is updated. You can still open contracts you already have.
+          </div>
+        )}
+        {!subscription?.readOnly && subscription?.billingStatus === 'past_due' && (
+          <div className="rounded-lg border border-orange-500/40 bg-orange-500/5 p-4 text-sm" data-testid="billing-grace">
+            A payment failed. Uploads stay available
+            {subscription.graceEndsAt ? ` until ${formatDate(subscription.graceEndsAt)}` : ' during the grace period'}.
+            Update billing to avoid a read-only lock.
+          </div>
+        )}
 
         {/* Current Subscription Status */}
         <Card>
@@ -197,7 +222,7 @@ export default function BillingPage() {
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <TierBadge tier={subscription?.subscriptionTier} />
+                    <TierBadge tier={subscription?.subscriptionTier} planId={subscription?.planId} />
                     <StatusBadge status={subscription?.billingStatus} />
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">
@@ -240,52 +265,31 @@ export default function BillingPage() {
               </div>
             )}
 
-            <div className="flex flex-wrap gap-3 pt-2">
-              {isTrial && (
-                <>
-                  <Button 
-                    onClick={() => handleCheckout(plans?.find(p => p.id === 'team')?.priceId)}
-                    disabled={checkoutLoading}
-                    className="gap-2"
-                  >
-                    <Crown className="h-4 w-4" />
-                    Upgrade to Team plan
-                  </Button>
-                </>
-              )}
-              {isTeam && (
-                <>
-                  <Button 
-                    variant="outline"
-                    onClick={handlePortal}
-                    disabled={portalLoading}
-                    className="gap-2"
-                  >
-                    <CreditCard className="h-4 w-4" />
-                    Manage subscription
-                  </Button>
-                  {subscription?.cancelAtPeriodEnd && (
-                    <Button 
-                      variant="outline"
-                      onClick={handlePortal}
-                      disabled={portalLoading}
-                      className="gap-2 bg-green-500/10 text-green-500 border-green-500/20 hover:bg-green-500/20"
-                    >
-                      <ArrowRight className="h-4 w-4" />
-                      Resume subscription
-                    </Button>
-                  )}
-                </>
-              )}
-              {subscription?.subscriptionTier === 'cancelled' && (
-                <Button 
-                  onClick={() => handleCheckout(plans?.find(p => p.id === 'team')?.priceId)}
-                  disabled={checkoutLoading}
-                  className="gap-2"
-                >
-                  <Crown className="h-4 w-4" />
-                  Reactivate Team plan
+            <div className="flex flex-wrap items-center gap-3 pt-2" data-testid="billing-primary-action">
+              {primary.kind === CTA_PORTAL && (
+                <Button variant="outline" onClick={handlePortal} disabled={portalLoading} className="gap-2">
+                  <CreditCard className="h-4 w-4" />
+                  {primary.label}
                 </Button>
+              )}
+              {primary.kind === CTA_PORTAL && isTeam && subscription?.cancelAtPeriodEnd && (
+                <Button
+                  variant="outline"
+                  onClick={handlePortal}
+                  disabled={portalLoading}
+                  className="gap-2 bg-green-500/10 text-green-500 border-green-500/20 hover:bg-green-500/20"
+                >
+                  <ArrowRight className="h-4 w-4" />
+                  Resume subscription
+                </Button>
+              )}
+              {primary.kind === CTA_CONTACT && (
+                <a className="text-sm font-medium underline" href="mailto:support@lexisense.ai">
+                  {primary.label}
+                </a>
+              )}
+              {primary.description && (
+                <p className="text-sm text-muted-foreground">{primary.description}</p>
               )}
             </div>
           </CardContent>
@@ -308,7 +312,7 @@ export default function BillingPage() {
                   data-testid={`plan-card-${plan.id}`}
                   className={`relative p-6 border rounded-xl ${
                     plan.id === 'team' ? 'border-primary/30 bg-primary/5' : 'border-muted'
-                  } ${subscription?.subscriptionTier === plan.id ? 'ring-2 ring-primary' : ''}`}
+                  } ${subscription?.planId === plan.id ? 'ring-2 ring-primary' : ''}`}
                 >
                   {plan.id === 'team' && (
                     <div className="absolute -top-3 left-1/2 -translate-x-1/2">
@@ -320,9 +324,14 @@ export default function BillingPage() {
                   
                   <div className="text-center mb-6">
                     <div className="flex items-baseline justify-center gap-1">
-                      <span className="text-4xl font-bold">${plan.price}</span>
+                      <span className="text-4xl font-bold">{formatPrice(plan.price, plan.currency)}</span>
                       <span className="text-muted-foreground">/{plan.interval}</span>
                     </div>
+                    {plan.id !== 'trial' && priceLabelOf(plan) && (
+                      <p className="text-xs text-muted-foreground mt-1" data-testid={`plan-price-label-${plan.id}`}>
+                        {priceLabelOf(plan)}
+                      </p>
+                    )}
                     <p className="text-sm text-muted-foreground mt-1">{plan.name}</p>
                   </div>
 
@@ -348,24 +357,30 @@ export default function BillingPage() {
                       {trialCard}
                     </p>
                   ) : (
-                  <Button
-                    className="w-full gap-2"
-                    variant={subscription?.subscriptionTier === plan.id ? 'outline' : 'default'}
-                    disabled={subscription?.subscriptionTier === plan.id || checkoutLoading}
-                    onClick={() => plan.priceId && handleCheckout(plan.priceId)}
-                  >
-                    {subscription?.subscriptionTier === plan.id ? (
-                      <>
-                        <CheckCircle className="h-4 w-4" />
-                        Current plan
-                      </>
-                    ) : (
-                      <>
-                        <Crown className="h-4 w-4" />
-                        {plan.cta}
-                      </>
-                    )}
-                  </Button>
+                    (() => {
+                      const card = getPlanCardState(plan, subscription, { isAdmin });
+                      if (card.action) {
+                        return (
+                          <Button
+                            className="w-full gap-2"
+                            disabled={checkoutLoading}
+                            onClick={() => handleCheckout(card.action.planId, 'monthly')}
+                          >
+                            <Crown className="h-4 w-4" />
+                            {card.action.label}
+                          </Button>
+                        );
+                      }
+                      return card.label ? (
+                        <p
+                          className="flex w-full items-center justify-center gap-2 rounded-md border border-muted py-2 text-sm font-medium text-muted-foreground"
+                          data-testid={`plan-status-${plan.id}`}
+                        >
+                          <CheckCircle className="h-4 w-4" aria-hidden="true" />
+                          {card.label}
+                        </p>
+                      ) : null;
+                    })()
                   )}
                 </div>
               ))}
@@ -386,7 +401,7 @@ export default function BillingPage() {
                   <tr className="border-b text-sm text-muted-foreground">
                     <th className="pb-3 font-medium w-64">Feature</th>
                     <th className="pb-3 font-medium text-center">Free trial</th>
-                    <th className="pb-3 font-medium text-center">Team plan</th>
+                    <th className="pb-3 font-medium text-center">Paid plans</th>
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y">
@@ -520,7 +535,7 @@ export default function BillingPage() {
                   Is there per-seat pricing?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  No, the Team plan is a flat $49/month for your entire team (up to 10 members). No per-seat fees.
+                  No. Each plan is a flat price for your whole team, up to the member limit shown on the plan. No per-seat fees.
                 </p>
               </details>
               <details className="group border rounded-lg p-4">

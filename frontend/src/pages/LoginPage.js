@@ -94,6 +94,11 @@ export default function LoginPage() {
                 'Sign in'
               )}
             </Button>
+            <div className="text-right">
+              <Link to="/forgot-password" className="text-sm text-primary hover:underline" data-testid="forgot-password-link">
+                Forgot password?
+              </Link>
+            </div>
           </form>
           <div className="mt-6 text-center text-sm">
             <span className="text-muted-foreground">Don't have an account? </span>

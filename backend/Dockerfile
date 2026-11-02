@@ -12,7 +12,9 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements and install dependencies
 # emergentintegrations must be installed from Emergent's private index
 COPY requirements.txt requirements-emergent.txt ./
-RUN pip install --no-cache-dir --user -r requirements.txt && \
+RUN grep -v '^litellm==' requirements.txt | tr -d '\r' > /tmp/requirements-without-litellm.txt && \
+    pip install --no-cache-dir --user -r /tmp/requirements-without-litellm.txt && \
+    pip install --no-cache-dir --user --no-deps "$(grep '^litellm==' requirements.txt | tr -d '\r')" && \
     pip install --no-cache-dir --user --no-deps --require-hashes \
       --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
       -r requirements-emergent.txt

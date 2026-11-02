@@ -1,6 +1,7 @@
 import uuid
 import asyncio
 import logging
+import re
 from typing import Optional
 import boto3
 from botocore.exceptions import ClientError
@@ -41,14 +42,27 @@ def get_s3_client():
     )
 
 
+def _safe_extension(filename: str, extension: Optional[str]) -> str:
+    raw = extension or ""
+    if not raw and filename and "." in filename:
+        raw = filename.rsplit(".", 1)[-1]
+    cleaned = re.sub(r"[^a-z0-9]", "", (raw or "bin").lower())[:8]
+    return cleaned or "bin"
+
+
 async def upload_file_to_s3(
     file_content: bytes,
     filename: str,
     organization_id: str,
-    content_type: str = "application/octet-stream"
+    content_type: str = "application/octet-stream",
+    extension: Optional[str] = None,
 ) -> str:
-    """Upload a file to S3 and return the storage key."""
-    file_ext = filename.split('.')[-1] if '.' in filename else 'bin'
+    """Upload a file to S3 and return the storage key.
+
+    ``extension`` should be the sniffed extension (``pdf`` or ``txt``). The
+    original filename is never interpolated into the key.
+    """
+    file_ext = _safe_extension(filename, extension)
     storage_key = f"{organization_id}/{uuid.uuid4()}.{file_ext}"
 
     s3_client = get_s3_client()
@@ -69,27 +83,42 @@ async def upload_file_to_s3(
         logger.info(f"Uploaded file to S3: {storage_key}")
         return storage_key
     except ClientError as e:
-        logger.error(f"Failed to upload to S3: {e}")
-        raise ValueError(f"Failed to upload file: {str(e)}")
+        logger.error("Failed to upload to S3: %s", type(e).__name__)
+        raise ValueError("Failed to upload file") from e
 
 
-async def generate_presigned_url(storage_key: str, expiration: int = 3600) -> Optional[str]:
-    """Generate a presigned URL for downloading a file."""
+async def generate_presigned_url(
+    storage_key: str,
+    expiration: int = 300,
+    download_name: Optional[str] = None,
+    content_type: Optional[str] = None,
+) -> Optional[str]:
+    """Generate a presigned URL for downloading a file.
+
+    The URL forces an attachment download and a known content type so a stored
+    text file is not opened inline as HTML.
+    """
     s3_client = get_s3_client()
     if not s3_client:
         logger.warning("Presigned URL not available in mock mode")
         return None
 
+    params = {"Bucket": get_bucket_name(), "Key": storage_key}
+    if download_name:
+        params["ResponseContentDisposition"] = f'attachment; filename="{download_name}"'
+    if content_type:
+        params["ResponseContentType"] = content_type
+
     try:
         url = await asyncio.to_thread(
             s3_client.generate_presigned_url,
-            'get_object',
-            Params={'Bucket': get_bucket_name(), 'Key': storage_key},
+            "get_object",
+            Params=params,
             ExpiresIn=expiration,
         )
         return url
     except ClientError as e:
-        logger.error(f"Failed to generate presigned URL: {e}")
+        logger.error("Failed to generate presigned URL: %s", type(e).__name__)
         return None
 
 
