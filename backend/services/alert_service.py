@@ -35,6 +35,17 @@ CLAIM_LEASE = timedelta(minutes=15)
 RETRY_BASE_DELAY = timedelta(minutes=5)
 
 
+async def alert_idempotency_index_ready(db) -> bool:
+    """True when ``uq_alerts_idempotency`` exists and is unique."""
+    try:
+        info = await db.expiration_alerts.index_information()
+    except Exception:
+        logger.exception("Could not read expiration_alerts indexes")
+        return False
+    spec = info.get("uq_alerts_idempotency") or {}
+    return bool(spec.get("unique"))
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -53,11 +64,12 @@ def _claimable(now: datetime) -> list:
     ]
 
 
-def _claim_update(now: datetime, token: str) -> dict:
+def _claim_update(token: str) -> dict:
     # attempts is incremented here, atomically with the claim, so each provider
-    # attempt is counted durably before it happens.
+    # attempt is counted durably before it happens. ``claimedAt`` is stamped at
+    # claim time (not scan start) so a long scan cannot shorten the lease.
     return {
-        "$set": {"status": "sending", "claimToken": token, "claimedAt": now.isoformat()},
+        "$set": {"status": "sending", "claimToken": token, "claimedAt": _now().isoformat()},
         "$inc": {"attempts": 1},
     }
 
@@ -135,7 +147,7 @@ async def retry_failed_alerts(db, organization_id: Optional[str] = None, counts:
         token = uuid.uuid4().hex
         claim = await db.expiration_alerts.find_one_and_update(
             {"_id": record["_id"], "$or": _claimable(now)},
-            _claim_update(now, token),
+            _claim_update(token),
             return_document=ReturnDocument.AFTER,
         )
         if not claim or claim.get("claimToken") != token:
@@ -181,7 +193,7 @@ async def scan_expiration_alerts(db, organization_id: Optional[str] = None, acto
                     try:
                         claim = await db.expiration_alerts.find_one_and_update(
                             {"idempotencyKey": key, "$or": _claimable(now)},
-                            {**_claim_update(now, token),
+                            {**_claim_update(token),
                              "$setOnInsert": {
                                  "id": str(uuid.uuid4()), "idempotencyKey": key, "organizationId": org_id,
                                  "contractId": contract["id"], "userId": recipient["id"],

@@ -134,6 +134,7 @@ async def lifespan(app: FastAPI):
     # with exponential backoff while the database is unreachable; readiness
     # (/api/v1/ready) reports 503 until it has completed.
     app.state.bootstrap_ok = False
+    app.state.alerts_ready = False
 
     async def _bootstrap():
         delay = 2.0
@@ -149,6 +150,12 @@ async def lifespan(app: FastAPI):
                     "Database indexes ensured",
                     extra={"indexes_created": result["created"], "indexes_failed": result["failed"]},
                 )
+                # Alert delivery is only safe once the unique idempotency index
+                # exists (it turns a duplicate upsert into DuplicateKeyError).
+                from services.alert_service import alert_idempotency_index_ready
+                alerts_index_ok = await alert_idempotency_index_ready(db)
+                if not alerts_index_ok:
+                    logger.error("Alert idempotency index missing; alert scans stay disabled")
 
                 from services.storage_service import ensure_bucket_exists
                 if await ensure_bucket_exists():
@@ -172,6 +179,7 @@ async def lifespan(app: FastAPI):
                     from routes.agentic import _create_indexes as create_agentic_indexes
                     await create_agentic_indexes()
 
+                app.state.alerts_ready = alerts_index_ok
                 app.state.bootstrap_ok = True
                 logger.info("Startup bootstrap complete", extra={"attempt": attempt})
                 return
@@ -187,7 +195,11 @@ async def lifespan(app: FastAPI):
 
     bootstrap_task = asyncio.create_task(_bootstrap())
     from services.alert_scheduler import build_alert_scheduler
-    alert_scheduler = build_alert_scheduler(db)
+    alert_scheduler = build_alert_scheduler(
+        db,
+        is_ready=lambda: bool(getattr(app.state, "bootstrap_ok", False))
+        and bool(getattr(app.state, "alerts_ready", False)),
+    )
     alert_scheduler.start()
     app.state.alert_scheduler = alert_scheduler
 

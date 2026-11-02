@@ -175,8 +175,10 @@ async def purge_uploaded_object(storage_key: str) -> bool:
     and leaves the uploaded bytes behind, so every version (and marker) of the
     key is deleted explicitly. Upload keys are unique per upload, so all
     versions under the exact key belong to this upload. Falls back to a plain
-    key delete when versions cannot be listed (unversioned bucket or missing
-    ``s3:ListBucketVersions``).
+    key delete on an unversioned bucket. If versions cannot be listed (for
+    example missing ``s3:ListBucketVersions``) the key delete is still
+    attempted but the purge reports failure, because on a versioned bucket
+    that only adds a delete marker and the uploaded bytes may remain.
     """
     s3_client = get_s3_client()
     if not s3_client:
@@ -192,8 +194,12 @@ async def purge_uploaded_object(storage_key: str) -> bool:
             if item.get("Key") == storage_key and item.get("VersionId") not in (None, "null")
         ]
     except (BotoCoreError, ClientError) as e:
-        logger.warning("Could not list object versions for rollback (%s); deleting by key", type(e).__name__)
-        entries = []
+        logger.error(
+            "Could not list object versions for rollback (%s); object may be retained "
+            "if the bucket is versioned", type(e).__name__,
+        )
+        await delete_file_from_s3(storage_key)
+        return False
     if not entries:
         return await delete_file_from_s3(storage_key)
     ok = True

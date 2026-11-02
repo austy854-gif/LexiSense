@@ -75,6 +75,8 @@ INDEX_SPECIFICATION: Dict[str, List[Dict[str, Any]]] = {
         {"keys": [("idempotencyKey", 1)], "unique": True, "sparse": True, "name": "uq_alerts_idempotency"},
         {"keys": [("organizationId", 1), ("contractId", 1), ("daysBeforeExpiry", 1)], "name": "ix_alerts_org_contract_days"},
         {"keys": [("organizationId", 1), ("createdAt", -1)], "name": "ix_alerts_org_created"},
+        # retry_failed_alerts: status="failed" AND nextAttemptAt <= now.
+        {"keys": [("status", 1), ("nextAttemptAt", 1)], "name": "ix_alerts_status_next_attempt"},
     ],
     "templates": [
         {"keys": [("organizationId", 1), ("name", 1)], "name": "ix_templates_org_name"},

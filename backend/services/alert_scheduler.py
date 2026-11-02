@@ -27,10 +27,15 @@ def _env_int(name: str, default: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
-def build_alert_scheduler(db) -> AsyncIOScheduler:
+def build_alert_scheduler(db, is_ready=lambda: True) -> AsyncIOScheduler:
+    """``is_ready`` gates every run: scans must not run before the bootstrap has
+    created the unique alert idempotency index."""
     scheduler = AsyncIOScheduler(timezone="UTC")
 
     async def run_scan():
+        if not is_ready():
+            logger.warning("Skipping alert scan: bootstrap or alert index not ready")
+            return
         try:
             result = await scan_expiration_alerts(db)
             logger.info("Daily expiration alert scan complete", extra=result)
@@ -38,6 +43,8 @@ def build_alert_scheduler(db) -> AsyncIOScheduler:
             logger.exception("Daily expiration alert scan failed")
 
     async def run_retries():
+        if not is_ready():
+            return
         try:
             result = await retry_failed_alerts(db)
             if result.get("queued"):

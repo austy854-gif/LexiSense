@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, status, Depends, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
@@ -100,6 +100,7 @@ async def get_expiring_contracts(
 
 @router.post("/check-and-send")
 async def check_and_send_alerts(
+    request: Request,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
@@ -111,6 +112,11 @@ async def check_and_send_alerts(
     """
     require_capability(current_user, "alert_trigger")
     await assert_org_writable(current_user["organizationId"])
+    if not getattr(request.app.state, "alerts_ready", True):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Alerts are temporarily unavailable. Please try again shortly.",
+        )
     background_tasks.add_task(_run_manual_scan, current_user["organizationId"], current_user["sub"])
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,

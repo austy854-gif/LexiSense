@@ -171,13 +171,14 @@ class TestPurgeUploadedObject:
         assert [d.get("VersionId") for d in fake.deleted] == ["v1", "m1"]
         assert all(d["Key"] == "org/k.pdf" for d in fake.deleted)
 
-    async def test_falls_back_to_key_delete_when_versions_unavailable(self, monkeypatch):
+    async def test_reports_failure_when_versions_cannot_be_listed(self, monkeypatch):
         from botocore.exceptions import ClientError
         err = ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "ListObjectVersions")
         fake = _FakeS3(list_error=err)
         monkeypatch.setattr(storage_service, "get_s3_client", lambda: fake)
         monkeypatch.setattr(storage_service, "get_bucket_name", lambda: "b")
-        assert await storage_service.purge_uploaded_object("org/k.pdf") is True
+        # Still tries the key delete, but must not claim the bytes are gone.
+        assert await storage_service.purge_uploaded_object("org/k.pdf") is False
         assert fake.deleted == [{"Bucket": "b", "Key": "org/k.pdf"}]
 
     async def test_unversioned_bucket_uses_key_delete(self, monkeypatch):
@@ -465,3 +466,87 @@ class TestSchedulerEnv:
         scheduler = alert_scheduler.build_alert_scheduler(db)
         ids = {job.id for job in scheduler.get_jobs()}
         assert {"daily-expiration-renewal-alerts", "expiration-alert-retries"} <= ids
+
+
+class TestRestoreTransitionCapability:
+    async def _seed(self, db, org_id, role, current, restored):
+        user = make_user(org_id, role=role)
+        await db.users.insert_one(dict(user))
+        contract = make_contract(org_id, user["id"], status=current)
+        await db.contracts.insert_one(dict(contract))
+        await db.contract_versions.insert_one({
+            "contractId": contract["id"], "version": 1, "title": contract["title"],
+            "contractType": contract.get("contractType", "General"), "status": restored})
+        return user, contract
+
+    async def test_user_cannot_approve_own_contract_via_restore(self, client, db, org_id):
+        user, contract = await self._seed(db, org_id, "user", "review", "approved")
+        r = await client.post(f"{API_PREFIX}/contracts/{contract['id']}/restore/1", headers=auth_headers(user))
+        assert r.status_code == 403
+        assert (await db.contracts.find_one({"id": contract["id"]}))["status"] == "review"
+
+    async def test_user_can_submit_own_contract_via_restore(self, client, db, org_id):
+        user, contract = await self._seed(db, org_id, "user", "draft", "review")
+        r = await client.post(f"{API_PREFIX}/contracts/{contract['id']}/restore/1", headers=auth_headers(user))
+        assert r.status_code == 200, r.text
+
+    async def test_manager_can_approve_via_restore(self, client, db, org_id):
+        mgr, contract = await self._seed(db, org_id, "manager", "review", "approved")
+        r = await client.post(f"{API_PREFIX}/contracts/{contract['id']}/restore/1", headers=auth_headers(mgr))
+        assert r.status_code == 200, r.text
+
+    def test_every_workflow_transition_has_a_capability(self):
+        from services.workflow_service import WORKFLOW_TRANSITIONS
+        pairs = {(a, b) for a, targets in WORKFLOW_TRANSITIONS.items() for b in targets}
+        assert pairs == set(contracts_route.RESTORE_TRANSITION_CAPABILITY)
+
+
+class TestClaimTimestamp:
+    async def test_claimed_at_is_claim_time_not_scan_start(self, db, org_id, monkeypatch):
+        times = iter([datetime(2026, 1, 1, tzinfo=UTC)] + [datetime(2026, 1, 1, 0, 20, tzinfo=UTC)] * 50)
+        monkeypatch.setattr(alert_service, "_now", lambda: next(times))
+        update = alert_service._claim_update("t")
+        assert update["$set"]["claimedAt"] == datetime(2026, 1, 1, tzinfo=UTC).isoformat()
+        assert alert_service._claim_update("t")["$set"]["claimedAt"].startswith("2026-01-01T00:20")
+
+
+class TestAlertReadinessGate:
+    async def test_index_ready_detection(self, db):
+        assert await alert_service.alert_idempotency_index_ready(db) is False
+        await db.expiration_alerts.create_index("idempotencyKey", unique=True, sparse=True, name="uq_alerts_idempotency")
+        assert await alert_service.alert_idempotency_index_ready(db) is True
+
+    async def test_scheduler_jobs_skip_until_ready(self, db, monkeypatch):
+        calls = []
+
+        async def _scan(database):
+            calls.append("scan")
+            return {}
+
+        async def _retry(database):
+            calls.append("retry")
+            return {}
+
+        monkeypatch.setattr(alert_scheduler, "scan_expiration_alerts", _scan)
+        monkeypatch.setattr(alert_scheduler, "retry_failed_alerts", _retry)
+        ready = {"ok": False}
+        scheduler = alert_scheduler.build_alert_scheduler(db, is_ready=lambda: ready["ok"])
+        jobs = {job.id: job.func for job in scheduler.get_jobs()}
+        await jobs["daily-expiration-renewal-alerts"]()
+        await jobs["expiration-alert-retries"]()
+        assert calls == []
+        ready["ok"] = True
+        await jobs["daily-expiration-renewal-alerts"]()
+        await jobs["expiration-alert-retries"]()
+        assert calls == ["scan", "retry"]
+
+    async def test_manual_check_is_503_until_ready(self, aclient, app, db, org_id, monkeypatch):
+        async def _writable(org):
+            return None
+
+        monkeypatch.setattr(alerts_route, "assert_org_writable", _writable)
+        app.state.alerts_ready = False
+        admin = make_user(org_id, role="admin")
+        await db.users.insert_one(dict(admin))
+        r = await aclient.post(f"{API_PREFIX}/alerts/check-and-send", headers=auth_headers(admin))
+        assert r.status_code == 503

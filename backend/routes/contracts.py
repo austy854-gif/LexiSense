@@ -362,6 +362,17 @@ async def download_contract_file(
 
 
 
+#: (current, restored) status -> capability required to restore across it.
+RESTORE_TRANSITION_CAPABILITY = {
+    ("draft", "review"): "submit_for_review",
+    ("review", "approved"): "approve",
+    ("review", "draft"): "reject",
+    ("approved", "active"): "activate",
+    ("approved", "review"): "reject",
+    ("active", "expired"): "activate",
+}
+
+
 async def _rollback_failed_upload(org_id: str, storage_key: Optional[str], contract_id: Optional[str]) -> None:
     """Undo every partial artifact of a failed upload; the quota refund always runs.
 
@@ -375,7 +386,8 @@ async def _rollback_failed_upload(org_id: str, storage_key: Optional[str], contr
         logger.exception("Upload rollback: failed to delete partial contract record")
     try:
         if storage_key:
-            await purge_uploaded_object(storage_key)
+            if not await purge_uploaded_object(storage_key):
+                logger.error("Upload rollback: stored object %s may not have been fully removed", storage_key)
     except Exception:
         logger.exception("Upload rollback: failed to delete stored object")
     finally:
@@ -975,6 +987,13 @@ async def restore_contract_version(
     current_status = contract.get("status", "draft")
     restored_status = version.get("status", current_status)
     validate_transition(current_status, restored_status)
+    # A restore that changes status is a workflow transition: the actor needs
+    # the same capability the workflow endpoint would require for it.
+    transition_capability = RESTORE_TRANSITION_CAPABILITY.get((current_status, restored_status))
+    if restored_status != current_status:
+        if not transition_capability:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status transition")
+        require_capability(current_user, transition_capability)
 
     # Create a new version entry for the current state before restoring
     latest_version = await db.contract_versions.find_one(
