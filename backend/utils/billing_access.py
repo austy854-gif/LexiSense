@@ -8,10 +8,13 @@ are rejected with a billing message — never the free-trial copy.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from utils import plans as _plans
 from utils.env import get_env
+from utils.feature_flags import billing_ui_enabled
 
 READ_ONLY_MESSAGE = (
     "Your subscription needs attention. This workspace is read-only until billing is updated."
@@ -76,3 +79,109 @@ def grace_ends_at(billing: Optional[dict]) -> Optional[str]:
     if since is None:
         return None
     return (since + grace_window()).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Entitlement: one decision for uploads, AI (analysis, chat, background work)
+# and invitations. Ported from fix/billing-integrity (#78, B1/B2/B4/B5) and
+# adapted to the Option B plan config in utils.plans.
+# ---------------------------------------------------------------------------
+
+ACCESS_PAID = "paid"
+ACCESS_GRACE = "grace"
+ACCESS_TRIAL = "trial"
+ACCESS_TRIAL_EXPIRED = "trial_expired"
+ACCESS_PAST_DUE = "past_due"          # read-only after the grace window
+ACCESS_CANCELLED = "cancelled"
+ACCESS_UNVERIFIED_PLAN = "unverified_plan"
+
+MSG_UNVERIFIED_PLAN = (
+    "We couldn't verify your subscription plan. Please contact support to restore "
+    "uploads and AI analysis."
+)
+_MESSAGES = {
+    # state: (billing UI on, billing UI off -> point to support, never the hidden page)
+    ACCESS_TRIAL_EXPIRED: (
+        "Your free trial has ended. Upgrade to keep adding contracts.",
+        "Your free trial has ended. Please contact support to continue using LexiSense.",
+    ),
+    ACCESS_PAST_DUE: (
+        "Your last payment failed, so your account is read-only. Please update your payment "
+        "method in the billing portal to restore uploads, AI analysis, chat and invitations.",
+        "Your last payment failed, so your account is read-only. Please contact support to "
+        "restore uploads, AI analysis, chat and invitations.",
+    ),
+    ACCESS_CANCELLED: (
+        "Your subscription has been cancelled. Resubscribe on the Billing page to continue.",
+        "Your subscription has been cancelled. Please contact support to continue using LexiSense.",
+    ),
+    ACCESS_UNVERIFIED_PLAN: (MSG_UNVERIFIED_PLAN, MSG_UNVERIFIED_PLAN),
+}
+
+
+def blocked_message(state: str) -> str:
+    on, off = _MESSAGES.get(state, _MESSAGES[ACCESS_CANCELLED])
+    return on if billing_ui_enabled() else off
+
+
+def legacy_price_ids() -> frozenset:
+    """Retired prices that still entitle existing subscribers (never purchasable)."""
+    raw = get_env("STRIPE_LEGACY_PRICE_IDS", "") or ""
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
+
+
+@dataclass(frozen=True)
+class Entitlement:
+    state: str
+    plan_id: Optional[str]
+    can_use_ai: bool
+    max_members: Optional[int]
+    message: Optional[str] = None
+
+    @property
+    def read_only(self) -> bool:
+        return self.state == ACCESS_PAST_DUE
+
+    @property
+    def blocked(self) -> bool:
+        return not self.can_use_ai
+
+
+def _paid_plan_for(billing: dict):
+    """Plan for the stored Stripe price; ``(None, False)`` when it isn't configured."""
+    price_id = billing.get("stripePriceId")
+    plan = _plans.plan_for_price_id(price_id)
+    if plan is not None:
+        return plan, True
+    if price_id and price_id in legacy_price_ids():
+        return _plans.get_paid_plan(_plans.DEFAULT_PAID_PLAN_ID), True
+    return None, False
+
+
+def compute_entitlement(billing: Optional[dict], now: Optional[datetime] = None) -> Entitlement:
+    """B1: active or trialing is paid. B2: past-due grace then read-only.
+    B4: a subscription on a price that isn't configured grants nothing."""
+    billing = billing or {}
+    now = now or datetime.now(timezone.utc)
+    gate = upload_gate(billing, now)
+    trial_cap = _plans.trial_max_members()
+    status = billing.get("billingStatus")
+
+    if gate == _ALLOW:
+        plan, known = _paid_plan_for(billing)
+        if not known:
+            return Entitlement(ACCESS_UNVERIFIED_PLAN, None, False, trial_cap,
+                               blocked_message(ACCESS_UNVERIFIED_PLAN))
+        state = ACCESS_GRACE if status == "past_due" else ACCESS_PAID
+        return Entitlement(state, plan.id, True, plan.max_members)
+    if gate == _READONLY:
+        if status == "past_due":
+            plan, _ = _paid_plan_for(billing)
+            cap = plan.max_members if plan else trial_cap
+            return Entitlement(ACCESS_PAST_DUE, plan.id if plan else None, False, cap,
+                               blocked_message(ACCESS_PAST_DUE))
+        return Entitlement(ACCESS_CANCELLED, None, False, trial_cap, blocked_message(ACCESS_CANCELLED))
+    trial_end = _parse_dt(billing.get("trialEndDate"))
+    if trial_end is not None and now > trial_end:
+        return Entitlement(ACCESS_TRIAL_EXPIRED, None, False, trial_cap, blocked_message(ACCESS_TRIAL_EXPIRED))
+    return Entitlement(ACCESS_TRIAL, None, True, trial_cap)
