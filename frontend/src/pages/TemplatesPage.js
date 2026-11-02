@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Layout } from '../components/Layout';
 import { templatesAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
+import { canManageTemplates } from '../lib/apiHelpers.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
@@ -43,7 +44,8 @@ const CONTRACT_TYPES = [
 ];
 
 export default function TemplatesPage() {
-  const { user } = useAuth();
+  const { user, capabilities = {} } = useAuth();
+  const manageTemplates = capabilities.canManageTemplates ?? canManageTemplates(user?.role);
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -146,7 +148,7 @@ export default function TemplatesPage() {
             </h1>
             <p className="text-muted-foreground mt-1">Pre-built templates for common contract types</p>
           </div>
-          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          {manageTemplates && <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
               <Button data-testid="create-template-btn">
                 <Plus className="mr-2 h-4 w-4" />
@@ -223,7 +225,7 @@ export default function TemplatesPage() {
                 </div>
               </form>
             </DialogContent>
-          </Dialog>
+          </Dialog>}
         </div>
 
         {/* Filters */}
@@ -297,7 +299,7 @@ export default function TemplatesPage() {
                   >
                     <Copy className="h-4 w-4" aria-hidden="true" />
                   </Button>
-                  {!template.isPublic && !template.id.startsWith('default-') && (
+                  {manageTemplates && !template.isPublic && !template.id.startsWith('default-') && (
                     <Button
                       variant="outline"
                       size="sm"

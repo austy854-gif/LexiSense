@@ -4,7 +4,7 @@ import logging
 import re
 from typing import Optional
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from utils.env import get_env
 
@@ -29,9 +29,13 @@ S3_BUCKET_NAME = get_bucket_name()
 
 
 def get_s3_client():
-    """Get an S3 client instance."""
+    """Get the configured durable object-store client, or ``None``.
+
+    There is deliberately no mock/ephemeral storage path. Upload callers must
+    fail closed when this returns ``None``.
+    """
     if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY or not get_bucket_name():
-        logger.warning("AWS credentials not fully configured - using mock storage (NOT FOR PRODUCTION)")
+        logger.error("Durable storage is not configured; refusing file operations")
         return None
 
     return boto3.client(
@@ -67,8 +71,7 @@ async def upload_file_to_s3(
 
     s3_client = get_s3_client()
     if not s3_client:
-        logger.info(f"Mock upload: {storage_key}")
-        return storage_key
+        raise ValueError("Durable file storage is unavailable. Upload was not accepted.")
 
     try:
         # boto3 is synchronous; run it in a worker thread so the event loop
@@ -80,11 +83,38 @@ async def upload_file_to_s3(
             Body=file_content,
             ContentType=content_type,
         )
-        logger.info(f"Uploaded file to S3: {storage_key}")
+        # A successful PUT is not sufficient: immediately prove the object is
+        # readable before the API creates/returns a contract.
+        metadata = await asyncio.to_thread(
+            s3_client.head_object, Bucket=get_bucket_name(), Key=storage_key
+        )
+        if int(metadata.get("ContentLength", -1)) != len(file_content):
+            raise ValueError("Stored file failed retrieval verification")
+        response = await asyncio.to_thread(
+            s3_client.get_object, Bucket=get_bucket_name(), Key=storage_key
+        )
+        body = response["Body"]
+        try:
+            retrieved = await asyncio.to_thread(body.read)
+        finally:
+            close = getattr(body, "close", None)
+            if close:
+                close()
+        if retrieved != file_content:
+            raise ValueError("Stored file failed retrieval verification")
+        logger.info("Uploaded and retrieval-verified durable object")
         return storage_key
-    except ClientError as e:
-        logger.error("Failed to upload to S3: %s", type(e).__name__)
-        raise ValueError("Failed to upload file") from e
+    except (BotoCoreError, ClientError, ValueError) as e:
+        logger.error("Durable upload/retrieval verification failed: %s", type(e).__name__)
+        # Best-effort cleanup prevents an orphaned object after verification or
+        # later metadata work fails.
+        try:
+            await asyncio.to_thread(s3_client.delete_object, Bucket=get_bucket_name(), Key=storage_key)
+        except Exception:
+            logger.warning("Unable to clean up failed object", exc_info=True)
+        if isinstance(e, ValueError) and str(e).startswith("Durable"):
+            raise
+        raise ValueError("Durable storage verification failed. Upload was not accepted.") from e
 
 
 async def generate_presigned_url(

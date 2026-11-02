@@ -5,6 +5,8 @@ import logging
 
 from models.template import ContractTemplate, ContractTemplateCreate, ContractTemplateResponse
 from utils.auth import get_current_user
+from utils.policy import require_capability
+from routes.billing import assert_org_writable
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/templates", tags=["Templates"])
@@ -339,6 +341,8 @@ async def create_template(
     current_user: dict = Depends(get_current_user)
 ):
     """Create a new template."""
+    require_capability(current_user, "template_manage")
+    await assert_org_writable(current_user["organizationId"])
     template = ContractTemplate(
         organizationId=current_user["organizationId"],
         name=template_data.name,
@@ -376,6 +380,8 @@ async def delete_template(
     current_user: dict = Depends(get_current_user)
 ):
     """Delete a template."""
+    require_capability(current_user, "template_manage")
+    await assert_org_writable(current_user["organizationId"])
     if template_id.startswith("default-"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

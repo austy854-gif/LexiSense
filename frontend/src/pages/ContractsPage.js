@@ -13,7 +13,7 @@ import {
   SomethingWentWrongIllustration,
   UploadFailedIllustration,
 } from '../components/illustrations/Illustrations';
-import { canWriteContracts, getErrorInfo, parseTotalCount } from '../lib/apiHelpers.mjs';
+import { canUpload, canDelete, getErrorInfo, parseTotalCount } from '../lib/apiHelpers.mjs';
 import { bulkUploadFeedback, singleUploadFeedback } from '../lib/uploadFeedback';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -126,7 +126,7 @@ export function uploadErrorDetails(error) {
  * Contracts list with no rows: first run (no contracts), an "expiring within"
  * filter with nothing in that window, or search/filters that match nothing.
  */
-export function ContractsEmptyState({ searchQuery, filters, canWrite, onUpload, onClearFilters }) {
+export function ContractsEmptyState({ searchQuery, filters, canUpload: canUploadProp, onUpload, onClearFilters }) {
   const { statusFilter, typeFilter, riskFilter, expiringFilter } = filters;
   const otherFilters = [statusFilter, typeFilter, riskFilter].some(isSet);
   const hasExpiring = isSet(expiringFilter);
@@ -138,7 +138,7 @@ export function ContractsEmptyState({ searchQuery, filters, canWrite, onUpload, 
         title="No contracts yet"
         data-testid="contracts-empty"
         action={
-          canWrite ? (
+          canUploadProp ? (
             <Button onClick={onUpload}>
               <Upload className="mr-2 h-4 w-4" />
               Upload a contract
@@ -191,9 +191,10 @@ export function ContractsEmptyState({ searchQuery, filters, canWrite, onUpload, 
 }
 
 export default function ContractsPage() {
-  const { user } = useAuth();
+  const { user, capabilities = {} } = useAuth();
   const navigate = useNavigate();
-  const canWrite = canWriteContracts(user?.role);
+  const uploadAllowed = capabilities.canUpload ?? canUpload(user?.role);
+  const deleteAllowed = capabilities.canDelete ?? canDelete(user?.role);
   const [contracts, setContracts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -374,7 +375,7 @@ export default function ContractsPage() {
             <h1 className="text-3xl font-bold">Contracts</h1>
             <p className="text-muted-foreground mt-1">Manage and analyze your contracts</p>
           </div>
-          {canWrite && (
+          {uploadAllowed && (
           <div className="flex gap-2">
             {/* Bulk Upload */}
             <Dialog open={bulkUploadOpen} onOpenChange={setBulkUploadOpen}>
@@ -715,7 +716,7 @@ export default function ContractsPage() {
               <ContractsEmptyState
                 searchQuery={searchQuery}
                 filters={{ statusFilter, typeFilter, riskFilter, expiringFilter }}
-                canWrite={canWrite}
+                canUpload={uploadAllowed}
                 onUpload={() => setUploadOpen(true)}
                 onClearFilters={clearFilters}
               />
@@ -779,7 +780,7 @@ export default function ContractsPage() {
                           >
                             <Download className="h-4 w-4" aria-hidden="true" />
                           </Button>
-                          {canWrite && (
+                          {deleteAllowed && (
                           <Button
                             variant="ghost"
                             size="icon"

@@ -6,6 +6,9 @@ import logging
 from models.alerts import ExpirationAlert, AlertSettings
 from utils.auth import get_current_user
 from services.email_service import send_expiration_alert
+from services.alert_service import scan_expiration_alerts
+from utils.policy import require_capability
+from routes.billing import assert_org_writable
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["Alerts"])
@@ -42,11 +45,8 @@ async def update_alert_settings(
     current_user: dict = Depends(get_current_user)
 ):
     """Update alert settings for the organization."""
-    if current_user["role"] != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can update alert settings"
-        )
+    require_capability(current_user, "alert_settings")
+    await assert_org_writable(current_user["organizationId"])
     
     settings = AlertSettings(
         organizationId=current_user["organizationId"],
@@ -103,83 +103,11 @@ async def check_and_send_alerts(
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
-    """Manually trigger alert check and send emails for expiring contracts."""
-    if current_user["role"] != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can trigger alert checks"
-        )
-    
-    org_id = current_user["organizationId"]
-    
-    # Get alert settings
-    settings = await db.alert_settings.find_one(
-        {"organizationId": org_id},
-        {"_id": 0}
-    )
-    
-    if not settings:
-        settings = {"alertDays": [30, 14, 7, 1], "emailEnabled": True}
-    
-    if not settings.get("emailEnabled", True):
-        return {"message": "Email alerts are disabled", "sent": 0}
-    
-    today = datetime.now(timezone.utc)
-    alerts_sent = 0
-    
-    # Get all admin users in the organization to send alerts to
-    admins = await db.users.find(
-        {"organizationId": org_id, "role": "admin"},
-        {"_id": 0, "id": 1, "email": 1}
-    ).to_list(100)
-    
-    for alert_day in settings.get("alertDays", [30, 14, 7, 1]):
-        target_date = (today + timedelta(days=alert_day)).strftime("%Y-%m-%d")
-        
-        # Find contracts expiring on this specific day
-        expiring_contracts = await db.contracts.find(
-            {
-                "organizationId": org_id,
-                "expiryDate": target_date,
-                "status": {"$ne": "expired"}
-            },
-            {"_id": 0}
-        ).to_list(100)
-        
-        for contract in expiring_contracts:
-            # Check if alert was already sent for this contract and day
-            existing_alert = await db.expiration_alerts.find_one({
-                "contractId": contract["id"],
-                "daysBeforeExpiry": alert_day,
-                "emailSent": True
-            })
-            
-            if existing_alert:
-                continue
-            
-            # Send alert to all admins
-            for admin in admins:
-                await send_expiration_alert(
-                    to_email=admin["email"],
-                    contract_id=contract["id"],
-                    contract_title=contract.get("title", "Untitled"),
-                    counterparty=contract.get("counterparty", "Not specified"),
-                    expiry_date=contract.get("expiryDate", "Unknown"),
-                    days_remaining=alert_day
-                )
-                alerts_sent += 1
-            
-            # Record alert as sent
-            alert = ExpirationAlert(
-                contractId=contract["id"],
-                userId=current_user["sub"],
-                daysBeforeExpiry=alert_day,
-                emailSent=True,
-                emailSentAt=datetime.now(timezone.utc).isoformat()
-            )
-            await db.expiration_alerts.insert_one(alert.model_dump())
-    
-    return {"message": f"Alert check completed", "alertsSent": alerts_sent}
+    """Manually trigger the same idempotent scan used by the daily worker."""
+    require_capability(current_user, "alert_trigger")
+    await assert_org_writable(current_user["organizationId"])
+    result = await scan_expiration_alerts(db, current_user["organizationId"], current_user["sub"])
+    return {"message": "Alert check completed", "alertsSent": result["sent"], **result}
 
 
 @router.get("/history")
@@ -188,17 +116,14 @@ async def get_alert_history(
     current_user: dict = Depends(get_current_user)
 ):
     """Get history of sent alerts."""
-    # Get contract IDs for the organization
     contracts = await db.contracts.find(
         {"organizationId": current_user["organizationId"]},
         {"_id": 0, "id": 1, "title": 1}
     ).to_list(1000)
-    
     contract_ids = [c["id"] for c in contracts]
     contract_titles = {c["id"]: c["title"] for c in contracts}
-    
     alerts = await db.expiration_alerts.find(
-        {"contractId": {"$in": contract_ids}},
+        {"organizationId": current_user["organizationId"], "contractId": {"$in": contract_ids}},
         {"_id": 0}
     ).sort("createdAt", -1).limit(limit).to_list(limit)
     

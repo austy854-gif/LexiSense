@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, versionsAPI, workflowAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
-import { canPerformWorkflowAction, canWriteContracts, getErrorInfo } from '../lib/apiHelpers.mjs';
+import { canPerformWorkflowAction, canRestore, canSubmitForReview, canApprove, canReject, canActivate, getErrorInfo } from '../lib/apiHelpers.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -77,11 +77,18 @@ const StatusBadge = ({ status }) => {
 export default function ContractDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const canWrite = canWriteContracts(user?.role);
-  // Workflow buttons follow the server's role check (routes/workflow.py):
-  // submit = admin/manager/user; approve, reject, activate = admin/manager.
-  const canDo = (action) => canPerformWorkflowAction(user?.role, action, contract?.status);
+  const { user, capabilities = {} } = useAuth();
+  const canDo = (action) => {
+    const fallback = {
+      submit_for_review: canSubmitForReview(user?.role),
+      approve: canApprove(user?.role),
+      reject: canReject(user?.role),
+      activate: canActivate(user?.role),
+    }[action] && canPerformWorkflowAction(user?.role, action, contract?.status);
+    const capability = { submit_for_review: 'canSubmitForReview', approve: 'canApprove', reject: 'canReject', activate: 'canActivate' }[action];
+    return (capabilities[capability] ?? fallback) && canPerformWorkflowAction(user?.role, action, contract?.status);
+  };
+  const restoreAllowed = capabilities.canRestore ?? canRestore(user?.role);
   const [contract, setContract] = useState(null);
   const [loading, setLoading] = useState(true);
   const [chatMessages, setChatMessages] = useState([]);
@@ -583,8 +590,8 @@ export default function ContractDetailPage() {
                                 )}
                               </div>
                             </div>
-                            {canWrite && (
-                            <Button
+                            {restoreAllowed && (
+                              <Button
                               variant="outline"
                               size="sm"
                               onClick={() => handleRestoreVersion(version.version)}

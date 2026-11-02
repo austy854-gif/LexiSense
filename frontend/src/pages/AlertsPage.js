@@ -42,7 +42,7 @@ const UrgencyBadge = ({ days }) => {
 };
 
 export default function AlertsPage() {
-  const { user } = useAuth();
+  const { user, capabilities = {} } = useAuth();
   const [loading, setLoading] = useState(true);
   const [expiringContracts, setExpiringContracts] = useState([]);
   const [alertHistory, setAlertHistory] = useState([]);
@@ -50,7 +50,8 @@ export default function AlertsPage() {
   const [sendingAlerts, setSendingAlerts] = useState(false);
   const [alertDaysInput, setAlertDaysInput] = useState('30, 14, 7, 1');
 
-  const isAdmin = user?.role === 'admin';
+  const canTriggerAlerts = capabilities.canTriggerAlerts ?? user?.role === 'admin';
+  const canUpdateAlertSettings = capabilities.canUpdateAlertSettings ?? user?.role === 'admin';
 
   useEffect(() => {
     fetchData();
@@ -135,7 +136,7 @@ export default function AlertsPage() {
               Monitor contracts approaching expiry dates
             </p>
           </div>
-          {isAdmin && (
+          {canTriggerAlerts && (
             <Button onClick={handleSendAlerts} disabled={sendingAlerts} data-testid="send-alerts-btn">
               {sendingAlerts ? (
                 <>
@@ -208,7 +209,7 @@ export default function AlertsPage() {
           {/* Settings & History */}
           <div className="space-y-6">
             {/* Alert Settings */}
-            {isAdmin && (
+            {canUpdateAlertSettings && (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-lg">

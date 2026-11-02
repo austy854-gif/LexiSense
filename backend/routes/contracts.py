@@ -16,6 +16,7 @@ from utils.rbac import (
     RateLimiterUnavailable,
     make_org_limiter,
 )
+from utils.policy import require_capability, require_owner_or_capability, require_uploader_for_user
 from utils.env import get_env
 from services.ai_service import analyze_contract, get_chat_response
 from services.storage_service import upload_file_to_s3, delete_file_from_s3, generate_presigned_url
@@ -372,6 +373,7 @@ async def upload_contract(
     current_user: dict = Depends(get_current_user)
 ):
     """Upload and analyze a new contract."""
+    require_capability(current_user, "upload")
     file_content = await file.read()
 
     if len(file_content) > MAX_FILE_SIZE:
@@ -392,6 +394,8 @@ async def upload_contract(
         )
 
     quota_released = False
+    storage_key = None
+    contract_inserted = False
     try:
         storage_key = await upload_file_to_s3(
             file_content,
@@ -454,6 +458,7 @@ async def upload_contract(
         else:
             contract_doc["aiAnalysisStatus"] = "success"
         await db.contracts.insert_one(contract_doc)
+        contract_inserted = True
 
         await log_action(
             organization_id=current_user["organizationId"],
@@ -465,13 +470,21 @@ async def upload_contract(
             resource_title=title,
         )
     except HTTPException:
-        # Refund the reserved slot on any HTTP failure between reservation and DB insert.
+        # Refund the reserved slot and remove every partial artifact.
+        if contract_inserted:
+            await db.contracts.delete_one({"id": contract.id, "organizationId": current_user["organizationId"]})
+        if storage_key:
+            await delete_file_from_s3(storage_key)
         if not quota_released:
             await release_trial_upload(current_user["organizationId"])
             quota_released = True
         raise
     except Exception as e:
-        # Unknown failure -- refund quota so the trial isn't unfairly consumed.
+        # Unknown failure -- refund quota and remove every partial artifact.
+        if contract_inserted:
+            await db.contracts.delete_one({"id": contract.id, "organizationId": current_user["organizationId"]})
+        if storage_key:
+            await delete_file_from_s3(storage_key)
         if not quota_released:
             await release_trial_upload(current_user["organizationId"])
             quota_released = True
@@ -722,19 +735,7 @@ async def update_contract(
             detail="Contract not found"
         )
 
-    # RBAC: viewers are read-only; a non-admin/manager may only edit contracts
-    # they uploaded themselves. Roles resolve through the shared registry
-    # (utils.rbac) so a newly added role cannot silently inherit write access.
-    if current_user["role"] not in WRITE_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Viewers cannot modify contracts"
-        )
-    if current_user["role"] not in (ROLE_ADMIN, ROLE_MANAGER) and contract["uploadedBy"] != current_user["sub"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins, managers, or the uploader can modify this contract"
-        )
+    require_owner_or_capability(current_user, contract, "contract_edit")
 
     title = payload.title
     counterparty = payload.counterparty
@@ -952,42 +953,13 @@ async def restore_contract_version(
             detail="Version not found"
         )
 
-    # RBAC: restoring is a write. Viewers are read-only; a non-admin/manager may
-    # only restore their own uploads. Existence is checked first so a 404 is
-    # never leaked as a 403.
-    if current_user["role"] not in TRANSITION_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Viewers cannot modify contracts"
-        )
-    if (
-        current_user["role"] not in PRIVILEGED_TRANSITION_ROLES
-        and contract.get("uploadedBy") != current_user["sub"]
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins, managers, or the uploader can restore this contract"
-        )
+    require_owner_or_capability(current_user, contract, "restore")
 
     # The restored status is a workflow transition: validate it against the
     # state machine so a restore cannot bypass the workflow (e.g. draft->approved).
     current_status = contract.get("status", "draft")
     restored_status = version.get("status", current_status)
     validate_transition(current_status, restored_status)
-    
-    # Restoring a version mutates the contract, so it requires the same write
-    # authorisation as PATCH. Previously any authenticated member -- including a
-    # read-only viewer -- could roll a contract back.
-    if current_user["role"] not in WRITE_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Viewers cannot modify contracts"
-        )
-    if current_user["role"] not in (ROLE_ADMIN, ROLE_MANAGER) and contract.get("uploadedBy") != current_user["sub"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins, managers, or the uploader can restore this contract"
-        )
 
     # Create a new version entry for the current state before restoring
     latest_version = await db.contract_versions.find_one(
@@ -1073,11 +1045,7 @@ async def delete_contract(
             detail="Contract not found"
         )
     
-    if current_user["role"] not in (ROLE_ADMIN, ROLE_MANAGER) and contract["uploadedBy"] != current_user["sub"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins or the uploader can delete this contract"
-        )
+    require_owner_or_capability(current_user, contract, "delete")
     
     if contract.get("storageKey"):
         await delete_file_from_s3(contract["storageKey"])
