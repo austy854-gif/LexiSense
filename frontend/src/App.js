@@ -5,6 +5,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { HomeRoute } from './components/HomeRoute';
 import { RouteHead } from './components/RouteHead';
+import { HostAuthRedirect } from './components/HostAuthRedirect';
 
 import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
@@ -38,8 +39,9 @@ function App() {
           <RouteHead />
           <Routes>
             {/* Public routes */}
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
+            <Route path="/login" element={<HostAuthRedirect><LoginPage /></HostAuthRedirect>} />
+            <Route path="/register" element={<HostAuthRedirect><RegisterPage /></HostAuthRedirect>} />
+            <Route path="/signup" element={<Navigate to="/register" replace />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
             {/* Approval email links (token is the credential; no login needed) */}

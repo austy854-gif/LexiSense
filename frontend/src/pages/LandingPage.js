@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   ArrowRight,
   CalendarClock,
@@ -12,14 +11,18 @@ import {
   UserCheck,
   X,
 } from 'lucide-react';
+import { appUrl } from '../lib/hostRouting';
 
 // Public marketing page shown at "/" to logged-out visitors.
 // It always renders in light mode: the `lexi-landing` class (index.css)
 // re-declares the light design tokens on this subtree, so it does not touch
 // ThemeContext or the class on <html> that the app uses for dark mode.
 
-const SIGNUP_PATH = '/register';
-const LOGIN_PATH = '/login';
+// Absolute app-host URLs when REACT_APP_APP_URL is set (lexisense.net ->
+// app.lexisense.net); relative paths otherwise so local dev keeps working.
+// Plain <a href> because these may leave the current origin.
+const SIGNUP_PATH = appUrl('/register');
+const LOGIN_PATH = appUrl('/login');
 
 const PAGE_TITLE = 'LexiSense: Contract management for small agencies';
 const PAGE_DESCRIPTION =
@@ -173,18 +176,18 @@ function SiteHeader() {
           </ul>
         </nav>
         <div className="flex items-center gap-2 sm:gap-4">
-          <Link
-            to={LOGIN_PATH}
+          <a
+            href={LOGIN_PATH}
             className={`hidden rounded-md px-2 py-2 text-sm font-semibold text-foreground hover:text-primary md:inline-flex ${focusRing}`}
           >
             Log in
-          </Link>
-          <Link
-            to={SIGNUP_PATH}
+          </a>
+          <a
+            href={SIGNUP_PATH}
             className={`hidden items-center rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:bg-[hsl(216_85%_29%)] min-[380px]:inline-flex ${focusRing} focus-visible:ring-offset-2`}
           >
             Try LexiSense free
-          </Link>
+          </a>
           <button
             ref={toggleRef}
             type="button"
@@ -220,22 +223,22 @@ function SiteHeader() {
             </li>
           ))}
           <li className="border-t border-border pt-2">
-            <Link
-              to={LOGIN_PATH}
+            <a
+              href={LOGIN_PATH}
               onClick={() => closeMenu()}
               className={`block rounded-md px-3 py-3 text-base font-semibold text-foreground hover:bg-accent ${focusRing}`}
             >
               Log in
-            </Link>
+            </a>
           </li>
           <li>
-            <Link
-              to={SIGNUP_PATH}
+            <a
+              href={SIGNUP_PATH}
               onClick={() => closeMenu()}
               className={`block rounded-md bg-primary px-3 py-3 text-center text-base font-semibold text-primary-foreground hover:bg-[hsl(216_85%_29%)] ${focusRing} focus-visible:ring-offset-2`}
             >
               Try LexiSense free
-            </Link>
+            </a>
           </li>
         </ul>
       </nav>
@@ -245,12 +248,12 @@ function SiteHeader() {
 
 function PrimaryCta({ children, className = '' }) {
   return (
-    <Link
-      to={SIGNUP_PATH}
+    <a
+      href={SIGNUP_PATH}
       className={`inline-flex items-center justify-center gap-2 rounded-md bg-primary px-5 py-3 text-base font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-[hsl(216_85%_29%)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`}
     >
       {children}
-    </Link>
+    </a>
   );
 }
 
@@ -489,13 +492,13 @@ export default function LandingPage() {
               Upload a few contracts and see what LexiSense finds.
             </p>
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-              <Link
-                to={SIGNUP_PATH}
+              <a
+                href={SIGNUP_PATH}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-5 py-3 text-base font-semibold text-primary shadow-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-primary"
               >
                 Try LexiSense free
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
-              </Link>
+              </a>
               <a
                 href="#how-it-works"
                 className="inline-flex items-center justify-center rounded-md border border-white/80 px-5 py-3 text-base font-semibold text-white transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-primary"
@@ -522,10 +525,10 @@ export default function LandingPage() {
                 <a href="#faq" className={`rounded hover:text-foreground ${focusRing}`}>FAQ</a>
               </li>
               <li>
-                <Link to={LOGIN_PATH} className={`rounded hover:text-foreground ${focusRing}`}>Log in</Link>
+                <a href={LOGIN_PATH} className={`rounded hover:text-foreground ${focusRing}`}>Log in</a>
               </li>
               <li>
-                <Link to={SIGNUP_PATH} className={`rounded hover:text-foreground ${focusRing}`}>Sign up</Link>
+                <a href={SIGNUP_PATH} className={`rounded hover:text-foreground ${focusRing}`}>Sign up</a>
               </li>
             </ul>
           </nav>

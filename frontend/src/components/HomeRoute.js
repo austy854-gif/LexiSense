@@ -1,5 +1,7 @@
 import { useAuth } from '../contexts/AuthContext';
+import { Navigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
+import { getHostRole } from '../lib/hostRouting';
 
 /**
  * "/" route: signed-in users get their dashboard (exactly as before), logged-out
@@ -18,5 +20,8 @@ export function HomeRoute({ landing, dashboard }) {
     );
   }
 
-  return user ? dashboard : landing;
+  if (user) return dashboard;
+  // On the dedicated app host there is no marketing page: send visitors to log in.
+  if (getHostRole() === 'app') return <Navigate to="/login" replace />;
+  return landing;
 }
