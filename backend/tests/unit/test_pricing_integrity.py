@@ -241,14 +241,18 @@ class TestSeatCap:
         {**_paid("business"), "subscriptionTier": "cancelled", "billingStatus": "cancelled"},
         {**_paid("business"), "billingStatus": "cancelled"},
         {"subscriptionTier": "cancelled"},
+        {**_paid("business"), "subscriptionTier": "cancelled", "billingStatus": "past_due"},
     ])
-    async def test_cancelled_org_cannot_invite(self, client, db, org_id, billing):
+    @pytest.mark.parametrize("ui,message", [
+        ("true", "Your plan is cancelled. Reactivate your subscription to invite teammates."),
+        ("false", "Your plan is cancelled. Please contact support to invite teammates."),
+    ])
+    async def test_cancelled_org_cannot_invite(self, client, db, org_id, billing, ui, message, monkeypatch):
+        monkeypatch.setenv("BILLING_UI_ENABLED", ui)
         admin = await _seed(db, org_id, members=0, invites=0, billing=billing)
         r = await client.post(INVITE_URL, json={"email": "x@x.com"}, headers=auth_headers(admin))
         assert r.status_code == 403
-        assert r.json()["detail"] == (
-            "Your plan is cancelled. Reactivate your subscription to invite teammates."
-        )
+        assert r.json()["detail"] == message
         assert await db.invitations.count_documents({"email": "x@x.com"}) == 0
 
     async def test_env_override(self, client, db, org_id, monkeypatch):
