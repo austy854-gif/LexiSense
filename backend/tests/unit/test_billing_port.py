@@ -75,6 +75,10 @@ class TestEntitlement:
         e = ba.compute_entitlement({"subscriptionTier": "cancelled", "billingStatus": "cancelled"}, NOW)
         assert e.state == "cancelled" and e.blocked
 
+    def test_cancelled_tier_takes_precedence_over_past_due(self):
+        e = ba.compute_entitlement({"subscriptionTier": "cancelled", "billingStatus": "past_due"}, NOW)
+        assert e.state == "cancelled" and e.blocked
+
 
 # --- BILLING_UI_ENABLED -------------------------------------------------------
 class TestBillingUiFlag:
