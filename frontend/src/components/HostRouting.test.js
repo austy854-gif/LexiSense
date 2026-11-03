@@ -4,8 +4,9 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { HomeRoute } from './HomeRoute';
 import { HostAuthRedirect } from './HostAuthRedirect';
 
+let mockAuth = { user: null, loading: false };
 jest.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({ user: null, loading: false }),
+  useAuth: () => mockAuth,
 }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -27,6 +28,7 @@ function setHost(host, pathname = '/') {
 }
 
 beforeEach(() => {
+  mockAuth = { user: null, loading: false };
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -84,4 +86,18 @@ test('app host: /login renders in place', () => {
   render(<HostAuthRedirect><p>login page</p></HostAuthRedirect>);
   expect(replace).not.toHaveBeenCalled();
   expect(text()).toContain('login page');
+});
+
+test('landing host: a stale signed-in session still sees the landing page', () => {
+  mockAuth = { user: { id: 1 }, loading: false };
+  setHost('lexisense.net');
+  renderHome();
+  expect(text()).toBe('landing');
+});
+
+test('app host: signed-in user gets the dashboard', () => {
+  mockAuth = { user: { id: 1 }, loading: false };
+  setHost('app.lexisense.net');
+  renderHome();
+  expect(text()).toBe('dash');
 });

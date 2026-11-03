@@ -20,8 +20,12 @@ export function HomeRoute({ landing, dashboard }) {
     );
   }
 
+  const role = getHostRole();
+  // The landing host is marketing-only: a session left in this origin's
+  // storage from before the domain split must not render the app here.
+  if (role === 'landing') return landing;
   if (user) return dashboard;
   // On the dedicated app host there is no marketing page: send visitors to log in.
-  if (getHostRole() === 'app') return <Navigate to="/login" replace />;
+  if (role === 'app') return <Navigate to="/login" replace />;
   return landing;
 }
