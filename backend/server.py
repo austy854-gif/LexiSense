@@ -151,12 +151,6 @@ async def lifespan(app: FastAPI):
                     "Database indexes ensured",
                     extra={"indexes_created": result["created"], "indexes_failed": result["failed"]},
                 )
-                # Alert delivery is only safe once the unique idempotency index
-                # exists (it turns a duplicate upsert into DuplicateKeyError).
-                from services.alert_service import alert_idempotency_index_ready
-                alerts_index_ok = await alert_idempotency_index_ready(db)
-                if not alerts_index_ok:
-                    logger.error("Alert idempotency index missing; alert scans stay disabled")
 
                 from services.storage_service import ensure_bucket_exists
                 if await ensure_bucket_exists():
@@ -180,16 +174,19 @@ async def lifespan(app: FastAPI):
                     from routes.agentic import _create_indexes as create_agentic_indexes
                     await create_agentic_indexes()
 
-                app.state.alerts_ready = alerts_index_ok
-                if not alerts_index_ok:
-                    from services.alert_service import ensure_alert_idempotency_index
+                # Alert delivery is only safe once the unique idempotency index
+                # is built (it turns a duplicate upsert into DuplicateKeyError).
+                # A listed index may still be building, so alerts are enabled
+                # only after create_index returns successfully, retried in the
+                # background on transient failure.
+                from services.alert_service import ensure_alert_idempotency_index
 
-                    def _enable_alerts():
-                        app.state.alerts_ready = True
+                def _enable_alerts():
+                    app.state.alerts_ready = True
 
-                    app.state.alert_index_task = asyncio.create_task(
-                        ensure_alert_idempotency_index(db, _enable_alerts)
-                    )
+                app.state.alert_index_task = asyncio.create_task(
+                    ensure_alert_idempotency_index(db, _enable_alerts)
+                )
                 app.state.bootstrap_ok = True
                 logger.info("Startup bootstrap complete", extra={"attempt": attempt})
                 return

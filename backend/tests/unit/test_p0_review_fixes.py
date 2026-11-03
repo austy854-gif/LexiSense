@@ -684,3 +684,14 @@ class TestAlertIndexNotReadyWhileBuilding:
         await alert_service.ensure_alert_idempotency_index(
             _DB(), lambda: enabled.append(True), initial_delay=1, sleep=_sleep)
         assert calls["create"] == 2 and sleeps == [1] and enabled == [True]
+
+
+class TestStartupAlertGate:
+    def test_startup_uses_create_then_verify_path(self):
+        import inspect
+        import server
+
+        src = inspect.getsource(server)
+        assert "ensure_alert_idempotency_index(db, _enable_alerts)" in src
+        # The metadata-only check must not be used to enable alerts at startup.
+        assert "alert_idempotency_index_ready" not in src
