@@ -282,9 +282,15 @@ async def ensure_ai_access(org_id: str) -> Entitlement:
     return entitlement
 
 
+#: Shown when a cancelled org tries to invite a teammate.
+MSG_CANCELLED_INVITE = "Your plan is cancelled. Reactivate your subscription to invite teammates."
+
+
 async def ensure_invite_access(org_id: str) -> Entitlement:
-    """403 for read-only (past due after grace) and unverified-plan orgs."""
+    """403 for cancelled, read-only (past due after grace) and unverified-plan orgs."""
     entitlement = await get_entitlement(org_id)
+    if entitlement.state == ACCESS_CANCELLED:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=MSG_CANCELLED_INVITE)
     if entitlement.read_only or entitlement.state == ACCESS_UNVERIFIED_PLAN:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
     return entitlement
