@@ -636,3 +636,51 @@ class TestAlertIndexRecovery:
             _DB(), lambda: enabled.append(True), initial_delay=1, max_delay=2, sleep=_sleep)
         assert enabled == [True] and attempts["n"] == 3 and sleeps == [1, 2]
         assert await alert_service.alert_idempotency_index_ready(db)
+
+
+class TestPurgeVersionDeleteDenied:
+    async def test_falls_back_to_key_delete_and_reports_failure(self, monkeypatch, caplog):
+        from botocore.exceptions import ClientError
+
+        class _S3(_FakeS3):
+            def delete_object(self, **kw):
+                if "VersionId" in kw:
+                    raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "DeleteObject")
+                self.deleted.append(kw)
+                return {}
+
+        fake = _S3({"Versions": [{"Key": "org/k.pdf", "VersionId": "v1"}]})
+        monkeypatch.setattr(storage_service, "get_s3_client", lambda: fake)
+        monkeypatch.setattr(storage_service, "get_bucket_name", lambda: "b")
+        with caplog.at_level("ERROR"):
+            assert await storage_service.purge_uploaded_object("org/k.pdf") is False
+        assert fake.deleted == [{"Bucket": "b", "Key": "org/k.pdf"}]
+        assert "org/k.pdf" in caplog.text
+
+
+class TestAlertIndexNotReadyWhileBuilding:
+    async def test_listed_index_does_not_enable_when_create_failed(self, monkeypatch):
+        calls = {"create": 0}
+
+        class _Coll:
+            async def create_index(self, *a, **kw):
+                calls["create"] += 1
+                if calls["create"] == 1:
+                    raise RuntimeError("build interrupted")
+
+            async def index_information(self):
+                # Listed (possibly still building) on every call.
+                return {"uq_alerts_idempotency": {"unique": True}}
+
+        class _DB:
+            expiration_alerts = _Coll()
+
+        enabled, sleeps = [], []
+
+        async def _sleep(d):
+            assert not enabled
+            sleeps.append(d)
+
+        await alert_service.ensure_alert_idempotency_index(
+            _DB(), lambda: enabled.append(True), initial_delay=1, sleep=_sleep)
+        assert calls["create"] == 2 and sleeps == [1] and enabled == [True]

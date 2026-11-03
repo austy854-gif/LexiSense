@@ -214,6 +214,11 @@ async def purge_uploaded_object(storage_key: str) -> bool:
         except (BotoCoreError, ClientError) as e:
             logger.error("Failed to delete object version during rollback: %s", type(e).__name__)
             ok = False
+    if not ok:
+        # e.g. DeleteObjectVersion denied but DeleteObject allowed: a key delete
+        # at least hides the object. Still report failure so it is cleaned up.
+        await delete_file_from_s3(storage_key)
+        logger.error("Object versions retained after rollback; needs manual purge: key=%s", storage_key)
     return ok
 
 

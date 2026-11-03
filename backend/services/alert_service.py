@@ -70,10 +70,13 @@ async def ensure_alert_idempotency_index(
             raise
         except Exception as exc:
             logger.warning("Alert index creation retry failed (error_type=%s)", type(exc).__name__)
-        if await alert_idempotency_index_ready(db):
-            logger.info("Alert idempotency index verified; alerts enabled")
-            on_ready()
-            return
+        else:
+            # Only after createIndexes returned: a listed index may still be
+            # building, and its unique constraint is enforced only on commit.
+            if await alert_idempotency_index_ready(db):
+                logger.info("Alert idempotency index verified; alerts enabled")
+                on_ready()
+                return
         await sleep(delay)
         delay = min(delay * 2, max_delay)
 
