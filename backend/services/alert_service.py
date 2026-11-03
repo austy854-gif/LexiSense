@@ -46,6 +46,38 @@ async def alert_idempotency_index_ready(db) -> bool:
     return bool(spec.get("unique"))
 
 
+async def ensure_alert_idempotency_index(
+    db, on_ready, *, initial_delay: float = 1.0, max_delay: float = 60.0, sleep=None
+) -> None:
+    """Create and verify ``uq_alerts_idempotency`` until it succeeds.
+
+    Used when startup could not confirm the index (e.g. a transient MongoDB
+    failure) so alerts recover without a process restart. ``on_ready`` is only
+    called after verification succeeds.
+    """
+    import asyncio
+
+    from utils.database import INDEX_SPECIFICATION
+
+    sleep = sleep or asyncio.sleep
+    spec = next(s for s in INDEX_SPECIFICATION["expiration_alerts"] if s["name"] == "uq_alerts_idempotency")
+    options = {k: v for k, v in spec.items() if k != "keys"}
+    delay = initial_delay
+    while True:
+        try:
+            await db.expiration_alerts.create_index(spec["keys"], **options)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Alert index creation retry failed (error_type=%s)", type(exc).__name__)
+        if await alert_idempotency_index_ready(db):
+            logger.info("Alert idempotency index verified; alerts enabled")
+            on_ready()
+            return
+        await sleep(delay)
+        delay = min(delay * 2, max_delay)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 

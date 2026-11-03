@@ -106,12 +106,15 @@ async def upload_file_to_s3(
         return storage_key
     except (BotoCoreError, ClientError, ValueError) as e:
         logger.error("Durable upload/retrieval verification failed: %s", type(e).__name__)
-        # Best-effort cleanup prevents an orphaned object after verification or
-        # later metadata work fails.
+        # The caller never receives storage_key on this path, so this is the
+        # only chance to remove the bytes. Purge every version (a plain key
+        # delete on a versioned bucket only adds a delete marker).
         try:
-            await asyncio.to_thread(s3_client.delete_object, Bucket=get_bucket_name(), Key=storage_key)
+            purged = await purge_uploaded_object(storage_key)
         except Exception:
-            logger.warning("Unable to clean up failed object", exc_info=True)
+            purged = False
+        if not purged:
+            logger.error("Failed upload could not be fully purged from storage")
         if isinstance(e, ValueError) and str(e).startswith("Durable"):
             raise
         raise ValueError("Durable storage verification failed. Upload was not accepted.") from e

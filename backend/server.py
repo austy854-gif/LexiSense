@@ -135,6 +135,7 @@ async def lifespan(app: FastAPI):
     # (/api/v1/ready) reports 503 until it has completed.
     app.state.bootstrap_ok = False
     app.state.alerts_ready = False
+    app.state.alert_index_task = None
 
     async def _bootstrap():
         delay = 2.0
@@ -180,6 +181,15 @@ async def lifespan(app: FastAPI):
                     await create_agentic_indexes()
 
                 app.state.alerts_ready = alerts_index_ok
+                if not alerts_index_ok:
+                    from services.alert_service import ensure_alert_idempotency_index
+
+                    def _enable_alerts():
+                        app.state.alerts_ready = True
+
+                    app.state.alert_index_task = asyncio.create_task(
+                        ensure_alert_idempotency_index(db, _enable_alerts)
+                    )
                 app.state.bootstrap_ok = True
                 logger.info("Startup bootstrap complete", extra={"attempt": attempt})
                 return
@@ -209,6 +219,9 @@ async def lifespan(app: FastAPI):
     alert_scheduler.shutdown(wait=False)
     if not bootstrap_task.done():
         bootstrap_task.cancel()
+    alert_index_task = getattr(app.state, "alert_index_task", None)
+    if alert_index_task is not None and not alert_index_task.done():
+        alert_index_task.cancel()
     client.close()
 
 

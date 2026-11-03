@@ -368,7 +368,7 @@ RESTORE_TRANSITION_CAPABILITY = {
     ("review", "approved"): "approve",
     ("review", "draft"): "reject",
     ("approved", "active"): "activate",
-    ("approved", "review"): "reject",
+    ("approved", "review"): "submit_for_review",
     ("active", "expired"): "activate",
 }
 

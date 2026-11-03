@@ -550,3 +550,89 @@ class TestAlertReadinessGate:
         await db.users.insert_one(dict(admin))
         r = await aclient.post(f"{API_PREFIX}/alerts/check-and-send", headers=auth_headers(admin))
         assert r.status_code == 503
+
+
+class TestUploadVerificationCleanup:
+    async def test_failed_verification_purges_every_version(self, monkeypatch):
+        class _S3(_FakeS3):
+            def put_object(self, **kw):
+                return {"VersionId": "v1"}
+
+            def head_object(self, **kw):
+                return {"ContentLength": 1}  # wrong length -> verification fails
+
+            def list_object_versions(self, **kw):
+                return {"Versions": [{"Key": kw["Prefix"], "VersionId": "v1"}]}
+
+        fake = _S3()
+        purged = []
+
+        async def _purge(key):
+            purged.append(key)
+            return await real_purge(key)
+
+        real_purge = storage_service.purge_uploaded_object
+        monkeypatch.setattr(storage_service, "get_s3_client", lambda: fake)
+        monkeypatch.setattr(storage_service, "get_bucket_name", lambda: "b")
+        monkeypatch.setattr(storage_service, "purge_uploaded_object", _purge)
+        with pytest.raises(ValueError):
+            await storage_service.upload_file_to_s3(b"hello", "c.pdf", "org", "application/pdf")
+        assert len(purged) == 1 and purged[0].startswith("org/")
+        # Version-aware delete, never a bare key delete on a versioned bucket.
+        assert fake.deleted == [{"Bucket": "b", "Key": purged[0], "VersionId": "v1"}]
+
+    async def test_purge_exception_does_not_mask_upload_error(self, monkeypatch):
+        class _S3(_FakeS3):
+            def put_object(self, **kw):
+                from botocore.exceptions import EndpointConnectionError
+                raise EndpointConnectionError(endpoint_url="https://s3")
+
+        async def _boom(key):
+            raise RuntimeError("purge down")
+
+        monkeypatch.setattr(storage_service, "get_s3_client", lambda: _S3())
+        monkeypatch.setattr(storage_service, "get_bucket_name", lambda: "b")
+        monkeypatch.setattr(storage_service, "purge_uploaded_object", _boom)
+        with pytest.raises(ValueError, match="Durable storage verification failed"):
+            await storage_service.upload_file_to_s3(b"x", "c.pdf", "org", "application/pdf")
+
+
+class TestApprovedToReviewRestore:
+    async def test_user_can_send_own_approved_contract_back_to_review(self, client, db, org_id):
+        user, contract = await TestRestoreTransitionCapability()._seed(db, org_id, "user", "approved", "review")
+        r = await client.post(f"{API_PREFIX}/contracts/{contract['id']}/restore/1", headers=auth_headers(user))
+        assert r.status_code == 200, r.text
+        assert (await db.contracts.find_one({"id": contract["id"]}))["status"] == "review"
+
+    def test_mapping_matches_workflow_action(self):
+        assert contracts_route.RESTORE_TRANSITION_CAPABILITY[("approved", "review")] == "submit_for_review"
+
+
+class TestAlertIndexRecovery:
+    async def test_retries_until_index_verified_then_enables(self, db, monkeypatch):
+        attempts = {"n": 0}
+        real = db.expiration_alerts
+
+        class _Coll:
+            async def create_index(self, *a, **kw):
+                attempts["n"] += 1
+                if attempts["n"] < 3:
+                    raise RuntimeError("mongo blip")
+                return await real.create_index(*a, **kw)
+
+            async def index_information(self):
+                return await real.index_information()
+
+        class _DB:
+            expiration_alerts = _Coll()
+
+        sleeps, enabled = [], []
+
+        async def _sleep(d):
+            assert not enabled  # never enabled before verification
+            sleeps.append(d)
+
+        await alert_service.ensure_alert_idempotency_index(
+            _DB(), lambda: enabled.append(True), initial_delay=1, max_delay=2, sleep=_sleep)
+        assert enabled == [True] and attempts["n"] == 3 and sleeps == [1, 2]
+        assert await alert_service.alert_idempotency_index_ready(db)
