@@ -42,12 +42,12 @@ function App() {
             <Route path="/login" element={<HostAuthRedirect><LoginPage /></HostAuthRedirect>} />
             <Route path="/register" element={<HostAuthRedirect><RegisterPage /></HostAuthRedirect>} />
             <Route path="/signup" element={<Navigate to="/register" replace />} />
-            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/forgot-password" element={<HostAuthRedirect><ForgotPasswordPage /></HostAuthRedirect>} />
+            <Route path="/reset-password" element={<HostAuthRedirect><ResetPasswordPage /></HostAuthRedirect>} />
             {/* Approval email links (token is the credential; no login needed) */}
             <Route path="/approvals/respond" element={<ApprovalRespondPage />} />
             {/* Team invite email links (?token=...); works signed in or out */}
-            <Route path="/accept-invite" element={<AcceptInvitePage />} />
+            <Route path="/accept-invite" element={<HostAuthRedirect><AcceptInvitePage /></HostAuthRedirect>} />
 
             {/* Home: marketing landing page for logged-out visitors,
                 the dashboard for signed-in users (same URL as before). */}

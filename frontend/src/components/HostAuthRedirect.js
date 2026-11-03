@@ -3,7 +3,8 @@ import { Loader2 } from 'lucide-react';
 import { authRedirectTarget } from '../lib/hostRouting';
 
 /**
- * Wraps /login and /register. On the landing host it does a full navigation
+ * Wraps the auth pages (/login, /register, /forgot-password, /reset-password,
+ * /accept-invite). On the landing host it does a full navigation
  * to the same path on the app host (auth state lives there); elsewhere it
  * renders the page unchanged.
  */

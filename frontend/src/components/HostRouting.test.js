@@ -101,3 +101,11 @@ test('app host: signed-in user gets the dashboard', () => {
   renderHome();
   expect(text()).toBe('dash');
 });
+
+test('landing host: legacy invite link is forwarded to the app host with its token', () => {
+  const replace = jest.fn();
+  delete window.location;
+  window.location = { host: 'lexisense.net', pathname: '/accept-invite', search: '?token=abc', hash: '', origin: 'https://lexisense.net', replace };
+  render(<HostAuthRedirect><p>invite</p></HostAuthRedirect>);
+  expect(replace).toHaveBeenCalledWith('https://app.lexisense.net/accept-invite?token=abc');
+});
