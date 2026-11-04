@@ -16,8 +16,9 @@ export function ProtectedRoute({ children, allowedRoles }) {
 
   if (target) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" aria-label="Redirecting" />
+      <div role="status" className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden="true" />
+        <span className="sr-only">Redirecting…</span>
       </div>
     );
   }

@@ -25,3 +25,32 @@ describe('401 handling', () => {
     expect(shouldRedirectOnUnauthorized({ message: 'Network Error' })).toBe(false);
   });
 });
+
+describe('401 interceptor and cross-host redirect', () => {
+  const ORIGINAL_ENV = process.env;
+  const originalLocation = window.location;
+  const handler = () => require('./api').default.interceptors.response.handlers[0].rejected;
+  function setLocation(host) {
+    delete window.location;
+    window.location = { host, pathname: '/contracts', search: '', hash: '', origin: `https://${host}`, href: `https://${host}/contracts`, replace: jest.fn() };
+  }
+  beforeEach(() => {
+    process.env = { ...ORIGINAL_ENV, REACT_APP_APP_URL: 'https://app.lexisense.net', REACT_APP_LANDING_URL: 'https://lexisense.net' };
+  });
+  afterEach(() => { process.env = ORIGINAL_ENV; window.location = originalLocation; });
+  const err = { response: { status: 401 }, config: { url: '/auth/me' } };
+
+  test('landing host: clears session but does not reload landing /login', async () => {
+    setLocation('lexisense.net');
+    localStorage.setItem('token', 't');
+    await expect(handler()(err)).rejects.toBe(err);
+    expect(localStorage.getItem('token')).toBeNull();
+    expect(window.location.href).toBe('https://lexisense.net/contracts');
+  });
+
+  test('app host: still redirects to /login', async () => {
+    setLocation('app.lexisense.net');
+    await expect(handler()(err)).rejects.toBe(err);
+    expect(window.location.href).toBe('/login');
+  });
+});
