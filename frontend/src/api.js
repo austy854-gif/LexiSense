@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { authRedirectTarget } from './lib/hostRouting';
 
 // Guard against a missing REACT_APP_BACKEND_URL: previously this produced the
 // literal string "undefined/api/v1" and every request failed with a confusing
@@ -44,7 +45,9 @@ api.interceptors.response.use(
     if (shouldRedirectOnUnauthorized(error)) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      window.location.href = '/login';
+      // On the landing host a cross-host navigation to the app host is (or will
+      // be) in flight; a landing-origin /login reload would override it.
+      if (!authRedirectTarget()) window.location.href = '/login';
     }
     return Promise.reject(error);
   }
