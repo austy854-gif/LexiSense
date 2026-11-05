@@ -43,7 +43,7 @@ const navItems = [
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
   { path: '/alerts', label: 'Alerts', icon: Bell },
   { path: '/team', label: 'Team', icon: Users },
-  { path: '/audit', label: 'Audit Log', icon: ScrollText, roles: AUDIT_READER_ROLES },
+  { path: '/audit', label: 'Audit log', icon: ScrollText, roles: AUDIT_READER_ROLES },
   { path: '/billing', label: 'Billing', icon: CreditCard, roles: ADMIN_ROLES },
 ];
 
@@ -172,8 +172,8 @@ export function Layout({ children }) {
                     data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
                     className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
                       isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                        ? 'bg-accent text-accent-foreground'
+                        : 'text-muted-foreground hover:bg-accent/70 hover:text-accent-foreground'
                     }`}
                     onClick={() => setSidebarOpen(false)}
                   >

@@ -36,7 +36,7 @@ import { toast } from 'sonner';
 
 const RiskBadge = ({ level, size = 'default' }) => {
   const colors = {
-    high: 'bg-red-500/10 text-red-500 border-red-500/20',
+    high: 'bg-destructive/10 text-destructive border-destructive/20',
     medium: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
     low: 'bg-green-500/10 text-green-500 border-green-500/20',
   };
@@ -440,7 +440,7 @@ export default function ContractDetailPage() {
                           <p className="font-medium text-destructive">AI analysis failed</p>
                           <p className="text-sm text-muted-foreground mt-1">
                             {contract.aiAnalysisError ||
-                              'The analysis could not be completed. Re-upload the contract to retry.'}
+                              "The analysis didn't run this time. Re-upload the contract to try again."}
                           </p>
                         </div>
                       </div>
@@ -487,7 +487,7 @@ export default function ContractDetailPage() {
                               <AlertTriangle
                                 className={`h-5 w-5 mt-0.5 ${
                                   risk.severity === 'high'
-                                    ? 'text-red-500'
+                                    ? 'text-destructive'
                                     : risk.severity === 'medium'
                                     ? 'text-yellow-500'
                                     : 'text-green-500'
@@ -616,11 +616,18 @@ export default function ContractDetailPage() {
             <CardHeader className="border-b">
               <CardTitle className="flex items-center gap-2 text-lg">
                 <Bot className="h-5 w-5 text-primary" />
-                AI Assistant
+                AI assistant
               </CardTitle>
             </CardHeader>
             <ScrollArea className="flex-1 p-4">
-              {chatMessages.length === 0 ? (
+              {analysisFailed ? (
+                <div className="text-center py-8 px-2" data-testid="assistant-disabled">
+                  <AlertTriangle className="h-10 w-10 text-destructive mx-auto mb-3" aria-hidden="true" />
+                  <p className="text-sm text-muted-foreground">
+                    Analysis did not finish, so the assistant is unavailable until you re-upload this contract.
+                  </p>
+                </div>
+              ) : chatMessages.length === 0 ? (
                 <div className="text-center py-8">
                   <MessageSquare className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
                   <p className="text-muted-foreground text-sm">
@@ -678,13 +685,13 @@ export default function ContractDetailPage() {
             <div className="p-4 border-t">
               <form onSubmit={handleChat} className="flex gap-2">
                 <Input
-                  placeholder="Ask about this contract..."
+                  placeholder={analysisFailed ? 'Assistant unavailable' : 'Ask about this contract...'}
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  disabled={chatLoading}
+                  disabled={chatLoading || analysisFailed}
                   data-testid="chat-input"
                 />
-                <Button type="submit" size="icon" disabled={chatLoading || !chatInput.trim()} aria-label="Send question" data-testid="chat-send">
+                <Button type="submit" size="icon" disabled={chatLoading || analysisFailed || !chatInput.trim()} aria-label="Send question" data-testid="chat-send">
                   <Send className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </form>

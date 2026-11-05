@@ -4,7 +4,7 @@ import { EmptyState } from './EmptyState';
 /**
  * Top-level error boundary fallback (Sentry.ErrorBoundary in index.js).
  * Rendered outside the router/theme providers, so it uses plain elements.
- * The support@ line from the README is omitted until that mailbox exists.
+ * UI-ES-03: include support@lexisense.net as a mailto link.
  */
 export function ErrorFallback({ resetError }) {
   return (
@@ -24,7 +24,10 @@ export function ErrorFallback({ resetError }) {
           </button>
         }
       >
-        <p>We couldn't load this just now. Try again in a moment.</p>
+        <p>
+          We couldn't load this just now. Try again in a moment. If it keeps happening, email{' '}
+          <a className="underline" href="mailto:support@lexisense.net">support@lexisense.net</a>.
+        </p>
       </EmptyState>
     </main>
   );

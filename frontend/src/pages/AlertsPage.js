@@ -150,7 +150,7 @@ export default function AlertsPage() {
               ) : (
                 <>
                   <Send className="mr-2 h-4 w-4" />
-                  Send Alert Emails
+                  Send alert emails
                 </>
               )}
             </Button>

@@ -39,10 +39,10 @@ import { toast } from 'sonner';
 
 const ACTION_CONFIG = {
   contract_uploaded: { label: 'Contract Uploaded', icon: Upload, cls: 'text-blue-500 bg-blue-500/10' },
-  contract_deleted: { label: 'Contract Deleted', icon: Trash2, cls: 'text-red-500 bg-red-500/10' },
+  contract_deleted: { label: 'Contract Deleted', icon: Trash2, cls: 'text-destructive bg-destructive/10' },
   contract_submit_for_review: { label: 'Submitted for Review', icon: Send, cls: 'text-yellow-500 bg-yellow-500/10' },
   contract_approve: { label: 'Contract Approved', icon: CheckCircle, cls: 'text-green-500 bg-green-500/10' },
-  contract_reject: { label: 'Contract Rejected', icon: XCircle, cls: 'text-red-500 bg-red-500/10' },
+  contract_reject: { label: 'Contract Rejected', icon: XCircle, cls: 'text-destructive bg-destructive/10' },
   contract_activate: { label: 'Contract Activated', icon: CheckCircle, cls: 'text-green-500 bg-green-500/10' },
   team_invite_sent: { label: 'Team Invite Sent', icon: Users, cls: 'text-purple-500 bg-purple-500/10' },
 };
@@ -131,7 +131,7 @@ export default function AuditLogPage() {
           <div>
             <h1 className="text-3xl font-bold flex items-center gap-3">
               <ScrollText className="h-8 w-8 text-primary" />
-              Audit Log
+              Audit log
             </h1>
             <p className="text-muted-foreground mt-1">Track all actions across your organization</p>
           </div>

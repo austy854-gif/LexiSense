@@ -275,7 +275,7 @@ function SiteHeader() {
           </a>
           <a
             href={SIGNUP_PATH}
-            className={`hidden items-center rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:bg-[hsl(216_85%_29%)] min-[380px]:inline-flex ${focusRing} focus-visible:ring-offset-2`}
+            className={`hidden items-center rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 min-[380px]:inline-flex ${focusRing} focus-visible:ring-offset-2`}
           >
             Try LexiSense free
           </a>
@@ -326,7 +326,7 @@ function SiteHeader() {
             <a
               href={SIGNUP_PATH}
               onClick={() => closeMenu()}
-              className={`block rounded-md bg-primary px-3 py-3 text-center text-base font-semibold text-primary-foreground hover:bg-[hsl(216_85%_29%)] ${focusRing} focus-visible:ring-offset-2`}
+              className={`block rounded-md bg-primary px-3 py-3 text-center text-base font-semibold text-primary-foreground hover:bg-primary/90 ${focusRing} focus-visible:ring-offset-2`}
             >
               Try LexiSense free
             </a>
@@ -341,7 +341,7 @@ function PrimaryCta({ children, className = '' }) {
   return (
     <a
       href={SIGNUP_PATH}
-      className={`inline-flex items-center justify-center gap-2 rounded-md bg-primary px-5 py-3 text-base font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-[hsl(216_85%_29%)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`}
+      className={`inline-flex items-center justify-center gap-2 rounded-md bg-primary px-5 py-3 text-base font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`}
     >
       {children}
     </a>
@@ -357,7 +357,7 @@ function HeroIllustration() {
   ];
   return (
     <div aria-hidden="true" className="relative mx-auto w-full max-w-md">
-      <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_20px_50px_-20px_rgba(13,74,165,0.35)]">
+      <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_20px_50px_-20px_rgba(138,3,3,0.28)]">
         <div className="flex items-center justify-between">
           <div className="h-3 w-28 rounded-full bg-foreground/80" />
           <div className="flex items-center gap-2 rounded-full border border-[hsl(var(--input))] px-3 py-1.5">
