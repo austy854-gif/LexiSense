@@ -30,6 +30,7 @@ import {
   Download,
   Lock,
   HelpCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 // Trial length and upload limits are deliberately not shown to users (copy
@@ -189,8 +190,9 @@ export default function BillingPage() {
         </div>
 
         {subscription?.readOnly && (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm" data-testid="billing-readonly">
-            This workspace is read-only until billing is updated. You can still open contracts you already have.
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm flex gap-2" data-testid="billing-readonly" role="alert">
+            <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" aria-hidden="true" />
+            <span>This workspace is read-only until billing is updated. You can still open contracts you already have.</span>
           </div>
         )}
         {!subscription?.readOnly && subscription?.billingStatus === 'past_due' && (

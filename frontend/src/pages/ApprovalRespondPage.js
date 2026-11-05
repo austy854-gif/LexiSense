@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../api';
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
+import { AlertCircle } from 'lucide-react';
 
 // Landing page for the one-click Approve/Reject links in approval emails.
 // The token arrives in the URL fragment (#token=...), which browsers never
@@ -64,8 +65,11 @@ export default function ApprovalRespondPage() {
       <div className="w-full max-w-md rounded-xl border bg-card p-8 shadow-sm" data-testid="approval-respond">
         <h1 className="text-2xl font-bold text-primary mb-6">LexiSense</h1>
         {error && (
-          <div data-testid="approval-error">
-            <p className="text-destructive font-medium mb-4">{error}</p>
+          <div data-testid="approval-error" role="alert">
+            <p className="text-destructive font-medium mb-4 flex gap-2 items-start">
+              <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" aria-hidden="true" />
+              <span>{error}</span>
+            </p>
             <Link className="text-primary underline" to="/contracts">Open LexiSense</Link>
           </div>
         )}

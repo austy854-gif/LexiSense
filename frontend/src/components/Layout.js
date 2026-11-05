@@ -249,7 +249,7 @@ export function Layout({ children }) {
                   >
                     <Bell className="h-5 w-5" aria-hidden="true" />
                     {unreadCount > 0 && (
-                      <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center">
                         {unreadCount > 9 ? '9+' : unreadCount}
                       </span>
                     )}

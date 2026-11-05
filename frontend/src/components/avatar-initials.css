@@ -1,15 +1,15 @@
-/* Avatar initials in the app shell. Opaque Steady Blue tint + brand blue text so the pair
+/* Avatar initials in the app shell. Opaque blood-red tint + brand text so the pair
    meets WCAG AA (4.5:1) regardless of what the avatar sits on:
-   light #0D4AA5 on #E7EEF9 = 7.1:1, dark #6FA3F5 on #1F2F47 = 5.3:1 (brand-guide.md). */
+   light #8A0303 on #F9E8E8 = 8.5:1, dark #F49A9D on #351D1D = 7.4:1. */
 :root,
 .dark {
-  --ls-avatar-bg: #1F2F47;
-  --ls-avatar-fg: #6FA3F5;
+  --ls-avatar-bg: #351D1D;
+  --ls-avatar-fg: #F49A9D;
 }
 
 .light {
-  --ls-avatar-bg: #E7EEF9;
-  --ls-avatar-fg: #0D4AA5;
+  --ls-avatar-bg: #F9E8E8;
+  --ls-avatar-fg: #8A0303;
 }
 
 .ls-avatar-initials {
