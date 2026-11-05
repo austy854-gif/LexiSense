@@ -182,3 +182,63 @@ test('login with full TokenResponse stores user', async () => {
   expect(JSON.parse(localStorage.getItem('user')).email).toBe('ok@example.com');
   expect(localStorage.getItem('token')).toBe('jwt-ok');
 });
+
+function deferred() {
+  let resolve; let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+test('mount does not crash when localStorage access throws', async () => {
+  const spy = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied'); });
+  try {
+    await expect(mountProvider()).resolves.toBeUndefined();
+    expect(container.textContent).toBe('nouser');
+    expect(authAPI.getMe).not.toHaveBeenCalled();
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test('late startup getMe success does not overwrite a newer login', async () => {
+  localStorage.setItem('token', 'old-tok');
+  localStorage.setItem('user', JSON.stringify({ id: 'old', email: 'old@example.com' }));
+  const d = deferred();
+  authAPI.getMe.mockReturnValue(d.promise);
+  authAPI.login.mockResolvedValue({ data: { access_token: 'new-tok', user: { id: 'new', email: 'new@example.com' } } });
+  await mountProvider();
+  await act(async () => { await latestAuth.login('new@example.com', 'pw'); });
+  await act(async () => { d.resolve({ data: { id: 'old', email: 'old@example.com' } }); });
+  await flush();
+  expect(container.textContent).toBe('user:new@example.com');
+  expect(localStorage.getItem('token')).toBe('new-tok');
+  expect(JSON.parse(localStorage.getItem('user')).id).toBe('new');
+});
+
+test('late startup getMe failure does not clear a newer login', async () => {
+  localStorage.setItem('token', 'old-tok');
+  localStorage.setItem('user', JSON.stringify({ id: 'old', email: 'old@example.com' }));
+  const d = deferred();
+  authAPI.getMe.mockReturnValue(d.promise);
+  authAPI.login.mockResolvedValue({ data: { access_token: 'new-tok', user: { id: 'new', email: 'new@example.com' } } });
+  await mountProvider();
+  await act(async () => { await latestAuth.login('new@example.com', 'pw'); });
+  await act(async () => { d.reject({ response: { status: 500 } }); });
+  await flush();
+  expect(container.textContent).toBe('user:new@example.com');
+  expect(localStorage.getItem('token')).toBe('new-tok');
+});
+
+test('late startup getMe success does not resurrect a session after logout', async () => {
+  localStorage.setItem('token', 'old-tok');
+  localStorage.setItem('user', JSON.stringify({ id: 'old', email: 'old@example.com' }));
+  const d = deferred();
+  authAPI.getMe.mockReturnValue(d.promise);
+  authAPI.logout.mockResolvedValue({});
+  await mountProvider();
+  await act(async () => { await latestAuth.logout(); });
+  await act(async () => { d.resolve({ data: { id: 'old', email: 'old@example.com' } }); });
+  await flush();
+  expect(container.textContent).toBe('nouser');
+  expect(localStorage.getItem('token')).toBeNull();
+});

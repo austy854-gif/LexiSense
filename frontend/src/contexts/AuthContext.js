@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { authAPI } from '../api';
 
 const AuthContext = createContext(null);
@@ -83,6 +83,9 @@ export function persistSession(accessToken, userData) {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Bumped by login/register/logout so a stale startup getMe() can't
+  // overwrite or clear a session established after restore began.
+  const sessionGen = useRef(0);
 
   useEffect(() => {
     const token = readToken();
@@ -92,8 +95,11 @@ export function AuthProvider({ children }) {
     // treat as logged out. If user was bad, keys are already cleared.
     if (token && savedUser) {
       setUser(savedUser);
+      const restoreGen = sessionGen.current;
+      const isCurrent = () => sessionGen.current === restoreGen;
       authAPI.getMe()
         .then((res) => {
+          if (!isCurrent()) return;
           const me = res?.data;
           if (me != null && typeof me === 'object' && !Array.isArray(me)) {
             setUser(me);
@@ -101,15 +107,14 @@ export function AuthProvider({ children }) {
           }
         })
         .catch(() => {
+          if (!isCurrent()) return;
           clearSessionKeys();
           setUser(null);
         })
         .finally(() => setLoading(false));
     } else {
       // Inconsistent: token without usable user (or vice versa) → clear.
-      if (token || localStorage.getItem(USER_KEY)) {
-        clearSessionKeys();
-      }
+      clearSessionKeys();
       setUser(null);
       setLoading(false);
     }
@@ -117,6 +122,7 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const response = await authAPI.login(email, password);
+    sessionGen.current += 1;
     const { access_token, user: userData } = response.data || {};
     persistSession(access_token, userData);
     setUser(userData && typeof userData === 'object' ? userData : null);
@@ -125,6 +131,7 @@ export function AuthProvider({ children }) {
 
   const register = async (data) => {
     const response = await authAPI.register(data);
+    sessionGen.current += 1;
     const { access_token, user: userData } = response.data || {};
     persistSession(access_token, userData);
     setUser(userData && typeof userData === 'object' ? userData : null);
@@ -132,6 +139,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
+    sessionGen.current += 1;
     try {
       await authAPI.logout();
     } catch {
