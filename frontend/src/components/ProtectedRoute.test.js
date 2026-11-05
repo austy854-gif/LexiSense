@@ -39,7 +39,7 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
-  process.env = { ...ORIGINAL_ENV, REACT_APP_APP_URL: 'https://app.lexisense.net', REACT_APP_LANDING_URL: 'https://lexisense.net' };
+  process.env = { ...ORIGINAL_ENV, REACT_APP_APP_URL: 'https://app.lexisense.net', REACT_APP_LANDING_URL: 'https://lexisense.net', REACT_APP_AUTH_ON_LANDING: 'false' };
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -85,6 +85,15 @@ test('app host: signed in renders children; role check unchanged', () => {
 test('vars unset: unchanged flow', () => {
   process.env = { ...ORIGINAL_ENV, REACT_APP_APP_URL: '', REACT_APP_LANDING_URL: '' };
   const replace = setLocation('localhost:3000', '/contracts');
+  renderAt('/contracts');
+  expect(replace).not.toHaveBeenCalled();
+  expect(text()).toBe('login page');
+});
+
+test('temp auth-on-landing: protected route stays on landing and applies auth checks', () => {
+  process.env = { ...ORIGINAL_ENV, REACT_APP_APP_URL: 'https://app.lexisense.net', REACT_APP_LANDING_URL: 'https://lexisense.net' };
+  delete process.env.REACT_APP_AUTH_ON_LANDING;
+  const replace = setLocation('www.lexisense.net', '/contracts');
   renderAt('/contracts');
   expect(replace).not.toHaveBeenCalled();
   expect(text()).toBe('login page');

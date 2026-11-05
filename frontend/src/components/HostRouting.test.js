@@ -36,6 +36,8 @@ beforeEach(() => {
     ...ORIGINAL_ENV,
     REACT_APP_APP_URL: 'https://app.lexisense.net',
     REACT_APP_LANDING_URL: 'https://lexisense.net',
+    // Permanent split behaviour for the redirect assertions below.
+    REACT_APP_AUTH_ON_LANDING: 'false',
   };
 });
 afterEach(() => {
@@ -108,4 +110,31 @@ test('landing host: legacy invite link is forwarded to the app host with its tok
   window.location = { host: 'lexisense.net', pathname: '/accept-invite', search: '?token=abc', hash: '', origin: 'https://lexisense.net', replace };
   render(<HostAuthRedirect><p>invite</p></HostAuthRedirect>);
   expect(replace).toHaveBeenCalledWith('https://app.lexisense.net/accept-invite?token=abc');
+});
+
+test('temp auth-on-landing: /login stays on the landing host', () => {
+  process.env = {
+    ...ORIGINAL_ENV,
+    REACT_APP_APP_URL: 'https://app.lexisense.net',
+    REACT_APP_LANDING_URL: 'https://lexisense.net',
+    // default / unset → temporary behaviour
+  };
+  delete process.env.REACT_APP_AUTH_ON_LANDING;
+  const replace = setHost('lexisense.net', '/login');
+  render(<HostAuthRedirect><p>login page</p></HostAuthRedirect>);
+  expect(replace).not.toHaveBeenCalled();
+  expect(text()).toContain('login page');
+});
+
+test('temp auth-on-landing: signed-in user on landing "/" gets the dashboard', () => {
+  process.env = {
+    ...ORIGINAL_ENV,
+    REACT_APP_APP_URL: 'https://app.lexisense.net',
+    REACT_APP_LANDING_URL: 'https://lexisense.net',
+  };
+  delete process.env.REACT_APP_AUTH_ON_LANDING;
+  mockAuth = { user: { id: 1 }, loading: false };
+  setHost('www.lexisense.net');
+  renderHome();
+  expect(text()).toBe('dash');
 });

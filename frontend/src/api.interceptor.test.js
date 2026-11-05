@@ -35,7 +35,7 @@ describe('401 interceptor and cross-host redirect', () => {
     window.location = { host, pathname: '/contracts', search: '', hash: '', origin: `https://${host}`, href: `https://${host}/contracts`, replace: jest.fn() };
   }
   beforeEach(() => {
-    process.env = { ...ORIGINAL_ENV, REACT_APP_APP_URL: 'https://app.lexisense.net', REACT_APP_LANDING_URL: 'https://lexisense.net' };
+    process.env = { ...ORIGINAL_ENV, REACT_APP_APP_URL: 'https://app.lexisense.net', REACT_APP_LANDING_URL: 'https://lexisense.net', REACT_APP_AUTH_ON_LANDING: 'false' };
   });
   afterEach(() => { process.env = ORIGINAL_ENV; window.location = originalLocation; });
   const err = { response: { status: 401 }, config: { url: '/auth/me' } };

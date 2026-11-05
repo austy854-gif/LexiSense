@@ -30,6 +30,23 @@ function currentHost(location) {
   return ((location && location.host) || '').toLowerCase();
 }
 
+/**
+ * TEMPORARY — while app.lexisense.net lacks a working TLS cert, serve
+ * /login, /register, password-reset, invite accept, and the post-login
+ * app (protected routes + dashboard on "/") on apex/www instead of
+ * redirecting those visits to the app host.
+ *
+ * Default: enabled (anything other than the string "false").
+ *
+ * REVERT (restore domain-split redirects once the app-host cert works):
+ *   1. Set REACT_APP_AUTH_ON_LANDING=false in the frontend build env, OR
+ *   2. Change the comparison below to always return false, then redeploy.
+ * Prefer (1). Do not touch vercel.json domain config for this revert.
+ */
+export function authOnLandingEnabled(env = process.env) {
+  return env.REACT_APP_AUTH_ON_LANDING !== 'false';
+}
+
 /** 'app' | 'landing' | 'combined' */
 export function getHostRole(env = process.env, location = window.location) {
   const { appUrl, landingUrl } = readEnv(env);
@@ -38,12 +55,19 @@ export function getHostRole(env = process.env, location = window.location) {
   const landingHost = hostOf(landingUrl);
   if (!host) return 'combined';
   if (appHost && host === appHost) return 'app';
-  if (landingHost && bare(host) === bare(landingHost)) return 'landing';
+  if (landingHost && bare(host) === bare(landingHost)) {
+    // Temp: treat landing as combined so login → "/" can render the dashboard
+    // and ProtectedRoute can keep auth sessions on apex/www.
+    if (authOnLandingEnabled(env)) return 'combined';
+    return 'landing';
+  }
   return 'combined';
 }
 
 /** Absolute app URL for a path when REACT_APP_APP_URL is set, else the relative path. */
 export function appUrl(path, env = process.env) {
+  // Temp: keep signup/login CTAs on the current (landing) origin.
+  if (authOnLandingEnabled(env)) return path;
   const { appUrl: base } = readEnv(env);
   return base ? `${base}${path}` : path;
 }
@@ -51,7 +75,7 @@ export function appUrl(path, env = process.env) {
 /**
  * Where a landing-host visit to an auth page (/login, /register) must go:
  * the same path (plus query/hash) on the app host. Returns null when no
- * cross-host redirect applies.
+ * cross-host redirect applies (including while authOnLandingEnabled).
  */
 export function authRedirectTarget(location = window.location, env = process.env) {
   if (getHostRole(env, location) !== 'landing') return null;
