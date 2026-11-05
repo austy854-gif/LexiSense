@@ -40,7 +40,7 @@ const STAT_ICON = {
   primary: { wrap: 'bg-primary/10', icon: 'text-primary' },
   success: { wrap: 'bg-[hsl(var(--risk-low)/0.12)]', icon: 'text-[hsl(var(--risk-low))]' },
   warning: { wrap: 'bg-[hsl(var(--risk-medium)/0.12)]', icon: 'text-[hsl(var(--risk-medium))]' },
-  destructive: { wrap: 'bg-destructive/10', icon: 'text-destructive' },
+  destructive: { wrap: 'bg-red-500/10', icon: 'text-red-500' },  // --ls-tone-red via App.css
 };
 
 const StatCard = ({ title, value, icon: Icon, description, tone = 'primary' }) => {
@@ -67,7 +67,7 @@ const StatCard = ({ title, value, icon: Icon, description, tone = 'primary' }) =
 
 const RiskBadge = ({ level }) => {
   const colors = {
-    high: 'bg-destructive/10 text-destructive border-destructive/20',
+    high: 'bg-red-500/10 text-red-500 border-red-500/20',  // App.css remaps to --ls-tone-red (#B1410C) for tint AA
     medium: 'bg-[hsl(var(--risk-medium)/0.12)] text-[hsl(var(--risk-medium))] border-[hsl(var(--risk-medium)/0.2)]',
     low: 'bg-[hsl(var(--risk-low)/0.12)] text-[hsl(var(--risk-low))] border-[hsl(var(--risk-low)/0.2)]',
   };

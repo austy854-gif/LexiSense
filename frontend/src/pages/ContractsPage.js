@@ -66,7 +66,7 @@ import { toast } from 'sonner';
 
 const RiskBadge = ({ level }) => {
   const colors = {
-    high: 'bg-destructive/10 text-destructive border-destructive/20',
+    high: 'bg-red-500/10 text-red-500 border-red-500/20',
     medium: 'bg-[hsl(var(--risk-medium)/0.12)] text-[hsl(var(--risk-medium))] border-[hsl(var(--risk-medium)/0.2)]',
     low: 'bg-[hsl(var(--risk-low)/0.12)] text-[hsl(var(--risk-low))] border-[hsl(var(--risk-low)/0.2)]',
   };

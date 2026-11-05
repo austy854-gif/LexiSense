@@ -36,7 +36,7 @@ import { toast } from 'sonner';
 
 const RiskBadge = ({ level, size = 'default' }) => {
   const colors = {
-    high: 'bg-destructive/10 text-destructive border-destructive/20',
+    high: 'bg-red-500/10 text-red-500 border-red-500/20',
     medium: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
     low: 'bg-green-500/10 text-green-500 border-green-500/20',
   };
@@ -487,7 +487,7 @@ export default function ContractDetailPage() {
                               <AlertTriangle
                                 className={`h-5 w-5 mt-0.5 ${
                                   risk.severity === 'high'
-                                    ? 'text-destructive'
+                                    ? 'text-red-500'
                                     : risk.severity === 'medium'
                                     ? 'text-yellow-500'
                                     : 'text-green-500'

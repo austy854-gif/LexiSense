@@ -47,6 +47,7 @@ test('login uses light theme shell with BrandLockup, not slate gradient', async 
   expect(shell.className).toContain('bg-background');
   expect(shell.className).not.toMatch(/slate-900/);
   expect(container.querySelector('img[alt="LexiSense"]')).toBeTruthy();
+  expect(container.querySelector('h1')).toBeTruthy();
 });
 
 test('register title is sentence case and stacks name fields on small screens', async () => {
