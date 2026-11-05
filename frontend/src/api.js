@@ -19,6 +19,9 @@ const api = axios.create({
 // Add auth token to requests
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
+  // Remember which token this request carried so a late 401 can't wipe a
+  // newer session established while the request was in flight.
+  config._sentToken = token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -38,11 +41,20 @@ export function shouldRedirectOnUnauthorized(error) {
   return error?.response?.status === 401 && !isAuthEndpoint(error?.config?.url);
 }
 
+/** True when the request was sent with a token other than the one now stored. */
+export function isStaleSessionError(error) {
+  const config = error?.config;
+  if (!config || !Object.prototype.hasOwnProperty.call(config, '_sentToken')) return false;
+  let current = null;
+  try { current = localStorage.getItem('token'); } catch { /* ignore */ }
+  return config._sentToken !== current;
+}
+
 // Handle auth errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (shouldRedirectOnUnauthorized(error)) {
+    if (shouldRedirectOnUnauthorized(error) && !isStaleSessionError(error)) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       // On the landing host a cross-host navigation to the app host is (or will
