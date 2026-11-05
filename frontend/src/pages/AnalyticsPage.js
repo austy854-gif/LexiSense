@@ -33,15 +33,15 @@ import { Link } from 'react-router-dom';
 import { EmptyState } from '../components/EmptyState';
 import { NothingExpiringIllustration } from '../components/illustrations/Illustrations';
 
-const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
-const RISK_COLORS = { high: '#ef4444', medium: '#f59e0b', low: '#10b981', unassessed: '#6b7280' };
+const CHART_COLORS = ['#8A0303', '#15803D', '#C2410C', '#4D4D52', '#E0464A', '#B1410C', '#F49A9D', '#A8A8AF'];
+const RISK_COLORS = { high: '#C2410C', medium: '#CA8A04', low: '#15803D', unassessed: '#6b7280' };
 
 const RiskBadge = ({ level }) => {
   const colors = {
     high: 'bg-red-500/10 text-red-500',
-    medium: 'bg-yellow-500/10 text-yellow-500',
-    low: 'bg-green-500/10 text-green-500',
-    unassessed: 'bg-gray-500/10 text-gray-500',
+    medium: 'bg-[hsl(var(--risk-medium)/0.12)] text-[hsl(var(--risk-medium))]',
+    low: 'bg-[hsl(var(--risk-low)/0.12)] text-[hsl(var(--risk-low))]',
+    unassessed: 'bg-muted text-muted-foreground',
   };
   return <Badge className={colors[level] || colors.unassessed}>{level}</Badge>;
 };
@@ -189,7 +189,7 @@ export default function AnalyticsPage() {
           {[
             { label: 'Total Contracts', val: summary.totalContracts || 0, icon: FileText, cls: 'text-primary bg-primary/10' },
             { label: 'Active', val: summary.activeContracts || 0, icon: TrendingUp, cls: 'text-green-500 bg-green-500/10' },
-            { label: 'High Risk', val: riskDist.high || 0, icon: AlertTriangle, cls: 'text-red-500 bg-red-500/10' },
+            { label: 'High risk', val: riskDist.high || 0, icon: AlertTriangle, cls: 'text-red-500 bg-red-500/10' },
             { label: 'Team Members', val: summary.teamMembers || 0, icon: Users, cls: 'text-blue-500 bg-blue-500/10' },
           ].map(({ label, val, icon: Icon, cls }) => (
             <Card key={label} className="hover:shadow-md transition-shadow">
@@ -308,9 +308,9 @@ export default function AnalyticsPage() {
             <CardContent>
               <div className="space-y-4">
                 {[
-                  { label: 'Next 7 Days', val: expiring.next7Days || 0, cls: 'bg-red-500/10 text-red-500' },
-                  { label: 'Next 30 Days', val: expiring.next30Days || 0, cls: 'bg-yellow-500/10 text-yellow-500' },
-                  { label: 'Next 90 Days', val: expiring.next90Days || 0, cls: 'bg-green-500/10 text-green-500' },
+                  { label: 'Next 7 days', val: expiring.next7Days || 0, cls: 'bg-red-500/10 text-red-500' },
+                  { label: 'Next 30 days', val: expiring.next30Days || 0, cls: 'bg-yellow-500/10 text-yellow-500' },
+                  { label: 'Next 90 days', val: expiring.next90Days || 0, cls: 'bg-green-500/10 text-green-500' },
                 ].map(({ label, val, cls }) => (
                   <div key={label} className={`flex items-center justify-between p-4 rounded-lg ${cls.split(' ')[0]}`}>
                     <p className="font-medium text-sm sm:text-base">{label}</p>

@@ -27,7 +27,7 @@ code, pre, .font-mono {
  * Theme tokens (--background, --primary, ...) live in index.css only: :root (= light, the
  * default), .light and .dark. This file used to redefine :root (dark values) and .light after
  * index.css; with no .dark block here, its :root won over index.css's .dark and dark mode got
- * the light-theme primary #0D4AA5 for links and text-primary (about 2:1 on the dark surfaces).
+ * the light-theme primary #8A0303 for links and text-primary (about 2:1 on the dark surfaces).
  */
 
 @layer base {
@@ -102,15 +102,16 @@ code, pre, .font-mono {
 
 /* Badge / status colors (risk, status, stat chips). Semantic hues kept; text is darker in light
    mode and lighter in dark mode so every badge is WCAG AA (>= 4.5:1) on its own tint over the
-   card, page and muted surfaces. Light green/amber/red follow the brand risk palette. The
-   ":root" values are the dark theme (the app default). */
+   card, page and muted surfaces. Light green/amber/red: green/amber stay risk; red maps to ERROR orange
+   (never brand blood red). ":root" values are the dark theme tones. */
 :root,
 .dark {
   --ls-tone-green: 71 194 137; /* #47C289 */
   --ls-tone-yellow: 244 164 52; /* #F4A434 */
-  --ls-tone-red: 246 140 144; /* #F68C90 (was #F47E82: 4.4:1 on the brand dark --muted) */
-  --ls-tone-gray: 164 170 183; /* #A4AAB7 */
-  --ls-tone-blue: 127 175 247; /* #7FAFF7 */
+  /* ERROR orange — never brand blood red (#E0464A) */
+  --ls-tone-red: 251 146 60; /* #FB923C error */
+  --ls-tone-gray: 168 168 175; /* #A8A8AF */
+  --ls-tone-blue: 96 165 250; /* #60A5FA cool info (not brand) */
   --ls-tone-orange: 245 145 82; /* #F59152 */
   --ls-tone-emerald: 69 199 158; /* #45C79E */
   --ls-tone-purple: 185 151 242; /* #B997F2 */
@@ -120,9 +121,10 @@ code, pre, .font-mono {
 .light {
   --ls-tone-green: 29 106 70; /* #1D6A46 */
   --ls-tone-yellow: 138 76 7; /* #8A4C07 */
-  --ls-tone-red: 188 36 41; /* #BC2429 */
-  --ls-tone-gray: 87 94 107; /* #575E6B */
-  --ls-tone-blue: 31 91 176; /* #1F5BB0 */
+  /* ERROR orange — #B1410C is AA-nudged from #C2410C for 10% tint on muted */
+  --ls-tone-red: 177 65 12; /* #B1410C error */
+  --ls-tone-gray: 77 77 82; /* #4D4D52 */
+  --ls-tone-blue: 37 99 168; /* #2563A8 cool info (not brand) */
   --ls-tone-orange: 163 72 11; /* #A3480B */
   --ls-tone-emerald: 28 110 80; /* #1C6E50 */
   --ls-tone-purple: 112 64 168; /* #7040A8 */
@@ -194,4 +196,15 @@ code, pre, .font-mono {
     linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
   background-size: 50px 50px;
+}
+
+
+/* Sonner richColors error → ERROR orange tokens (never brand blood red) */
+[data-sonner-toast][data-type="error"] {
+  background: hsl(var(--destructive)) !important;
+  color: hsl(var(--destructive-foreground)) !important;
+  border-color: hsl(var(--destructive) / 0.5) !important;
+}
+[data-sonner-toast][data-type="error"] [data-icon] {
+  color: hsl(var(--destructive-foreground)) !important;
 }

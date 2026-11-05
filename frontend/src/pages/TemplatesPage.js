@@ -150,12 +150,12 @@ export default function TemplatesPage() {
             <DialogTrigger asChild>
               <Button data-testid="create-template-btn">
                 <Plus className="mr-2 h-4 w-4" />
-                Create Template
+                Create template
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl">
               <DialogHeader>
-                <DialogTitle>Create Template</DialogTitle>
+                <DialogTitle>Create template</DialogTitle>
                 <DialogDescription>Create a reusable contract template</DialogDescription>
               </DialogHeader>
               <form onSubmit={handleCreate} className="space-y-4">
@@ -218,7 +218,7 @@ export default function TemplatesPage() {
                   </Button>
                   <Button type="submit" className="flex-1" disabled={creating}>
                     {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    Create Template
+                    Create template
                   </Button>
                 </div>
               </form>

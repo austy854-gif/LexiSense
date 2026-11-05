@@ -84,7 +84,7 @@ describe('theme wiring', () => {
     expect(src).toMatch(/localStorage\.getItem\('theme'\) \|\| 'light'/);
     expect(src).not.toMatch(/\|\| 'dark'/);
   });
-  test('dark link colour is not the light-theme #0D4AA5 (216 85% 35%)', () => {
+  test('dark link colour is not the light-theme #8A0303 (0 95.7% 27.6%)', () => {
     expect(tokens.dark.primary).not.toBe(tokens.light.primary);
     expect(ratio(color('dark', 'primary'), color('dark', 'background'))).toBeGreaterThanOrEqual(4.5);
   });

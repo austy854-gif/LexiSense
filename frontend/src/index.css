@@ -17,100 +17,100 @@ code {
 @layer base {
   /* Light is the default (marketing, email, first run). .dark is fully supported via the toggle. */
   :root {
-    --background: 40 33% 98%;          /* #FCFAF8 warm off-white */
-    --foreground: 220 30% 14%;         /* #19202E ink, 15.7:1 on bg */
+    --background: 0 0% 100%;             /* #FFFFFF */
+    --foreground: 0 0% 6.7%;             /* #111111, 18.9:1 on bg */
     --card: 0 0% 100%;
-    --card-foreground: 220 30% 14%;
+    --card-foreground: 0 0% 6.7%;
     --popover: 0 0% 100%;
-    --popover-foreground: 220 30% 14%;
-    --primary: 216 85% 35%;            /* #0D4AA5 Steady Blue, 7.9:1 on bg */
-    --primary-foreground: 0 0% 100%;   /* 8.3:1 on primary */
-    --secondary: 220 14% 94%;
-    --secondary-foreground: 220 30% 14%;
-    --muted: 220 14% 94%;
-    --muted-foreground: 220 10% 38%;   /* #575E6B, 5.7:1 on muted, 6.3:1 on bg */
-    --accent: 216 60% 94%;             /* hover/selected tint (was purple) */
-    --accent-foreground: 216 85% 30%;  /* 8.5:1 on accent */
-    --destructive: 358 68% 44%;        /* #BC2429, 5.9:1 on bg */
-    --destructive-foreground: 0 0% 100%;
-    --border: 220 13% 88%;             /* decorative dividers */
-    --input: 220 12% 52%;              /* 3.8:1, meets 3:1 for form controls */
-    --ring: 216 85% 35%;
+    --popover-foreground: 0 0% 6.7%;
+    --primary: 0 95.7% 27.6%;            /* #8A0303 blood red, 10.0:1 on bg */
+    --primary-foreground: 0 0% 100%;     /* white, 10.0:1 on primary */
+    --secondary: 240 5% 96%;             /* #F4F4F5 */
+    --secondary-foreground: 0 0% 6.7%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 3% 31.2%;    /* #4D4D52, 7.7:1 on muted */
+    --accent: 0 40% 96%;                 /* pale blood-red tint */
+    --accent-foreground: 0 90% 28%;      /* near primary, 9.1:1 on accent */
+    --destructive: 17.2 87.9% 40.5%;     /* #C2410C ERROR (never brand red), 5.2:1 on bg */
+    --destructive-foreground: 0 0% 100%; /* white, 5.2:1 on destructive */
+    --border: 240 6% 90%;                /* #E4E4E7 decorative dividers */
+    --input: 240 5% 45%;                 /* ~#6D6D78, >=3:1 for form controls */
+    --ring: 0 95.7% 27.6%;
     --radius: 0.5rem;
-    --highlight: 32 90% 48%;           /* #E9820C amber, fill only: "worth a look" */
-    --highlight-foreground: 220 30% 14%; /* 6.0:1 on highlight */
-    --risk-low: 152 55% 30%;           /* 5.5:1 on card */
-    --risk-medium: 32 90% 32%;         /* 5.6:1 on card */
-    --risk-high: 358 68% 44%;          /* 6.1:1 on card */
-    --chart-1: 216 85% 35%;
+    --highlight: 32 90% 48%;             /* #E9820C amber, fill only: "worth a look" */
+    --highlight-foreground: 0 0% 6.7%;   /* 6.9:1 on highlight */
+    --risk-low: 152 55% 30%;             /* 5.5:1 on card */
+    --risk-medium: 32 90% 32%;           /* 5.6:1 on card */
+    --risk-high: 17.2 87.9% 40.5%;       /* #C2410C error token (not brand red) */
+    --chart-1: 0 95.7% 27.6%;            /* brand blood red */
     --chart-2: 152 55% 32%;
     --chart-3: 32 90% 48%;
-    --chart-4: 358 68% 44%;
-    --chart-5: 220 12% 55%;
+    --chart-4: 17.2 87.9% 40.5%;         /* error orange */
+    --chart-5: 240 4% 55%;
   }
 
   .dark {
-    --background: 220 25% 9%;          /* #11151D */
-    --foreground: 220 20% 95%;         /* 16.2:1 on bg */
-    --card: 220 20% 12%;               /* #181D25 */
-    --card-foreground: 220 20% 95%;
-    --popover: 220 20% 12%;
-    --popover-foreground: 220 20% 95%;
-    --primary: 216 85% 60%;            /* #4288F0, 5.2:1 on bg, 4.8:1 on card */
-    --primary-foreground: 220 30% 8%;  /* dark text on primary buttons, 5.4:1 */
-    --secondary: 220 16% 18%;
-    --secondary-foreground: 220 20% 95%;
-    --muted: 220 16% 18%;
-    --muted-foreground: 220 12% 68%;   /* 6.1:1 on muted */
-    --accent: 216 40% 20%;             /* hover/selected tint (was purple) */
-    --accent-foreground: 216 90% 82%;  /* 8.0:1 on accent */
-    --destructive: 358 80% 66%;        /* #EE6368, 5.8:1 on bg */
-    --destructive-foreground: 220 30% 8%;
-    --border: 220 14% 22%;
-    --input: 220 12% 46%;              /* 3.4:1 on card */
-    --ring: 216 85% 60%;
+    --background: 240 6.7% 5.9%;         /* #0E0E10 */
+    --foreground: 240 4.8% 95.9%;        /* #F4F4F5, 17.5:1 on bg */
+    --card: 240 5% 7.5%;                 /* #121214, keeps primary >=4.5:1 */
+    --card-foreground: 240 4.8% 95.9%;
+    --popover: 240 5% 7.5%;
+    --popover-foreground: 240 4.8% 95.9%;
+    --primary: 358.1 71.1% 57.5%;        /* #E0464A, 4.7:1 on bg, 4.6:1 on card */
+    --primary-foreground: 0 0% 6.7%;     /* #111111 (white on #E0464A is 4.08:1 FAIL) */
+    --secondary: 240 5% 14%;             /* #222225 */
+    --secondary-foreground: 240 4.8% 95.9%;
+    --muted: 240 5% 14%;
+    --muted-foreground: 240 4.2% 67.3%;  /* #A8A8AF, 6.7:1 on muted */
+    --accent: 358 30% 16%;               /* dark blood-red tint */
+    --accent-foreground: 358 80% 78%;    /* 7.4:1 on accent */
+    --destructive: 27 96% 61%;           /* #FB923C ERROR (never brand red), 8.5:1 on bg */
+    --destructive-foreground: 0 0% 6.7%; /* #111111 (white on #FB923C is 2.26:1 FAIL) */
+    --border: 240 5% 18%;
+    --input: 240 4% 46%;                 /* >=3:1 on card */
+    --ring: 358.1 71.1% 57.5%;
     --highlight: 32 90% 55%;
-    --highlight-foreground: 220 30% 8%;  /* 8.1:1 */
-    --risk-low: 152 50% 52%;           /* 7.5:1 on card */
-    --risk-medium: 35 90% 58%;         /* 8.2:1 on card */
-    --risk-high: 358 80% 66%;          /* 5.3:1 on card */
-    --chart-1: 216 85% 60%;
+    --highlight-foreground: 0 0% 6.7%;   /* 8.1:1 */
+    --risk-low: 152 50% 52%;             /* 8.0:1 on card */
+    --risk-medium: 35 90% 58%;           /* 8.8:1 on card */
+    --risk-high: 27 96% 61%;             /* #FB923C error token (not brand red) */
+    --chart-1: 358.1 71.1% 57.5%;
     --chart-2: 152 50% 52%;
     --chart-3: 35 90% 58%;
-    --chart-4: 358 80% 66%;
-    --chart-5: 220 12% 62%;
+    --chart-4: 27 96% 61%;
+    --chart-5: 240 4% 62%;
   }
 
   .light {
-    --background: 40 33% 98%;          /* #FCFAF8 warm off-white */
-    --foreground: 220 30% 14%;         /* #19202E ink, 15.7:1 on bg */
+    --background: 0 0% 100%;             /* #FFFFFF */
+    --foreground: 0 0% 6.7%;             /* #111111, 18.9:1 on bg */
     --card: 0 0% 100%;
-    --card-foreground: 220 30% 14%;
+    --card-foreground: 0 0% 6.7%;
     --popover: 0 0% 100%;
-    --popover-foreground: 220 30% 14%;
-    --primary: 216 85% 35%;            /* #0D4AA5 Steady Blue, 7.9:1 on bg */
-    --primary-foreground: 0 0% 100%;   /* 8.3:1 on primary */
-    --secondary: 220 14% 94%;
-    --secondary-foreground: 220 30% 14%;
-    --muted: 220 14% 94%;
-    --muted-foreground: 220 10% 38%;   /* #575E6B, 5.7:1 on muted, 6.3:1 on bg */
-    --accent: 216 60% 94%;             /* hover/selected tint (was purple) */
-    --accent-foreground: 216 85% 30%;  /* 8.5:1 on accent */
-    --destructive: 358 68% 44%;        /* #BC2429, 5.9:1 on bg */
-    --destructive-foreground: 0 0% 100%;
-    --border: 220 13% 88%;             /* decorative dividers */
-    --input: 220 12% 52%;              /* 3.8:1, meets 3:1 for form controls */
-    --ring: 216 85% 35%;
-    --highlight: 32 90% 48%;           /* #E9820C amber, fill only: "worth a look" */
-    --highlight-foreground: 220 30% 14%; /* 6.0:1 on highlight */
-    --risk-low: 152 55% 30%;           /* 5.5:1 on card */
-    --risk-medium: 32 90% 32%;         /* 5.6:1 on card */
-    --risk-high: 358 68% 44%;          /* 6.1:1 on card */
-    --chart-1: 216 85% 35%;
+    --popover-foreground: 0 0% 6.7%;
+    --primary: 0 95.7% 27.6%;            /* #8A0303 blood red, 10.0:1 on bg */
+    --primary-foreground: 0 0% 100%;     /* white, 10.0:1 on primary */
+    --secondary: 240 5% 96%;             /* #F4F4F5 */
+    --secondary-foreground: 0 0% 6.7%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 3% 31.2%;    /* #4D4D52, 7.7:1 on muted */
+    --accent: 0 40% 96%;                 /* pale blood-red tint */
+    --accent-foreground: 0 90% 28%;      /* near primary, 9.1:1 on accent */
+    --destructive: 17.2 87.9% 40.5%;     /* #C2410C ERROR (never brand red), 5.2:1 on bg */
+    --destructive-foreground: 0 0% 100%; /* white, 5.2:1 on destructive */
+    --border: 240 6% 90%;                /* #E4E4E7 decorative dividers */
+    --input: 240 5% 45%;                 /* ~#6D6D78, >=3:1 for form controls */
+    --ring: 0 95.7% 27.6%;
+    --highlight: 32 90% 48%;             /* #E9820C amber, fill only: "worth a look" */
+    --highlight-foreground: 0 0% 6.7%;   /* 6.9:1 on highlight */
+    --risk-low: 152 55% 30%;             /* 5.5:1 on card */
+    --risk-medium: 32 90% 32%;           /* 5.6:1 on card */
+    --risk-high: 17.2 87.9% 40.5%;       /* #C2410C error token (not brand red) */
+    --chart-1: 0 95.7% 27.6%;            /* brand blood red */
     --chart-2: 152 55% 32%;
     --chart-3: 32 90% 48%;
-    --chart-4: 358 68% 44%;
-    --chart-5: 220 12% 55%;
+    --chart-4: 17.2 87.9% 40.5%;         /* error orange */
+    --chart-5: 240 4% 55%;
   }
 }
 
@@ -157,34 +157,34 @@ code {
 
 /*
  * Marketing landing page (src/pages/LandingPage.js).
- * Always light, whatever theme the app is in: these "Steady Blue" light tokens
- * (brand guide, Direction 1) are re-declared on the landing page subtree only,
+ * Always light, whatever theme the app is in: these blood-red light tokens
+ * are re-declared on the landing page subtree only,
  * so ThemeContext and the app's .dark/.light tokens are left untouched.
  */
 @layer base {
   .lexi-landing {
     color-scheme: light;
-    --background: 40 33% 98%;
-    --foreground: 220 30% 14%;
+    --background: 0 0% 100%;
+    --foreground: 0 0% 6.7%;
     --card: 0 0% 100%;
-    --card-foreground: 220 30% 14%;
+    --card-foreground: 0 0% 6.7%;
     --popover: 0 0% 100%;
-    --popover-foreground: 220 30% 14%;
-    --primary: 216 85% 35%;
+    --popover-foreground: 0 0% 6.7%;
+    --primary: 0 95.7% 27.6%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 220 14% 94%;
-    --secondary-foreground: 220 30% 14%;
-    --muted: 220 14% 94%;
-    --muted-foreground: 220 10% 38%;
-    --accent: 216 60% 94%;
-    --accent-foreground: 216 85% 30%;
-    --destructive: 358 68% 44%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 0 0% 6.7%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 3% 31.2%;
+    --accent: 0 40% 96%;
+    --accent-foreground: 0 90% 28%;
+    --destructive: 17.2 87.9% 40.5%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 13% 88%;
-    --input: 220 12% 52%;
-    --ring: 216 85% 35%;
+    --border: 240 6% 90%;
+    --input: 240 5% 45%;
+    --ring: 0 95.7% 27.6%;
     --highlight: 32 90% 48%;
-    --highlight-foreground: 220 30% 14%;
+    --highlight-foreground: 0 0% 6.7%;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     scroll-behavior: smooth;
   }

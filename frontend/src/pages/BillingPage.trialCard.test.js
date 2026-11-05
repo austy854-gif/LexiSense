@@ -17,7 +17,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 // Shape of GET /billing/plans: the trial plan has no priceId.
 const plans = [
   { id: 'trial', name: 'Free trial', price: 0, interval: 'month', features: ['Limited contract uploads'], cta: 'Start free trial' },
-  { id: 'team', name: 'Team plan', price: 49, interval: 'month', features: ['Unlimited contract uploads'], cta: 'Upgrade to Team', priceId: 'price_team' },
+  { id: 'team', name: 'Team plan', price: 49, interval: 'month', features: ['Contract uploads'], cta: 'Upgrade to Team', priceId: 'price_team' },
 ];
 
 let container;

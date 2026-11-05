@@ -36,30 +36,40 @@ const NothingExpiringCard = () => (
   </Card>
 );
 
-const StatCard = ({ title, value, icon: Icon, description, color = 'primary' }) => (
+const STAT_ICON = {
+  primary: { wrap: 'bg-primary/10', icon: 'text-primary' },
+  success: { wrap: 'bg-[hsl(var(--risk-low)/0.12)]', icon: 'text-[hsl(var(--risk-low))]' },
+  warning: { wrap: 'bg-[hsl(var(--risk-medium)/0.12)]', icon: 'text-[hsl(var(--risk-medium))]' },
+  destructive: { wrap: 'bg-red-500/10', icon: 'text-red-500' },  // --ls-tone-red via App.css
+};
+
+const StatCard = ({ title, value, icon: Icon, description, tone = 'primary' }) => {
+  const palette = STAT_ICON[tone] || STAT_ICON.primary;
+  return (
   <Card className="hover:shadow-md transition-shadow">
     <CardContent className="p-6">
       <div className="flex items-start justify-between">
         <div>
           <p className="text-sm font-medium text-muted-foreground">{title}</p>
-          <p className="text-3xl font-bold mt-2">{value}</p>
+          <p className="text-3xl font-bold mt-2 tabular-nums">{value}</p>
           {description && (
             <p className="text-xs text-muted-foreground mt-1">{description}</p>
           )}
         </div>
-        <div className={`p-3 rounded-lg bg-${color}/10`}>
-          <Icon className={`h-6 w-6 text-${color}`} />
+        <div className={`p-3 rounded-lg ${palette.wrap}`}>
+          <Icon className={`h-6 w-6 ${palette.icon}`} aria-hidden="true" />
         </div>
       </div>
     </CardContent>
   </Card>
-);
+  );
+};
 
 const RiskBadge = ({ level }) => {
   const colors = {
-    high: 'bg-red-500/10 text-red-500 border-red-500/20',
-    medium: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
-    low: 'bg-green-500/10 text-green-500 border-green-500/20',
+    high: 'bg-red-500/10 text-red-500 border-red-500/20',  // App.css remaps to --ls-tone-red (#B1410C) for tint AA
+    medium: 'bg-[hsl(var(--risk-medium)/0.12)] text-[hsl(var(--risk-medium))] border-[hsl(var(--risk-medium)/0.2)]',
+    low: 'bg-[hsl(var(--risk-low)/0.12)] text-[hsl(var(--risk-low))] border-[hsl(var(--risk-low)/0.2)]',
   };
   return (
     <Badge variant="outline" className={colors[level] || colors.low}>
@@ -77,7 +87,7 @@ const StatusBadge = ({ status }) => {
     review: 'bg-orange-500/10 text-orange-500',
     approved: 'bg-emerald-500/10 text-emerald-500',
   };
-  const labels = { review: 'In Review', approved: 'Approved' };
+  const labels = { review: 'In review', approved: 'Approved' };
   return (
     <Badge variant="secondary" className={colors[status] || colors.draft}>
       {labels[status] || status || 'Draft'}
@@ -159,44 +169,44 @@ export default function DashboardPage() {
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
-            title="Total Contracts"
+            title="Total contracts"
             value={overview.totalContracts || 0}
             icon={FileText}
-            color="primary"
+            tone="primary"
           />
           <StatCard
-            title="Active Contracts"
+            title="Active contracts"
             value={overview.activeContracts || 0}
             icon={TrendingUp}
             description="Currently in effect"
-            color="green-500"
+            tone="success"
           />
           {overview.expiringSoon ? (
             <StatCard
-              title="Expiring Soon"
+              title="Expiring soon"
               value={overview.expiringSoon}
               icon={Clock}
               description="Next 30 days"
-              color="yellow-500"
+              tone="warning"
             />
           ) : (
             <NothingExpiringCard />
           )}
           <StatCard
-            title="High Risk"
+            title="High risk"
             value={overview.highRisk || 0}
             icon={AlertTriangle}
             description="Requires attention"
-            color="red-500"
+            tone="destructive"
           />
         </div>
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Recent Contracts */}
+          {/* Recent contracts */}
           <Card className="lg:col-span-2">
             <CardHeader className="flex flex-row items-center justify-between pb-4">
-              <CardTitle className="text-lg font-semibold">Recent Contracts</CardTitle>
+              <CardTitle className="text-lg font-semibold">Recent contracts</CardTitle>
               <Link
                 to="/contracts"
                 className="text-sm text-primary hover:underline flex items-center gap-1"

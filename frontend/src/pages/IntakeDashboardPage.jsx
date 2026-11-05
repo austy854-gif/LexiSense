@@ -477,7 +477,7 @@ export default function IntakeDashboardPage() {
                           return (
                             <div key={idx} className="relative flex gap-4">
                               <div className="flex flex-col items-center">
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${item.error ? 'bg-red-500 text-white' : 'bg-primary text-primary-foreground'}`}>
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${item.error ? 'bg-destructive text-destructive-foreground' : 'bg-primary text-primary-foreground'}`}>
                                   <item.icon className="h-4 w-4" />
                                 </div>
                                 {idx < 7 && <div className="w-0.5 h-16 bg-muted" />}

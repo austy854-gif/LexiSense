@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   CalendarClock,
+  Check,
   FileSearch,
   Flag,
   FolderOpen,
@@ -12,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { appUrl } from '../lib/hostRouting';
+import { PAID_PLANS, SHARED_PLAN_FEATURES, TRIAL, membersLabel } from '../lib/plans';
 
 // Public marketing page shown at "/" to logged-out visitors.
 // It always renders in light mode: the `lexi-landing` class (index.css)
@@ -32,6 +34,7 @@ const NAV_LINKS = [
   { href: '#benefits', label: 'Why LexiSense' },
   { href: '#features', label: 'Features' },
   { href: '#how-it-works', label: 'How it works' },
+  { href: '#pricing', label: 'Pricing' },
   { href: '#faq', label: 'FAQ' },
 ];
 
@@ -40,7 +43,7 @@ const NAV_LINKS = [
 // (text is read from text-based PDF and .txt files only), risk is
 // contract-level only (riskLevel; never clause-level), never promise
 // automatic reminder or approval emails, and no invented stats, testimonials
-// or pricing.
+// pricing outside PricingSection.
 const FEATURES = [
   {
     icon: FolderOpen,
@@ -124,6 +127,94 @@ function Logo({ className = 'h-8 w-auto' }) {
   );
 }
 
+// Pricing copy: /workspace/lexisense-copy/landing-pricing-update-draft.md §5
+// (headline, intro, toggle, "billed annually", badge, CTAs, includes, footnote).
+// Numbers come from lib/plans.js (mirrors backend plans.py / billing.py). No
+// paid contract caps, discount percentages or "no credit card".
+function PricingSection() {
+  const [interval, setBillingInterval] = useState('monthly');
+  const options = [
+    { id: 'monthly', label: 'Monthly' },
+    { id: 'annual', label: 'Annual' },
+  ];
+  return (
+    <section id="pricing" aria-labelledby="pricing-heading">
+      <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
+        <div className="max-w-2xl">
+          <h2 id="pricing-heading" className="text-3xl font-bold tracking-[-0.01em] sm:text-4xl">
+            Simple plans for small teams
+          </h2>
+          <p className="mt-4 text-lg leading-relaxed text-muted-foreground">
+            Flat monthly prices for your whole workspace. Save with annual billing.
+          </p>
+        </div>
+        <div role="group" aria-label="Billing period" className="mt-8 inline-flex rounded-lg border border-border bg-card p-1">
+          {options.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              aria-pressed={interval === opt.id}
+              onClick={() => setBillingInterval(opt.id)}
+              className={`rounded-md px-4 py-2 text-sm font-semibold ${focusRing} ${
+                interval === opt.id ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-accent'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <ul className="mt-10 grid gap-6 md:grid-cols-3" aria-label="Plans">
+          {PAID_PLANS.map((plan) => (
+            <li
+              key={plan.id}
+              data-testid={`landing-plan-${plan.id}`}
+              className={`flex flex-col rounded-xl border bg-card p-6 shadow-sm ${plan.highlight ? 'border-primary' : 'border-border'}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xl font-semibold text-foreground">{plan.name}</h3>
+                {plan.highlight && (
+                  <span className="rounded-full bg-accent px-2.5 py-0.5 text-xs font-semibold text-primary">Most popular</span>
+                )}
+              </div>
+              <p className="mt-4">
+                <span className="text-4xl font-bold text-foreground" data-testid={`landing-price-${plan.id}`}>
+                  ${plan.prices[interval]}
+                </span>
+                <span className="text-muted-foreground"> / month</span>
+              </p>
+              <p className="mt-1 min-h-[1.25rem] text-sm text-muted-foreground">
+                {interval === 'annual' ? 'Billed annually' : 'Billed monthly'}
+              </p>
+              <h4 className="sr-only">{plan.name} includes</h4>
+              <ul className="mt-5 space-y-2 text-sm text-foreground">
+                {[membersLabel(plan), ...SHARED_PLAN_FEATURES].map((item) => (
+                  <li key={item} className="flex gap-2">
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+              <a
+                href={SIGNUP_PATH}
+                className={`mt-6 inline-flex items-center justify-center rounded-md px-4 py-2.5 text-sm font-semibold ${focusRing} focus-visible:ring-offset-2 ${
+                  plan.highlight ? 'bg-primary text-primary-foreground' : 'border border-[hsl(var(--input))] text-foreground hover:bg-accent'
+                }`}
+              >
+                Choose {plan.name}
+              </a>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-8 text-sm text-muted-foreground">
+          Start with a free trial ({TRIAL.days} days, up to {TRIAL.maxMembers} members and {TRIAL.contracts} contracts).
+          Questions about which plan fits? Email{' '}
+          <a href="mailto:support@lexisense.net" className={`rounded underline ${focusRing}`}>support@lexisense.net</a>.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 const MOBILE_MENU_ID = 'landing-mobile-menu';
 // Matches Tailwind's `md` breakpoint, where the inline nav takes over.
 const DESKTOP_QUERY = '(min-width: 768px)';
@@ -184,7 +275,7 @@ function SiteHeader() {
           </a>
           <a
             href={SIGNUP_PATH}
-            className={`hidden items-center rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:bg-[hsl(216_85%_29%)] min-[380px]:inline-flex ${focusRing} focus-visible:ring-offset-2`}
+            className={`hidden items-center rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 min-[380px]:inline-flex ${focusRing} focus-visible:ring-offset-2`}
           >
             Try LexiSense free
           </a>
@@ -235,7 +326,7 @@ function SiteHeader() {
             <a
               href={SIGNUP_PATH}
               onClick={() => closeMenu()}
-              className={`block rounded-md bg-primary px-3 py-3 text-center text-base font-semibold text-primary-foreground hover:bg-[hsl(216_85%_29%)] ${focusRing} focus-visible:ring-offset-2`}
+              className={`block rounded-md bg-primary px-3 py-3 text-center text-base font-semibold text-primary-foreground hover:bg-primary/90 ${focusRing} focus-visible:ring-offset-2`}
             >
               Try LexiSense free
             </a>
@@ -250,7 +341,7 @@ function PrimaryCta({ children, className = '' }) {
   return (
     <a
       href={SIGNUP_PATH}
-      className={`inline-flex items-center justify-center gap-2 rounded-md bg-primary px-5 py-3 text-base font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-[hsl(216_85%_29%)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`}
+      className={`inline-flex items-center justify-center gap-2 rounded-md bg-primary px-5 py-3 text-base font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`}
     >
       {children}
     </a>
@@ -266,7 +357,7 @@ function HeroIllustration() {
   ];
   return (
     <div aria-hidden="true" className="relative mx-auto w-full max-w-md">
-      <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_20px_50px_-20px_rgba(13,74,165,0.35)]">
+      <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_20px_50px_-20px_rgba(138,3,3,0.28)]">
         <div className="flex items-center justify-between">
           <div className="h-3 w-28 rounded-full bg-foreground/80" />
           <div className="flex items-center gap-2 rounded-full border border-[hsl(var(--input))] px-3 py-1.5">
@@ -457,6 +548,8 @@ export default function LandingPage() {
           </div>
         </section>
 
+        <PricingSection />
+
         {/* FAQ */}
         <section id="faq" aria-labelledby="faq-heading">
           <div className="mx-auto max-w-3xl px-4 py-20 sm:px-6">
@@ -520,6 +613,9 @@ export default function LandingPage() {
             <ul className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm font-medium text-muted-foreground">
               <li>
                 <a href="#features" className={`rounded hover:text-foreground ${focusRing}`}>Features</a>
+              </li>
+              <li>
+                <a href="#pricing" className={`rounded hover:text-foreground ${focusRing}`}>Pricing</a>
               </li>
               <li>
                 <a href="#faq" className={`rounded hover:text-foreground ${focusRing}`}>FAQ</a>

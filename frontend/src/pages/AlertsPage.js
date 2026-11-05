@@ -33,7 +33,12 @@ import { Link } from 'react-router-dom';
 
 const UrgencyBadge = ({ days }) => {
   if (days <= 7) {
-    return <Badge variant="destructive">Critical - {days} days</Badge>;
+    return (
+      <Badge variant="destructive" className="gap-1">
+        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+        Critical - {days} days
+      </Badge>
+    );
   }
   if (days <= 14) {
     return <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/20">{days} days</Badge>;
@@ -145,7 +150,7 @@ export default function AlertsPage() {
               ) : (
                 <>
                   <Send className="mr-2 h-4 w-4" />
-                  Send Alert Emails
+                  Send alert emails
                 </>
               )}
             </Button>

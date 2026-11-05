@@ -30,8 +30,10 @@ import {
   Download,
   Lock,
   HelpCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { PAID_PLANS, membersLabel } from '../lib/plans';
 // Trial length and upload limits are deliberately not shown to users (copy
 // rule); only the trial's end date from the backend, when known.
 import { isTrialActive, trialCardStatus, trialEndsLabel } from '../lib/billingHelpers.mjs';
@@ -61,6 +63,20 @@ const StatusBadge = ({ status }) => {
     </Badge>
   );
 };
+
+// Every paid plan has the same features on main (billing.py _plan_card);
+// only the member cap differs.
+const COMPARISON_FEATURES = [
+  'AI contract analysis',
+  'Contract repository',
+  'Dashboard & analytics',
+  'Team collaboration',
+  'Role-based access control',
+  'Approval workflows',
+  'Contract templates library',
+  'PDF export',
+  'Audit logs',
+];
 
 const TierBadge = ({ tier, planId }) => {
   const configs = {
@@ -189,8 +205,9 @@ export default function BillingPage() {
         </div>
 
         {subscription?.readOnly && (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm" data-testid="billing-readonly">
-            This workspace is read-only until billing is updated. You can still open contracts you already have.
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm flex gap-2" data-testid="billing-readonly" role="alert">
+            <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" aria-hidden="true" />
+            <span>This workspace is read-only until billing is updated. You can still open contracts you already have.</span>
           </div>
         )}
         {!subscription?.readOnly && subscription?.billingStatus === 'past_due' && (
@@ -258,7 +275,7 @@ export default function BillingPage() {
                   <div>
                     <p className="font-medium text-yellow-800">You're on the free trial</p>
                     <p className="text-sm text-yellow-700">
-                      Your free trial includes a limited number of contract uploads. Upgrade to the Team plan to keep adding contracts.
+                      Your free trial includes a limited number of contract uploads. Upgrade to Starter, Team or Business to keep adding contracts.
                     </p>
                   </div>
                 </div>
@@ -399,93 +416,29 @@ export default function BillingPage() {
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b text-sm text-muted-foreground">
-                    <th className="pb-3 font-medium w-64">Feature</th>
-                    <th className="pb-3 font-medium text-center">Free trial</th>
-                    <th className="pb-3 font-medium text-center">Paid plans</th>
+                    <th scope="col" className="pb-3 font-medium w-64">Feature</th>
+                    {PAID_PLANS.map((p) => (
+                      <th scope="col" key={p.id} className="pb-3 font-medium text-center">{p.name}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y">
                   <tr>
-                    <td className="py-3 font-medium">Contract uploads</td>
-                    <td className="py-3 text-center text-muted-foreground">Limited</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
+                    <th scope="row" className="py-3 font-medium">Team members</th>
+                    {PAID_PLANS.map((p) => (
+                      <td key={p.id} className="py-3 text-center">{membersLabel(p)}</td>
+                    ))}
                   </tr>
-                  <tr>
-                    <td className="py-3 font-medium">AI contract analysis</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Contract repository</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Dashboard & analytics</td>
-                    <td className="py-3 text-center text-muted-foreground">Basic</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Team collaboration</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Role-based access control</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Approval workflows</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Contract templates library</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">PDF export</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Audit logs</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Priority support</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
+                  {COMPARISON_FEATURES.map((feature) => (
+                    <tr key={feature}>
+                      <th scope="row" className="py-3 font-medium">{feature}</th>
+                      {PAID_PLANS.map((p) => (
+                        <td key={p.id} className="py-3 text-center text-green-500">
+                          <CheckCircle className="h-4 w-4 mx-auto" aria-label="Included" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -508,7 +461,7 @@ export default function BillingPage() {
                   What happens when my trial ends?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to the Team plan.
+                  When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to Starter, Team or Business.
                 </p>
               </details>
               <details className="group border rounded-lg p-4">

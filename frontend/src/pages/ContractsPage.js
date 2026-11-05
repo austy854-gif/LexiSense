@@ -67,8 +67,8 @@ import { toast } from 'sonner';
 const RiskBadge = ({ level }) => {
   const colors = {
     high: 'bg-red-500/10 text-red-500 border-red-500/20',
-    medium: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
-    low: 'bg-green-500/10 text-green-500 border-green-500/20',
+    medium: 'bg-[hsl(var(--risk-medium)/0.12)] text-[hsl(var(--risk-medium))] border-[hsl(var(--risk-medium)/0.2)]',
+    low: 'bg-[hsl(var(--risk-low)/0.12)] text-[hsl(var(--risk-low))] border-[hsl(var(--risk-low)/0.2)]',
   };
   return (
     <Badge variant="outline" className={colors[level] || 'bg-gray-500/10 text-gray-500'}>
@@ -376,17 +376,17 @@ export default function ContractsPage() {
           </div>
           {canWrite && (
           <div className="flex gap-2">
-            {/* Bulk Upload */}
+            {/* Bulk upload */}
             <Dialog open={bulkUploadOpen} onOpenChange={setBulkUploadOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline" data-testid="bulk-upload-btn">
                   <Files className="mr-2 h-4 w-4" />
-                  Bulk Upload
+                  Bulk upload
                 </Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>Bulk Upload Contracts</DialogTitle>
+                  <DialogTitle>Bulk upload contracts</DialogTitle>
                   <DialogDescription>Upload multiple files at once (max 10)</DialogDescription>
                 </DialogHeader>
                 <form onSubmit={handleBulkUpload} className="space-y-4">
@@ -461,12 +461,12 @@ export default function ContractsPage() {
               <DialogTrigger asChild>
                 <Button data-testid="upload-contract-btn">
                   <Plus className="mr-2 h-4 w-4" />
-                  Upload Contract
+                  Upload contract
                 </Button>
               </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
-                <DialogTitle>Upload Contract</DialogTitle>
+                <DialogTitle>Upload contract</DialogTitle>
                 <DialogDescription>
                   Upload a PDF or text file to analyze with AI
                 </DialogDescription>
@@ -665,7 +665,7 @@ export default function ContractsPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">All Risk Levels</SelectItem>
-                        <SelectItem value="high">High Risk</SelectItem>
+                        <SelectItem value="high">High risk</SelectItem>
                         <SelectItem value="medium">Medium Risk</SelectItem>
                         <SelectItem value="low">Low Risk</SelectItem>
                       </SelectContent>

@@ -37,11 +37,16 @@ test.each([
 // Quinn's final wording (invites-strings-final.md #35, #40).
 test.each([
   'Your plan, payment method and billing history',
-  "When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to the Team plan.",
+  "When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to Starter, Team or Business.",
+  'Upgrade to Starter, Team or Business to keep adding contracts.',
 ])('BillingPage uses final copy "%s"', (text) => {
   expect(source).toContain(text);
 });
 
 test('BillingPage no longer says contracts "stay safe"', () => {
   expect(source).not.toContain('stay safe');
+});
+
+test('BillingPage makes no unlimited claim', () => {
+  expect(source).not.toMatch(/unlimited/i);
 });

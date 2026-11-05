@@ -4,9 +4,8 @@ import { authAPI } from '../api';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Loader2 } from 'lucide-react';
-import { BrandLockup } from '../components/BrandLockup';
+import { AuthShell } from '../components/AuthShell';
 import { toast } from 'sonner';
 import { getErrorInfo } from '../lib/apiHelpers.mjs';
 
@@ -38,16 +37,11 @@ export default function ResetPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
-      <Card className="w-full max-w-md relative bg-card/95 backdrop-blur border-border/50 shadow-2xl">
-        <CardHeader className="text-center pb-2">
-          <div className="mb-4 flex justify-center">
-            <BrandLockup className="h-10 w-auto" />
-          </div>
-          <CardTitle className="text-2xl font-bold">Choose a new password</CardTitle>
-          <CardDescription>At least 8 characters. This signs every other session out.</CardDescription>
-        </CardHeader>
-        <CardContent>
+    <AuthShell
+      title="Choose a new password"
+      description="At least 8 characters. This signs every other session out."
+      testId="reset-password-page"
+    >
           {!token ? (
             <p className="text-sm text-muted-foreground text-center">
               This reset link is incomplete. Request a new one from the sign-in page.
@@ -78,8 +72,6 @@ export default function ResetPasswordPage() {
               Back to sign in
             </Link>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+        </AuthShell>
   );
 }

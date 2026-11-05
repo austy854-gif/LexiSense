@@ -12,11 +12,11 @@ import {
   roleLabel,
   validateInvitePassword,
 } from '../lib/inviteFlow.mjs';
+import { AuthShell } from '../components/AuthShell';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Loader2, Eye, EyeOff, UserPlus, AlertCircle } from 'lucide-react';
+import { Loader2, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 
 // Landing page for the "Accept invite" button in team invite emails
@@ -26,28 +26,11 @@ import { toast } from 'sonner';
 // Opening the link never changes anything; the invite is only claimed when
 // the form is submitted.
 
-function Shell({ children }) {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
-      <Card className="w-full max-w-md relative bg-card/95 backdrop-blur border-border/50 shadow-2xl" data-testid="accept-invite-page">
-        {children}
-      </Card>
-    </div>
-  );
-}
-
 function Message({ state, title, body, children }) {
   return (
-    <Shell>
-      <CardHeader className="text-center pb-2">
-        <div className="mx-auto mb-4 p-3 bg-muted rounded-xl w-fit">
-          <AlertCircle className="h-8 w-8 text-muted-foreground" />
-        </div>
-        <CardTitle className="text-2xl font-bold" data-testid={`accept-invite-${state}`}>{title}</CardTitle>
-        <CardDescription>{body}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">{children}</CardContent>
-    </Shell>
+    <AuthShell title={<span data-testid={`accept-invite-${state}`}>{title}</span>} description={body} testId="accept-invite-page">
+      <div className="flex flex-col gap-2">{children}</div>
+    </AuthShell>
   );
 }
 
@@ -197,31 +180,30 @@ export default function AcceptInvitePage() {
 
   // state === 'form'
   const team = preview.organizationName || 'your team';
+  const inviteDescription = (
+    <>
+      {preview.inviterName ? `${preview.inviterName} invited you to join ` : 'You were invited to join '}
+      <strong>{team}</strong> on LexiSense as {roleLabel(preview.role) === 'Admin' ? 'an' : 'a'} {roleLabel(preview.role)}.
+      {existingAccount ? (
+        <span className="block mt-2" data-testid="accept-invite-existing-account">{INVITE_COPY.existingAccountIntro}</span>
+      ) : (
+        ' Create your account to get started.'
+      )}
+    </>
+  );
   return (
-    <Shell>
-      <CardHeader className="text-center pb-2">
-        <div className="mx-auto mb-4 p-3 bg-primary rounded-xl w-fit">
-          <UserPlus className="h-8 w-8 text-primary-foreground" />
-        </div>
-        <CardTitle className="text-2xl font-bold" data-testid="accept-invite-form-title">{INVITE_COPY.formTitle}</CardTitle>
-        <CardDescription>
-          {preview.inviterName ? `${preview.inviterName} invited you to join ` : 'You were invited to join '}
-          <strong>{team}</strong> on LexiSense as {roleLabel(preview.role) === 'Admin' ? 'an' : 'a'} {roleLabel(preview.role)}.
-          {existingAccount ? (
-            <span className="block mt-2" data-testid="accept-invite-existing-account">{INVITE_COPY.existingAccountIntro}</span>
-          ) : (
-            ' Create your account to get started.'
-          )}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+    <AuthShell
+      title={<span data-testid="accept-invite-form-title">{INVITE_COPY.formTitle}</span>}
+      description={inviteDescription}
+      testId="accept-invite-page"
+    >
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="invite-email">Email</Label>
             <Input id="invite-email" type="email" value={preview.email} readOnly disabled data-testid="accept-invite-email" />
           </div>
           {!existingAccount && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="invite-first-name">First name</Label>
               <Input id="invite-first-name" placeholder="John" value={form.firstName} onChange={set('firstName')} autoComplete="given-name" />
@@ -288,7 +270,6 @@ export default function AcceptInvitePage() {
             )}
           </Button>
         </form>
-      </CardContent>
-    </Shell>
+    </AuthShell>
   );
 }
