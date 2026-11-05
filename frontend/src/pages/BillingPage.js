@@ -260,7 +260,7 @@ export default function BillingPage() {
                   <div>
                     <p className="font-medium text-yellow-800">You're on the free trial</p>
                     <p className="text-sm text-yellow-700">
-                      Your free trial includes a limited number of contract uploads. Upgrade to the Team plan to keep adding contracts.
+                      Your free trial includes a limited number of contract uploads. Upgrade to Starter, Team or Business to keep adding contracts.
                     </p>
                   </div>
                 </div>
@@ -403,7 +403,7 @@ export default function BillingPage() {
                   <tr className="border-b text-sm text-muted-foreground">
                     <th className="pb-3 font-medium w-64">Feature</th>
                     <th className="pb-3 font-medium text-center">Free trial</th>
-                    <th className="pb-3 font-medium text-center">Paid plans</th>
+                    <th className="pb-3 font-medium text-center">Starter, Team and Business</th>
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y">
@@ -510,7 +510,7 @@ export default function BillingPage() {
                   What happens when my trial ends?
                 </summary>
                 <p className="mt-2 text-muted-foreground">
-                  When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to the Team plan.
+                  When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to Starter, Team or Business.
                 </p>
               </details>
               <details className="group border rounded-lg p-4">
