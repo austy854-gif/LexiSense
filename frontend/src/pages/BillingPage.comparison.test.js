@@ -16,3 +16,11 @@ test('comparison has a members row from plan seat caps', () => {
   expect(source).toContain('Team members');
   expect(source).toContain('membersLabel(p)');
 });
+
+test('no priority support claim in billing or landing UI', () => {
+  const landing = fs.readFileSync(path.join(__dirname, 'LandingPage.js'), 'utf8');
+  expect(source).not.toMatch(/priority support/i);
+  expect(landing).not.toMatch(/priority support/i);
+  expect(source).toContain("'Approval workflows'");
+  expect(source).toContain("'Audit logs'");
+});

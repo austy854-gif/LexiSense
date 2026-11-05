@@ -76,7 +76,6 @@ const COMPARISON_FEATURES = [
   'Contract templates library',
   'PDF export',
   'Audit logs',
-  'Priority support',
 ];
 
 const TierBadge = ({ tier, planId }) => {
