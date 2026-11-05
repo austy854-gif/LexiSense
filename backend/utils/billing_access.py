@@ -181,7 +181,7 @@ def compute_entitlement(billing: Optional[dict], now: Optional[datetime] = None)
         state = ACCESS_GRACE if status == "past_due" else ACCESS_PAID
         return Entitlement(state, plan.id, True, plan.max_members)
     if gate == _READONLY:
-        if status == "past_due":
+        if status == "past_due" and billing.get("subscriptionTier") != "cancelled":
             plan, _ = _paid_plan_for(billing)
             cap = plan.max_members if plan else trial_cap
             return Entitlement(ACCESS_PAST_DUE, plan.id if plan else None, False, cap,

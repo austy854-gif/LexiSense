@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { authRedirectTarget } from './lib/hostRouting';
 
 // Guard against a missing REACT_APP_BACKEND_URL: previously this produced the
 // literal string "undefined/api/v1" and every request failed with a confusing
@@ -18,6 +19,9 @@ const api = axios.create({
 // Add auth token to requests
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
+  // Remember which token this request carried so a late 401 can't wipe a
+  // newer session established while the request was in flight.
+  config._sentToken = token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -37,14 +41,25 @@ export function shouldRedirectOnUnauthorized(error) {
   return error?.response?.status === 401 && !isAuthEndpoint(error?.config?.url);
 }
 
+/** True when the request was sent with a token other than the one now stored. */
+export function isStaleSessionError(error) {
+  const config = error?.config;
+  if (!config || !Object.prototype.hasOwnProperty.call(config, '_sentToken')) return false;
+  let current = null;
+  try { current = localStorage.getItem('token'); } catch { /* ignore */ }
+  return config._sentToken !== current;
+}
+
 // Handle auth errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (shouldRedirectOnUnauthorized(error)) {
+    if (shouldRedirectOnUnauthorized(error) && !isStaleSessionError(error)) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      window.location.href = '/login';
+      // On the landing host a cross-host navigation to the app host is (or will
+      // be) in flight; a landing-origin /login reload would override it.
+      if (!authRedirectTarget()) window.location.href = '/login';
     }
     return Promise.reject(error);
   }

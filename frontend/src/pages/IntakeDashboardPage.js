@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { agenticApi, contractsAPI, workflowAPI } from '../api';
+import { backendBaseUrl } from '../lib/hostRouting';
 import {
   Card, Button, Table, Tag, Select, Input, Modal, Form, message,
   Space, Tooltip, Dropdown, Menu, Badge, Alert, Divider, Typography,
@@ -619,10 +620,10 @@ const IntakeDashboardPage = () => {
           <Descriptions.Item label="URL">
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <Code style={{ background: '#f5f5f5', padding: '4px 8px', borderRadius: 4, fontSize: 13 }}>
-                {window.location.origin}/api/v1/agentic/intake/webhook/resend
+                {backendBaseUrl()}/api/v1/agentic/intake/webhook/resend
               </Code>
               <Button icon={<CopyOutlined />} onClick={() => {
-                navigator.clipboard.writeText(`${window.location.origin}/api/v1/agentic/intake/webhook/resend`);
+                navigator.clipboard.writeText(`${backendBaseUrl()}/api/v1/agentic/intake/webhook/resend`);
                 message.success('Copied to clipboard');
               }}>Copy</Button>
             </div>
