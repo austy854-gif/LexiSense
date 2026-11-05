@@ -123,6 +123,7 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     const response = await authAPI.login(email, password);
     sessionGen.current += 1;
+    setLoading(false);
     const { access_token, user: userData } = response.data || {};
     persistSession(access_token, userData);
     setUser(userData && typeof userData === 'object' ? userData : null);
@@ -132,6 +133,7 @@ export function AuthProvider({ children }) {
   const register = async (data) => {
     const response = await authAPI.register(data);
     sessionGen.current += 1;
+    setLoading(false);
     const { access_token, user: userData } = response.data || {};
     persistSession(access_token, userData);
     setUser(userData && typeof userData === 'object' ? userData : null);

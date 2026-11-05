@@ -54,3 +54,50 @@ describe('401 interceptor and cross-host redirect', () => {
     expect(window.location.href).toBe('/login');
   });
 });
+
+describe('401 interceptor with a newer session (real axios pipeline)', () => {
+  const originalLocation = window.location;
+  let api;
+  let originalAdapter;
+  beforeEach(() => {
+    jest.resetModules();
+    api = require('./api').default;
+    originalAdapter = api.defaults.adapter;
+    delete window.location;
+    window.location = { host: 'app.lexisense.net', pathname: '/login', search: '', hash: '', origin: 'https://app.lexisense.net', href: 'https://app.lexisense.net/login', replace: jest.fn() };
+    localStorage.clear();
+  });
+  afterEach(() => { api.defaults.adapter = originalAdapter; window.location = originalLocation; localStorage.clear(); });
+
+  function reject401(onSend) {
+    const { AxiosError } = require('axios');
+    return (config) => {
+      if (onSend) onSend(config);
+      return Promise.reject(new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, null, { status: 401, config, data: {}, headers: {} }));
+    };
+  }
+
+  test('late 401 for an old token does not clear a newer session or redirect', async () => {
+    localStorage.setItem('token', 'old-tok');
+    localStorage.setItem('user', '{"id":"old"}');
+    api.defaults.adapter = reject401((config) => {
+      expect(config.headers.Authorization).toBe('Bearer old-tok');
+      localStorage.setItem('token', 'new-tok');
+      localStorage.setItem('user', '{"id":"new"}');
+    });
+    await expect(api.get('/auth/me')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(localStorage.getItem('token')).toBe('new-tok');
+    expect(localStorage.getItem('user')).toBe('{"id":"new"}');
+    expect(window.location.href).toBe('https://app.lexisense.net/login');
+  });
+
+  test('401 for the current token still clears and redirects', async () => {
+    localStorage.setItem('token', 'tok');
+    localStorage.setItem('user', '{"id":"u"}');
+    api.defaults.adapter = reject401();
+    await expect(api.get('/auth/me')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(localStorage.getItem('token')).toBeNull();
+    expect(localStorage.getItem('user')).toBeNull();
+    expect(window.location.href).toBe('/login');
+  });
+});

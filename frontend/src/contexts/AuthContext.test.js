@@ -242,3 +242,24 @@ test('late startup getMe success does not resurrect a session after logout', asy
   expect(container.textContent).toBe('nouser');
   expect(localStorage.getItem('token')).toBeNull();
 });
+
+test('successful login ends startup loading while getMe is still pending', async () => {
+  localStorage.setItem('token', 'old-tok');
+  localStorage.setItem('user', JSON.stringify({ id: 'old', email: 'old@example.com' }));
+  authAPI.getMe.mockReturnValue(new Promise(() => {}));
+  authAPI.login.mockResolvedValue({ data: { access_token: 'new-tok', user: { id: 'new', email: 'new@example.com' } } });
+  await mountProvider();
+  expect(container.textContent).toBe('loading');
+  await act(async () => { await latestAuth.login('new@example.com', 'pw'); });
+  expect(container.textContent).toBe('user:new@example.com');
+});
+
+test('successful register ends startup loading while getMe is still pending', async () => {
+  localStorage.setItem('token', 'old-tok');
+  localStorage.setItem('user', JSON.stringify({ id: 'old', email: 'old@example.com' }));
+  authAPI.getMe.mockReturnValue(new Promise(() => {}));
+  authAPI.register.mockResolvedValue({ data: { access_token: 'new-tok', user: { id: 'new', email: 'new@example.com' } } });
+  await mountProvider();
+  await act(async () => { await latestAuth.register({ email: 'new@example.com' }); });
+  expect(container.textContent).toBe('user:new@example.com');
+});
