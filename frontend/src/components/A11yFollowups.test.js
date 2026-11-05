@@ -17,7 +17,11 @@ jest.mock('../api', () => ({
 }));
 jest.mock('./Layout', () => ({ Layout: ({ children }) => <main>{children}</main> }));
 jest.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({ user: { firstName: 'Alex', email: 'alex@example.com', role: 'admin' }, logout: jest.fn() }),
+  useAuth: () => ({
+    user: { firstName: 'Alex', email: 'alex@example.com', role: 'admin' },
+    access: require('../testUtils/accessFixture').accessForRole('admin'),
+    logout: jest.fn(),
+  }),
 }));
 
 const contract = {

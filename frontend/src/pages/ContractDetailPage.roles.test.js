@@ -11,7 +11,10 @@ jest.mock('../components/Layout', () => ({ Layout: ({ children }) => <div>{child
 
 let mockRole = 'user';
 jest.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({ user: { id: 'u1', email: 'u@example.com', role: mockRole } }),
+  useAuth: () => ({
+    user: { id: 'u1', email: 'u@example.com', role: mockRole },
+    access: require('../testUtils/accessFixture').accessForRole(mockRole),
+  }),
 }));
 jest.mock('../api', () => ({
   __esModule: true,
@@ -85,4 +88,21 @@ test.each([
 ])('draft contract: %s sees Submit for review = %s', async (role, visible) => {
   await renderAs(role, 'draft');
   expect(has('workflow-submit')).toBe(visible);
+});
+
+describe('fail closed while workspace access is not loaded', () => {
+  const { LOADING_ACCESS, FAILED_ACCESS } = require('../lib/access.mjs');
+  const fixture = require('../testUtils/accessFixture');
+  let spy;
+  afterEach(() => spy && spy.mockRestore());
+
+  test.each([
+    ['loading', LOADING_ACCESS],
+    ['failed', FAILED_ACCESS],
+  ])('admin sees no workflow buttons when access is %s', async (_label, access) => {
+    spy = jest.spyOn(fixture, 'accessForRole').mockReturnValue(access);
+    await renderAs('admin', 'review');
+    expect(has('workflow-approve')).toBe(false);
+    expect(has('workflow-reject')).toBe(false);
+  });
 });

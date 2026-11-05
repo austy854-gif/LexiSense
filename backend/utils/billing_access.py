@@ -95,6 +95,12 @@ ACCESS_PAST_DUE = "past_due"          # read-only after the grace window
 ACCESS_CANCELLED = "cancelled"
 ACCESS_UNVERIFIED_PLAN = "unverified_plan"
 
+#: States in which the workspace is read-only for every contract mutation.
+#: Single source of truth for ``assert_org_writable`` and ``/billing/capabilities``.
+#: ``trial_expired`` is deliberately absent: an expired trial only blocks new
+#: uploads (enforced by the upload gate), existing contracts stay editable.
+READ_ONLY_STATES = frozenset({ACCESS_PAST_DUE, ACCESS_CANCELLED, ACCESS_UNVERIFIED_PLAN})
+
 MSG_UNVERIFIED_PLAN = (
     "We couldn't verify your subscription plan. Please contact support to restore "
     "uploads and AI analysis."

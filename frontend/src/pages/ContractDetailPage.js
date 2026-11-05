@@ -3,7 +3,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, versionsAPI, workflowAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
-import { canPerformWorkflowAction, canWriteContracts, getErrorInfo } from '../lib/apiHelpers.mjs';
+import { canPerformWorkflowAction, getErrorInfo } from '../lib/apiHelpers.mjs';
+import { hasCapability, hasContractCapability } from '../lib/access.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -74,16 +75,25 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+const WORKFLOW_CAPABILITY = {
+  submit_for_review: 'canSubmitForReview',
+  approve: 'canApprove',
+  reject: 'canReject',
+  activate: 'canActivate',
+};
+
 export default function ContractDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const canWrite = canWriteContracts(user?.role);
-  // Workflow buttons follow the server's role check (routes/workflow.py):
-  // submit = admin/manager/user; approve, reject, activate = admin/manager.
-  const canDo = (action) => canPerformWorkflowAction(user?.role, action, contract?.status);
+  const { user, access } = useAuth();
   const [contract, setContract] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Workflow buttons need the server capability AND a legal transition from
+  // the current status (canPerformWorkflowAction mirrors routes/workflow.py).
+  const canDo = (action) =>
+    hasCapability(access, WORKFLOW_CAPABILITY[action]) &&
+    canPerformWorkflowAction(user?.role, action, contract?.status);
+  const restoreAllowed = hasContractCapability(access, 'canRestore', 'canRestoreOwn', contract, user);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
@@ -583,8 +593,8 @@ export default function ContractDetailPage() {
                                 )}
                               </div>
                             </div>
-                            {canWrite && (
-                            <Button
+                            {restoreAllowed && (
+                              <Button
                               variant="outline"
                               size="sm"
                               onClick={() => handleRestoreVersion(version.version)}

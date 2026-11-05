@@ -22,13 +22,16 @@ from utils.billing_access import (
     ACCESS_GRACE,
     ACCESS_PAID,
     ACCESS_PAST_DUE,
+    ACCESS_TRIAL_EXPIRED,
     ACCESS_UNVERIFIED_PLAN,
+    READ_ONLY_STATES,
     Entitlement,
     compute_entitlement,
     grace_ends_at,
     upload_gate,
 )
 from utils.feature_flags import billing_ui_enabled
+from utils.policy import capability_map
 from utils.env import get_env
 from utils import plans as plan_config
 from services.stripe_prices import display_price
@@ -258,7 +261,7 @@ async def assert_org_writable(org_id: str) -> None:
     await get_or_create_billing(org_id)
     raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
     entitlement = compute_entitlement(raw)
-    if entitlement.state in (ACCESS_PAST_DUE, ACCESS_CANCELLED, ACCESS_UNVERIFIED_PLAN):
+    if entitlement.state in READ_ONLY_STATES:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
 
 
@@ -386,6 +389,23 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
         accessMessage=entitlement.message,
         billingUiEnabled=billing_ui_enabled(),
     )
+
+
+@router.get("/capabilities")
+async def get_capabilities(current_user: dict = Depends(get_current_user)):
+    """Authoritative organization access and role capability state for the SPA."""
+    entitlement = await get_entitlement(current_user["organizationId"])
+    read_only = entitlement.state in READ_ONLY_STATES
+    return {
+        "state": entitlement.state,
+        "readOnly": read_only,
+        "message": entitlement.message,
+        "capabilities": capability_map(
+            current_user.get("role"),
+            read_only=read_only,
+            uploads_blocked=entitlement.state == ACCESS_TRIAL_EXPIRED,
+        ),
+    }
 
 
 @router.get("/config")

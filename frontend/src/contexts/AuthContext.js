@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { authAPI } from '../api';
+import { authAPI, billingAPI } from '../api';
+import { FAILED_ACCESS, LOADING_ACCESS, normalizeAccess } from '../lib/access.mjs';
 
 const AuthContext = createContext(null);
 
@@ -86,6 +87,18 @@ export function AuthProvider({ children }) {
   // Bumped by login/register/logout so a stale startup getMe() can't
   // overwrite or clear a session established after restore began.
   const sessionGen = useRef(0);
+  // Fail closed: every capability is false until /billing/capabilities answers.
+  const [access, setAccess] = useState(LOADING_ACCESS);
+
+  const refreshAccess = async () => {
+    try {
+      const response = await billingAPI.getCapabilities();
+      setAccess(normalizeAccess(response?.data));
+    } catch {
+      // Least-privileged state: all capabilities false, workspace read-only.
+      setAccess(FAILED_ACCESS);
+    }
+  };
 
   useEffect(() => {
     const token = readToken();
@@ -98,13 +111,14 @@ export function AuthProvider({ children }) {
       const restoreGen = sessionGen.current;
       const isCurrent = () => sessionGen.current === restoreGen;
       authAPI.getMe()
-        .then((res) => {
+        .then(async (res) => {
           if (!isCurrent()) return;
           const me = res?.data;
           if (me != null && typeof me === 'object' && !Array.isArray(me)) {
             setUser(me);
             persistSession(token, me);
           }
+          await refreshAccess();
         })
         .catch(() => {
           if (!isCurrent()) return;
@@ -127,6 +141,7 @@ export function AuthProvider({ children }) {
     const { access_token, user: userData } = response.data || {};
     persistSession(access_token, userData);
     setUser(userData && typeof userData === 'object' ? userData : null);
+    await refreshAccess();
     return userData;
   };
 
@@ -137,6 +152,7 @@ export function AuthProvider({ children }) {
     const { access_token, user: userData } = response.data || {};
     persistSession(access_token, userData);
     setUser(userData && typeof userData === 'object' ? userData : null);
+    await refreshAccess();
     return userData;
   };
 
@@ -149,10 +165,11 @@ export function AuthProvider({ children }) {
     }
     clearSessionKeys();
     setUser(null);
+    setAccess(LOADING_ACCESS);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, access, capabilities: access.capabilities, refreshAccess, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -134,6 +134,8 @@ async def lifespan(app: FastAPI):
     # with exponential backoff while the database is unreachable; readiness
     # (/api/v1/ready) reports 503 until it has completed.
     app.state.bootstrap_ok = False
+    app.state.alerts_ready = False
+    app.state.alert_index_task = None
 
     async def _bootstrap():
         delay = 2.0
@@ -172,6 +174,19 @@ async def lifespan(app: FastAPI):
                     from routes.agentic import _create_indexes as create_agentic_indexes
                     await create_agentic_indexes()
 
+                # Alert delivery is only safe once the unique idempotency index
+                # is built (it turns a duplicate upsert into DuplicateKeyError).
+                # A listed index may still be building, so alerts are enabled
+                # only after create_index returns successfully, retried in the
+                # background on transient failure.
+                from services.alert_service import ensure_alert_idempotency_index
+
+                def _enable_alerts():
+                    app.state.alerts_ready = True
+
+                app.state.alert_index_task = asyncio.create_task(
+                    ensure_alert_idempotency_index(db, _enable_alerts)
+                )
                 app.state.bootstrap_ok = True
                 logger.info("Startup bootstrap complete", extra={"attempt": attempt})
                 return
@@ -186,12 +201,24 @@ async def lifespan(app: FastAPI):
                 delay = min(delay * 2, 60.0)
 
     bootstrap_task = asyncio.create_task(_bootstrap())
+    from services.alert_scheduler import build_alert_scheduler
+    alert_scheduler = build_alert_scheduler(
+        db,
+        is_ready=lambda: bool(getattr(app.state, "bootstrap_ok", False))
+        and bool(getattr(app.state, "alerts_ready", False)),
+    )
+    alert_scheduler.start()
+    app.state.alert_scheduler = alert_scheduler
 
     yield
 
     logger.info("LexiSense API shutting down...")
+    alert_scheduler.shutdown(wait=False)
     if not bootstrap_task.done():
         bootstrap_task.cancel()
+    alert_index_task = getattr(app.state, "alert_index_task", None)
+    if alert_index_task is not None and not alert_index_task.done():
+        alert_index_task.cancel()
     client.close()
 
 
@@ -233,6 +260,7 @@ from routes.analytics import router as analytics_router, init_db as init_analyti
 from routes.audit import router as audit_router, init_db as init_audit_db
 from routes.notifications import router as notifications_router, init_db as init_notifications_db
 from routes.workflow import router as workflow_router, init_db as init_workflow_db
+from routes.tags import router as tags_router, init_db as init_tags_db
 # NOTE: Agentic subsystem is stripped from launch (see PRODUCT_SCOPE.md).
 # Backend code kept for future re-enable, but router is NOT mounted and DB is NOT initialized here.
 # Also requires Redis + Celery worker + beat which are not provisioned for launch.
@@ -253,6 +281,7 @@ init_analytics_db(db)
 init_audit_db(db)
 init_notifications_db(db)
 init_workflow_db(db)
+init_tags_db(db)
 init_billing_db(db)
 init_audit_service_db(db)
 
@@ -268,6 +297,7 @@ api_router.include_router(analytics_router)
 api_router.include_router(audit_router)
 api_router.include_router(notifications_router)
 api_router.include_router(workflow_router)
+api_router.include_router(tags_router)
 # Agentic routes are feature-flagged (all flags default to off):
 #   AGENTIC_PHASE1_ENABLED  -> risk + obligations
 #   AGENTIC_AGENTS_ENABLED / AGENTIC_INTAKE_ENABLED / AGENTIC_REDLINE_ENABLED

@@ -7,6 +7,7 @@ from utils.auth import get_current_user
 from services.audit_service import log_action, send_notification
 from utils.feature_flags import approval_emails_enabled
 from routes.billing import assert_org_writable
+from utils.policy import require_capability, require_uploader_for_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contracts", tags=["Workflow"])
@@ -72,26 +73,20 @@ async def workflow_action(
         raise HTTPException(status_code=404, detail="Contract not found")
 
     current_status = contract.get("status", "draft")
-    user_role = current_user["role"]
-
     # Determine new status based on action
     action_map = {
-        "submit_for_review": ("review", ["admin", "manager", "user"]),
-        "approve": ("approved", ["admin", "manager"]),
-        "reject": ("draft", ["admin", "manager"]),
-        "activate": ("active", ["admin", "manager"]),
+        "submit_for_review": "review",
+        "approve": "approved",
+        "reject": "draft",
+        "activate": "active",
     }
 
     if action not in action_map:
         raise HTTPException(status_code=400, detail=f"Invalid action: {action}")
 
-    new_status, allowed_roles = action_map[action]
-
-    if user_role not in allowed_roles:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Role '{user_role}' cannot perform '{action}'",
-        )
+    new_status = action_map[action]
+    require_capability(current_user, action)
+    require_uploader_for_user(current_user, contract)
 
     # Validate transition
     allowed = WORKFLOW_TRANSITIONS.get(current_status, [])

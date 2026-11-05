@@ -202,8 +202,20 @@ export function hasRole(role, allowed) {
 }
 
 export function canWriteContracts(role) {
-  return hasRole(role, WRITE_ROLES);
+  return canUpload(role);
 }
+
+// Explicit capabilities mirror backend/utils/policy.py. These helpers are
+// presentation guards only; every mutation is still authorized server-side.
+export function canUpload(role) { return hasRole(role, [ROLE_USER, ROLE_MANAGER, ROLE_ADMIN]); }
+export function canDelete(role) { return hasRole(role, [ROLE_MANAGER, ROLE_ADMIN]); }
+export function canRestore(role) { return hasRole(role, [ROLE_MANAGER, ROLE_ADMIN]); }
+export function canSubmitForReview(role) { return hasRole(role, [ROLE_USER, ROLE_MANAGER, ROLE_ADMIN]); }
+export function canApprove(role) { return hasRole(role, APPROVER_ROLES); }
+export function canReject(role) { return hasRole(role, APPROVER_ROLES); }
+export function canActivate(role) { return hasRole(role, APPROVER_ROLES); }
+export function canInvite(role) { return hasRole(role, ADMIN_ROLES); }
+export function canManageTemplates(role) { return hasRole(role, ADMIN_ROLES); }
 
 export function canReadAudit(role) {
   return hasRole(role, AUDIT_READER_ROLES);
