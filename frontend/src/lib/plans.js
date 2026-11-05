@@ -20,3 +20,21 @@ export function planNameList(conjunction = 'or') {
   const names = PAID_PLAN_NAMES;
   return `${names.slice(0, -1).join(', ')} ${conjunction} ${names[names.length - 1]}`;
 }
+
+// Shared paid-plan inclusions: backend/routes/billing.py _plan_card "features"
+// (identical on every paid plan; the seat line comes from maxMembers). Labels
+// follow the landing copy draft ("Contract templates" for the API's
+// "Contract templates library").
+export const SHARED_PLAN_FEATURES = [
+  'AI contract analysis',
+  'Contract repository',
+  'Role-based access control',
+  'Contract templates',
+  'PDF export',
+];
+
+export const membersLabel = (plan) => `Up to ${plan.maxMembers} members`;
+
+// Trial facts: seats from plans.py (_MEMBER_DEFAULTS["trial"]); days and
+// contract cap from billing.py (TRIAL_DAYS, TRIAL_CONTRACT_LIMIT).
+export const TRIAL = { days: 7, maxMembers: 3, contracts: 25 };

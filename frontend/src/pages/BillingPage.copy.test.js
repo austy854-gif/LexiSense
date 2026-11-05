@@ -39,7 +39,6 @@ test.each([
   'Your plan, payment method and billing history',
   "When your trial ends, your contracts stay in LexiSense. You just won't be able to add new ones until you upgrade to Starter, Team or Business.",
   'Upgrade to Starter, Team or Business to keep adding contracts.',
-  'Starter, Team and Business',
 ])('BillingPage uses final copy "%s"', (text) => {
   expect(source).toContain(text);
 });

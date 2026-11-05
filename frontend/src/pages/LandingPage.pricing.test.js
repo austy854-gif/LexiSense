@@ -70,3 +70,16 @@ test('landing page never claims unlimited anything', () => {
   act(() => toggle('Annual').click());
   expect(container.textContent).not.toMatch(/unlimited/i);
 });
+
+test('every plan card lists its seat line and the shared inclusions from billing.py', () => {
+  const shared = ['AI contract analysis', 'Contract repository', 'Role-based access control', 'Contract templates', 'PDF export'];
+  for (const [id, seats] of [['starter', 5], ['team', 15], ['business', 30]]) {
+    const items = [...container.querySelectorAll(`[data-testid="landing-plan-${id}"] ul li`)].map((li) => li.textContent);
+    expect(items).toEqual([`Up to ${seats} members`, ...shared]);
+  }
+});
+
+test('trial footnote matches backend trial facts', () => {
+  expect(section().textContent).toContain('Start with a free trial (7 days, up to 3 members and 25 contracts).');
+  expect(section().textContent).not.toMatch(/no credit card/i);
+});

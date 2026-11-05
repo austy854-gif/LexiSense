@@ -33,6 +33,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { PAID_PLANS, membersLabel } from '../lib/plans';
 // Trial length and upload limits are deliberately not shown to users (copy
 // rule); only the trial's end date from the backend, when known.
 import { isTrialActive, trialCardStatus, trialEndsLabel } from '../lib/billingHelpers.mjs';
@@ -62,6 +63,21 @@ const StatusBadge = ({ status }) => {
     </Badge>
   );
 };
+
+// Every paid plan has the same features on main (billing.py _plan_card);
+// only the member cap differs.
+const COMPARISON_FEATURES = [
+  'AI contract analysis',
+  'Contract repository',
+  'Dashboard & analytics',
+  'Team collaboration',
+  'Role-based access control',
+  'Approval workflows',
+  'Contract templates library',
+  'PDF export',
+  'Audit logs',
+  'Priority support',
+];
 
 const TierBadge = ({ tier, planId }) => {
   const configs = {
@@ -401,93 +417,29 @@ export default function BillingPage() {
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b text-sm text-muted-foreground">
-                    <th className="pb-3 font-medium w-64">Feature</th>
-                    <th className="pb-3 font-medium text-center">Free trial</th>
-                    <th className="pb-3 font-medium text-center">Starter, Team and Business</th>
+                    <th scope="col" className="pb-3 font-medium w-64">Feature</th>
+                    {PAID_PLANS.map((p) => (
+                      <th scope="col" key={p.id} className="pb-3 font-medium text-center">{p.name}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y">
                   <tr>
-                    <td className="py-3 font-medium">Contract uploads</td>
-                    <td className="py-3 text-center text-muted-foreground">Limited</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
+                    <th scope="row" className="py-3 font-medium">Team members</th>
+                    {PAID_PLANS.map((p) => (
+                      <td key={p.id} className="py-3 text-center">{membersLabel(p)}</td>
+                    ))}
                   </tr>
-                  <tr>
-                    <td className="py-3 font-medium">AI contract analysis</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Contract repository</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Dashboard & analytics</td>
-                    <td className="py-3 text-center text-muted-foreground">Basic</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Team collaboration</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Role-based access control</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Approval workflows</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Contract templates library</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">PDF export</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Audit logs</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 font-medium">Priority support</td>
-                    <td className="py-3 text-center text-muted-foreground">—</td>
-                    <td className="py-3 text-center text-green-500">
-                      <CheckCircle className="h-4 w-4 mx-auto" />
-                    </td>
-                  </tr>
+                  {COMPARISON_FEATURES.map((feature) => (
+                    <tr key={feature}>
+                      <th scope="row" className="py-3 font-medium">{feature}</th>
+                      {PAID_PLANS.map((p) => (
+                        <td key={p.id} className="py-3 text-center text-green-500">
+                          <CheckCircle className="h-4 w-4 mx-auto" aria-label="Included" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

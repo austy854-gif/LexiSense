@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   CalendarClock,
+  Check,
   FileSearch,
   Flag,
   FolderOpen,
@@ -12,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { appUrl } from '../lib/hostRouting';
-import { PAID_PLANS } from '../lib/plans';
+import { PAID_PLANS, SHARED_PLAN_FEATURES, TRIAL, membersLabel } from '../lib/plans';
 
 // Public marketing page shown at "/" to logged-out visitors.
 // It always renders in light mode: the `lexi-landing` class (index.css)
@@ -127,10 +128,9 @@ function Logo({ className = 'h-8 w-auto' }) {
 }
 
 // Pricing copy: /workspace/lexisense-copy/landing-pricing-update-draft.md §5
-// (headline, intro, toggle, "billed annually", badge, CTAs, footnote). Tier
-// inclusions are still TBC there, so cards show only the member cap from
-// lib/plans.js (mirrors backend plans.py). No trial length, contract caps or
-// discount percentages.
+// (headline, intro, toggle, "billed annually", badge, CTAs, includes, footnote).
+// Numbers come from lib/plans.js (mirrors backend plans.py / billing.py). No
+// paid contract caps, discount percentages or "no credit card".
 function PricingSection() {
   const [interval, setBillingInterval] = useState('monthly');
   const options = [
@@ -185,8 +185,14 @@ function PricingSection() {
               <p className="mt-1 min-h-[1.25rem] text-sm text-muted-foreground">
                 {interval === 'annual' ? 'Billed annually' : 'Billed monthly'}
               </p>
+              <h4 className="sr-only">{plan.name} includes</h4>
               <ul className="mt-5 space-y-2 text-sm text-foreground">
-                <li>Up to {plan.maxMembers} members</li>
+                {[membersLabel(plan), ...SHARED_PLAN_FEATURES].map((item) => (
+                  <li key={item} className="flex gap-2">
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                    {item}
+                  </li>
+                ))}
               </ul>
               <a
                 href={SIGNUP_PATH}
@@ -200,6 +206,7 @@ function PricingSection() {
           ))}
         </ul>
         <p className="mt-8 text-sm text-muted-foreground">
+          Start with a free trial ({TRIAL.days} days, up to {TRIAL.maxMembers} members and {TRIAL.contracts} contracts).
           Questions about which plan fits? Email{' '}
           <a href="mailto:support@lexisense.net" className={`rounded underline ${focusRing}`}>support@lexisense.net</a>.
         </p>
