@@ -107,6 +107,8 @@ STRIPE_MIN_TRIAL_END = timedelta(hours=48, minutes=5)
 CHECKOUT_IDEMPOTENCY_WINDOW_SECONDS = 10 * 60
 STRIPE_EVENT_LEASE_SECONDS = 60
 STRIPE_EVENT_PROCESSING_TIMEOUT_SECONDS = 55
+STRIPE_RETRIEVE_TIMEOUT_SECONDS = 20
+MAX_SUBSCRIPTION_RECONCILE_ATTEMPTS = 3
 
 
 def checkout_idempotency_key(org_id: str, price_id: str) -> str:
@@ -600,7 +602,7 @@ async def dispatch_stripe_event(event):
         await handler(data)
 
 
-def retrieve_current_subscription(subscription_id: str, customer_id=None, metadata=None):
+async def retrieve_current_subscription(subscription_id: str, customer_id=None, metadata=None):
     """Never use an event's historical status, price or period for billing.
 
     A genuine missing-resource 404 is terminal. All other Stripe errors propagate
@@ -608,7 +610,12 @@ def retrieve_current_subscription(subscription_id: str, customer_id=None, metada
     are retained in the terminal projection, never historical entitlement fields.
     """
     try:
-        return stripe.Subscription.retrieve(subscription_id)
+        # stripe==14.4.0 (requirements.txt) supports native async HTTP I/O.
+        # Bound the whole request, including SDK retries, inside the event lease.
+        return await asyncio.wait_for(
+            stripe.Subscription.retrieve_async(subscription_id),
+            timeout=STRIPE_RETRIEVE_TIMEOUT_SECONDS,
+        )
     except stripe.InvalidRequestError as exc:
         if exc.http_status != 404 or exc.code != "resource_missing":
             raise
@@ -626,8 +633,7 @@ async def handle_checkout_completed(session):
     customer_id = session.get("customer")
     
     if subscription_id:
-        subscription = retrieve_current_subscription(subscription_id, customer_id, {"organizationId": org_id})
-        await update_billing_from_subscription(org_id, subscription, subscription.get("customer") or customer_id)
+        await reconcile_org_subscription(org_id, subscription_id, customer_id, {"organizationId": org_id})
 
 
 async def handle_subscription_created(subscription):
@@ -643,25 +649,18 @@ async def handle_subscription_deleted(subscription):
 
 
 async def reconcile_subscription_event(event_subscription, deletion=False):
-    subscription_id = event_subscription["id"]
-    subscription = retrieve_current_subscription(
-        subscription_id, event_subscription.get("customer"), event_subscription.get("metadata"),
-    )
-    org_id = subscription.get("metadata", {}).get("organizationId")
-    customer_id = subscription.get("customer")
+    # Signed event identifiers route the refresh; only current Stripe data grants access.
+    metadata = event_subscription.get("metadata") or {}
+    org_id = metadata.get("organizationId")
+    customer_id = event_subscription.get("customer")
     if not org_id and customer_id:
         billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
         if billing:
             org_id = billing["organizationId"]
-    if not org_id:
-        return
-    if deletion:
-        current = (await db.organization_billing.find_one({"organizationId": org_id}) or {}).get("stripeSubscriptionId")
-        if _is_foreign_subscription(current, subscription_id):
-            # Preserve the stronger deletion guard, even for an abandoned checkout.
-            logger.warning("Ignoring deletion of non-current subscription %s for org %s", subscription_id, org_id)
-            return
-    await update_billing_from_subscription(org_id, subscription, customer_id)
+    if org_id:
+        await reconcile_org_subscription(
+            org_id, event_subscription["id"], customer_id, metadata, reject_foreign=deletion,
+        )
 
 
 def _invoice_subscription_id(invoice) -> Optional[str]:
@@ -697,15 +696,36 @@ async def reconcile_invoice_subscription(invoice):
     billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
     if not billing:
         return
-    if _is_foreign_subscription(billing.get("stripeSubscriptionId"), subscription_id):
-        logger.warning("Ignoring invoice for a non-current subscription of org %s", billing["organizationId"])
-        return
-    subscription = retrieve_current_subscription(subscription_id, customer_id)
-    await update_billing_from_subscription(billing["organizationId"], subscription, subscription.get("customer") or customer_id)
+    await reconcile_org_subscription(
+        billing["organizationId"], subscription_id, customer_id, reject_foreign=True,
+    )
 
 
-async def update_billing_from_subscription(org_id: str, subscription, customer_id: str):
-    """Update billing record from Stripe subscription object"""
+async def reconcile_org_subscription(org_id, subscription_id, customer_id, metadata=None, *, reject_foreign=False):
+    """Optimistically serialize each org's retrieval-through-persistence cycle.
+
+    Capture the revision BEFORE fetching Stripe. A racing writer invalidates the
+    snapshot, so retry with BOTH a new DB snapshot and a fresh Stripe retrieval.
+    A missing counter on a legacy document is initialized atomically on first write.
+    """
+    for _ in range(MAX_SUBSCRIPTION_RECONCILE_ATTEMPTS):
+        snapshot = await db.organization_billing.find_one({"organizationId": org_id})
+        if not snapshot:
+            return
+        if reject_foreign and _is_foreign_subscription(snapshot.get("stripeSubscriptionId"), subscription_id):
+            # Deletion and invoice events cannot change a different subscription.
+            logger.warning("Ignoring non-current subscription %s for org %s", subscription_id, org_id)
+            return
+        subscription = await retrieve_current_subscription(subscription_id, customer_id, metadata)
+        if await update_billing_from_subscription(
+            org_id, subscription, subscription.get("customer") or customer_id, snapshot=snapshot,
+        ):
+            return
+    raise HTTPException(status_code=503, detail="Billing changed during reconciliation. Please retry.")
+
+
+async def update_billing_from_subscription(org_id: str, subscription, customer_id: str, *, snapshot=None) -> bool:
+    """CAS a Stripe snapshot into billing; False requires a fresh Stripe retrieval."""
     status_map = {
         "active": BillingStatus.ACTIVE,
         "trialing": BillingStatus.TRIALING,
@@ -736,7 +756,7 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
     if subscription.get("trial_end"):
         trial_end = datetime.fromtimestamp(subscription["trial_end"], tz=timezone.utc).isoformat()
     
-    existing = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    existing = snapshot if snapshot is not None else (await db.organization_billing.find_one({"organizationId": org_id}) or {})
     current = existing.get("stripeSubscriptionId")
     if (_is_foreign_subscription(current, subscription.get("id"))
             and existing.get("billingStatus") in LIVE_BILLING_STATUSES
@@ -744,7 +764,7 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
         # A dead duplicate must not overwrite the org's live subscription.
         logger.warning("Ignoring %s subscription %s for org %s (current %s is live)",
                        stripe_status, subscription.get("id"), org_id, current)
-        return
+        return True
 
     price_id = subscription.get("items", {}).get("data", [{}])[0].get("price", {}).get("id")
     if tier == SubscriptionTier.TEAM and plan_config.plan_for_price_id(price_id) is None:
@@ -774,7 +794,14 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
         fields["pastDueSince"] = existing.get("pastDueSince") or now
     else:
         update["$unset"] = {"pastDueSince": ""}
-    await db.organization_billing.update_one({"organizationId": org_id}, update)
+    query = {"organizationId": org_id, "billingRevision": (
+        existing["billingRevision"] if "billingRevision" in existing else {"$exists": False}
+    )}
+    if "_id" in existing:
+        query["_id"] = existing["_id"]  # Fence a deleted/re-created record too.
+    update["$inc"] = {"billingRevision": 1}
+    result = await db.organization_billing.update_one(query, update)
+    return result.matched_count == 1
 
 
 def _plan_card(plan: plan_config.PlanConfig) -> dict:

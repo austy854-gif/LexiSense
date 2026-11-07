@@ -2,6 +2,7 @@
 unverified plan), BILLING_UI_ENABLED + GET /billing/config, chat/invite gates,
 duplicate-subscription guard, trial carry-over, webhook guards, tax labels."""
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -200,7 +201,7 @@ class TestWebhooks:
         billing_route.init_db(db)
 
     async def test_deleting_duplicate_keeps_org_paid(self, db, org_id, monkeypatch):
-        monkeypatch.setattr(billing_route.stripe.Subscription, "retrieve", lambda sid: _sub(sid, "canceled"))
+        monkeypatch.setattr(billing_route.stripe.Subscription, "retrieve_async", AsyncMock(side_effect=lambda sid: _sub(sid, "canceled")))
         await _seed_billing(db, org_id, **paid(stripeSubscriptionId="sub_live", stripeCustomerId="cus_1"))
         await billing_route.handle_subscription_deleted(_sub("sub_dup", "canceled"))
         doc = await db.organization_billing.find_one({"organizationId": org_id})
