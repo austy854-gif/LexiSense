@@ -199,7 +199,8 @@ class TestWebhooks:
     def _db(self, db):
         billing_route.init_db(db)
 
-    async def test_deleting_duplicate_keeps_org_paid(self, db, org_id):
+    async def test_deleting_duplicate_keeps_org_paid(self, db, org_id, monkeypatch):
+        monkeypatch.setattr(billing_route.stripe.Subscription, "retrieve", lambda sid: _sub(sid, "canceled"))
         await _seed_billing(db, org_id, **paid(stripeSubscriptionId="sub_live", stripeCustomerId="cus_1"))
         await billing_route.handle_subscription_deleted(_sub("sub_dup", "canceled"))
         doc = await db.organization_billing.find_one({"organizationId": org_id})

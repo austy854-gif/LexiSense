@@ -95,6 +95,11 @@ INDEX_SPECIFICATION: Dict[str, List[Dict[str, Any]]] = {
         {"keys": [("organizationId", 1)], "unique": True, "name": "uq_billing_org"},
         {"keys": [("stripeCustomerId", 1)], "sparse": True, "name": "ix_billing_customer"},
     ],
+    "stripe_events": [
+        {"keys": [("event_id", 1)], "unique": True, "name": "uq_stripe_events_event_id"},
+        {"keys": [("created_at", 1)], "expireAfterSeconds": 30 * 24 * 60 * 60,
+         "name": "ttl_stripe_events_created_at"},
+    ],
     "approvals": [
         {"keys": [("id", 1)], "unique": True, "name": "uq_approvals_id"},
         {"keys": [("organizationId", 1), ("contractId", 1), ("status", 1)], "name": "ix_approvals_org_contract_status"},
@@ -124,8 +129,9 @@ async def apply_indexes(db) -> Dict[str, int]:
 
     Safe to run on every startup: MongoDB treats an existing matching index as
     a no-op. Failures are logged and counted rather than raised, so a single
-    problematic collection (e.g. legacy duplicate values blocking a unique
-    index) cannot take the whole application down at boot.
+    problematic legacy collection cannot take the whole application down. Stripe
+    event indexes are mandatory: bootstrap must retry rather than accept webhook
+    deliveries without the cross-worker uniqueness guarantee.
     """
     created = 0
     failed: List[str] = []
@@ -139,9 +145,13 @@ async def apply_indexes(db) -> Dict[str, int]:
                     name=spec["name"],
                     unique=spec.get("unique", False),
                     sparse=spec.get("sparse", False),
+                    **({"expireAfterSeconds": spec["expireAfterSeconds"]} if "expireAfterSeconds" in spec else {}),
                 )
                 created += 1
             except Exception as exc:  # pragma: no cover - depends on live data
+                if collection_name == "stripe_events":
+                    logger.exception("Required Stripe event index creation failed: %s", spec["name"])
+                    raise
                 failed.append(f"{collection_name}.{spec['name']}")
                 logger.error(
                     "Index creation failed",

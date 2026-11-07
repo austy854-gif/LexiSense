@@ -1,0 +1,226 @@
+"""Real webhook and Mongo regressions; Stripe is always stubbed."""
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
+from routes import billing as billing
+from utils.database import apply_indexes
+from tests.unit.test_pricing_integrity import _checkout, fake_stripe, price_env  # noqa: F401
+
+
+def subscription(state="active", sid="sub_1"):
+    return {"id": sid, "customer": "cus_1", "metadata": {"organizationId": "org-alpha"},
+            "status": state, "items": {"data": [{"price": {"id": "price_team_monthly"}}]}}
+
+
+def event(kind="customer.subscription.updated", eid="evt_1", data=None):
+    return {"id": eid, "type": kind, "data": {"object": data or subscription()}}
+
+
+@pytest.fixture
+async def webhook(db, monkeypatch):
+    billing.init_db(db)
+    monkeypatch.setattr(billing, "stripe_api_key", "sk_test_x")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    await apply_indexes(db)
+    app = FastAPI()
+    app.include_router(billing.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async def send(evt):
+            monkeypatch.setattr(billing.stripe.Webhook, "construct_event", lambda *a: evt)
+            return await client.post("/billing/webhook", content=b"signed", headers={"stripe-signature": "test"})
+        yield send
+
+
+async def seed(db):
+    await db.organization_billing.insert_one({"organizationId": "org-alpha", "stripeCustomerId": "cus_1",
+        "stripeSubscriptionId": "sub_1", "subscriptionTier": "team", "billingStatus": "active"})
+
+
+async def test_replay_is_one_state_change(webhook, db, monkeypatch):
+    await seed(db)
+    retrieve = Mock(return_value=subscription("past_due"))
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", retrieve)
+    assert (await webhook(event())).status_code == 200
+    before = await db.organization_billing.find_one({})
+    second = await webhook(event())
+    assert second.status_code == 200 and second.json() == {"received": True, "duplicate": True}
+    assert await db.organization_billing.find_one({}) == before
+    assert before["billingStatus"] == "past_due"
+    retrieve.assert_called_once_with("sub_1")
+    claim = await db.stripe_events.find_one({"event_id": "evt_1"})
+    assert claim["type"] == "customer.subscription.updated" and isinstance(claim["created_at"], datetime)
+
+
+async def test_stale_update_after_delete_stays_cancelled(webhook, db, monkeypatch):
+    await seed(db)
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", lambda sid: subscription("canceled"))
+    assert (await webhook(event("customer.subscription.deleted", "evt_delete", subscription("canceled")))).status_code == 200
+    assert (await webhook(event(eid="evt_old_update"))).status_code == 200
+    doc = await db.organization_billing.find_one({})
+    assert doc["billingStatus"] == "cancelled" and doc["subscriptionTier"] == "cancelled"
+
+
+async def test_failed_dispatch_releases_claim(webhook, db, monkeypatch):
+    await seed(db)
+    retrieve = Mock(side_effect=[RuntimeError("temporary Stripe failure"), subscription("past_due")])
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", retrieve)
+    with pytest.raises(RuntimeError, match="temporary Stripe failure"):
+        await webhook(event())
+    assert await db.stripe_events.count_documents({}) == 0
+    assert (await webhook(event())).json() == {"received": True}
+    assert await db.stripe_events.count_documents({}) == 1 and retrieve.call_count == 2
+
+
+@pytest.mark.parametrize("kind", ["customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"])
+async def test_subscription_handlers_use_current_state(webhook, db, monkeypatch, kind):
+    await seed(db)
+    retrieve = Mock(return_value=subscription())
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", retrieve)
+    assert (await webhook(event(kind, data=subscription("canceled")))).status_code == 200
+    assert (await db.organization_billing.find_one({}))["billingStatus"] == "active"
+    retrieve.assert_called_once_with("sub_1")
+
+
+@pytest.mark.parametrize("kind", ["customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "invoice.paid", "invoice.payment_failed", "checkout.session.completed"])
+async def test_missing_subscription_is_terminal(webhook, db, monkeypatch, kind):
+    await seed(db)
+    error = billing.stripe.InvalidRequestError("No such subscription", param="id", code="resource_missing", http_status=404)
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", Mock(side_effect=error))
+    data = subscription()
+    if not kind.startswith("customer."):
+        data = {"subscription": "sub_1", "customer": "cus_1", "metadata": {"organizationId": "org-alpha"}}
+    assert (await webhook(event(kind, data=data))).status_code == 200
+    assert (await db.organization_billing.find_one({}))["billingStatus"] == "cancelled"
+
+
+@pytest.mark.parametrize("kind", ["invoice.paid", "invoice.payment_failed"])
+@pytest.mark.parametrize("state", ["active", "past_due", "canceled"])
+async def test_invoice_reconciles_fresh_subscription(webhook, db, monkeypatch, kind, state):
+    await seed(db)
+    retrieve = Mock(return_value=subscription(state))
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", retrieve)
+    data = {"customer": "cus_1", "parent": {"subscription_details": {"subscription": "sub_1"}}}
+    assert (await webhook(event(kind, data=data))).status_code == 200
+    assert (await db.organization_billing.find_one({}))["billingStatus"] == ("cancelled" if state == "canceled" else state)
+    retrieve.assert_called_once_with("sub_1")
+
+
+@pytest.mark.parametrize("kind", ["invoice.paid", "invoice.payment_failed"])
+async def test_non_subscription_invoice_is_noop(webhook, db, monkeypatch, kind):
+    await seed(db)
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", Mock(side_effect=AssertionError("must not retrieve")))
+    before = await db.organization_billing.find_one({})
+    await webhook(event(kind, data={"customer": "cus_1"}))
+    assert await db.organization_billing.find_one({}) == before
+
+
+async def test_invalid_signature_never_claimed(webhook, db, monkeypatch):
+    def invalid(*args):
+        raise billing.stripe.SignatureVerificationError("invalid", "bad")
+    monkeypatch.setattr(billing.stripe.Webhook, "construct_event", invalid)
+    request = SimpleNamespace(body=AsyncMock(return_value=b"bad"), headers={"stripe-signature": "bad"})
+    with pytest.raises(HTTPException) as exc:
+        await billing.stripe_webhook(request)
+    assert exc.value.status_code == 400
+    assert await db.stripe_events.count_documents({}) == 0
+
+
+async def test_indexes_include_unique_and_real_ttl(db):
+    await apply_indexes(db)
+    await apply_indexes(db)
+    indexes = await db.stripe_events.index_information()
+    assert indexes["uq_stripe_events_event_id"]["unique"] is True
+    assert indexes["ttl_stripe_events_created_at"]["expireAfterSeconds"] == 30 * 24 * 60 * 60
+
+
+async def test_checkout_has_stable_org_price_bucket_key(app, db, fake_stripe, monkeypatch):
+    monkeypatch.setattr(billing.stripe.Subscription, "list", lambda **kw: {"data": []})
+    await _checkout("org-alpha", planId="team")
+    await _checkout("org-alpha", planId="team")
+    first, second = fake_stripe.sessions
+    assert first["idempotency_key"] == second["idempotency_key"]
+    await _checkout("org-beta", planId="team")
+    await _checkout("org-alpha", planId="starter")
+    assert len({c["idempotency_key"] for c in fake_stripe.sessions}) == 3
+
+
+async def test_webhook_indexes_fail_closed(db, monkeypatch):
+    from pymongo.errors import OperationFailure
+    collection_type = type(db.stripe_events)
+    original = collection_type.create_index
+
+    async def fail_stripe(self, *args, **kwargs):
+        if kwargs.get("name") == "uq_stripe_events_event_id":
+            raise OperationFailure("index unavailable")
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(collection_type, "create_index", fail_stripe)
+    with pytest.raises(OperationFailure, match="index unavailable"):
+        await apply_indexes(db)
+
+
+async def test_checkout_key_changes_with_bucket(monkeypatch):
+    from datetime import datetime, timezone
+    class Clock:
+        timestamp = 1200
+
+        @classmethod
+        def now(cls, tz):
+            return datetime.fromtimestamp(cls.timestamp, timezone.utc)
+
+    monkeypatch.setattr(billing, "datetime", Clock)
+    first = billing.checkout_idempotency_key("org", "price")
+    Clock.timestamp = 1799
+    assert billing.checkout_idempotency_key("org", "price") == first
+    Clock.timestamp = 1800
+    assert billing.checkout_idempotency_key("org", "price") != first
+
+
+@pytest.mark.parametrize("kind", ["customer.subscription.updated", "invoice.payment_failed"])
+async def test_non_missing_stripe_error_is_retryable(webhook, db, monkeypatch, kind):
+    await seed(db)
+    error = billing.stripe.InvalidRequestError("bad request", param="id", http_status=400)
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", Mock(side_effect=error))
+    data = subscription() if kind.startswith("customer.") else {"subscription": "sub_1", "customer": "cus_1"}
+    with pytest.raises(billing.stripe.InvalidRequestError):
+        await webhook(event(kind, data=data))
+    assert await db.stripe_events.count_documents({}) == 0
+    assert (await db.organization_billing.find_one({}))["billingStatus"] == "active"
+
+
+@pytest.mark.parametrize("kind", ["customer.subscription.deleted", "invoice.paid", "invoice.payment_failed"])
+async def test_dead_foreign_subscription_cannot_cancel_current(webhook, db, monkeypatch, kind):
+    await seed(db)
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", lambda sid: subscription("canceled", sid))
+    data = subscription("canceled", "sub_other") if kind.startswith("customer.") else {"subscription": "sub_other", "customer": "cus_1"}
+    await webhook(event(kind, data=data))
+    assert (await db.organization_billing.find_one({}))["billingStatus"] == "active"
+
+
+async def test_webhook_waits_for_bootstrap_indexes(db, monkeypatch):
+    billing.init_db(db)
+    monkeypatch.setattr(billing, "stripe_api_key", "sk_test_x")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(billing.stripe.Webhook, "construct_event", lambda *a: event())
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", lambda sid: subscription())
+    app = FastAPI()
+    app.state.bootstrap_ok = False
+    app.include_router(billing.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/billing/webhook", content=b"signed")
+    assert response.status_code == 503
+    assert await db.stripe_events.count_documents({}) == 0
+
+
+async def test_cancellation_timestamp_survives_late_updates(webhook, db, monkeypatch):
+    await seed(db)
+    monkeypatch.setattr(billing.stripe.Subscription, "retrieve", lambda sid: subscription("canceled"))
+    await webhook(event("customer.subscription.deleted"))
+    first = await db.organization_billing.find_one({})
+    assert first.get("cancelledAt")
+    await webhook(event(eid="evt_late"))
+    assert (await db.organization_billing.find_one({}))["cancelledAt"] == first["cancelledAt"]
