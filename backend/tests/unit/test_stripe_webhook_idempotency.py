@@ -1,5 +1,6 @@
 """Real webhook and Mongo regressions; Stripe is always stubbed."""
-from datetime import datetime
+import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -137,7 +138,7 @@ async def test_indexes_include_unique_and_real_ttl(db):
     assert indexes["ttl_stripe_events_created_at"]["expireAfterSeconds"] == 30 * 24 * 60 * 60
 
 
-async def test_checkout_has_stable_org_price_bucket_key(app, db, fake_stripe, monkeypatch):
+async def test_checkout_has_stable_org_price_bucket_key(app, db, fake_stripe, monkeypatch, clock):
     monkeypatch.setattr(billing.stripe.Subscription, "list", lambda **kw: {"data": []})
     await _checkout("org-alpha", planId="team")
     await _checkout("org-alpha", planId="team")
@@ -165,7 +166,7 @@ async def test_webhook_indexes_fail_closed(db, monkeypatch):
 
 async def test_checkout_key_changes_with_bucket(monkeypatch):
     from datetime import datetime, timezone
-    class Clock:
+    class Clock(datetime):
         timestamp = 1200
 
         @classmethod
@@ -224,3 +225,121 @@ async def test_cancellation_timestamp_survives_late_updates(webhook, db, monkeyp
     assert first.get("cancelledAt")
     await webhook(event(eid="evt_late"))
     assert (await db.organization_billing.find_one({}))["cancelledAt"] == first["cancelledAt"]
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    class Clock(datetime):
+        current = datetime.now(timezone.utc)
+
+        @classmethod
+        def now(cls, tz):
+            return cls.current.astimezone(tz)
+
+        @classmethod
+        def advance(cls, seconds):
+            cls.current += timedelta(seconds=seconds)
+
+    monkeypatch.setattr(billing, "datetime", Clock)
+    return Clock
+
+
+async def test_abandoned_claim_is_reclaimed_after_lease(webhook, db, monkeypatch, clock):
+    await db.stripe_events.insert_one({"event_id": "evt_1", "type": event()["type"],
+        "created_at": clock.current, "status": "processing", "owner_token": "abandoned",
+        "lease_until": clock.current + timedelta(seconds=60)})
+    dispatch = AsyncMock()
+    monkeypatch.setattr(billing, "dispatch_stripe_event", dispatch)
+    assert (await webhook(event())).status_code == 503
+    clock.advance(61)
+    assert (await webhook(event())).status_code == 200
+    doc = await db.stripe_events.find_one({})
+    assert doc["status"] == "done" and doc["owner_token"] != "abandoned"
+    assert doc["created_at"].replace(tzinfo=timezone.utc) == clock.current.replace(microsecond=(clock.current.microsecond // 1000) * 1000)
+    assert "lease_until" not in doc
+    dispatch.assert_awaited_once()
+
+
+async def test_processing_duplicate_retries_after_first_failure(webhook, db, monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def dispatch(evt):
+        calls.append(evt["id"])
+        if len(calls) == 1:
+            entered.set()
+            await release.wait()
+            raise RuntimeError("first dispatch failed")
+
+    monkeypatch.setattr(billing, "dispatch_stripe_event", dispatch)
+    first = asyncio.create_task(webhook(event()))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        duplicate = await webhook(event())
+        assert duplicate.status_code == 503
+        claim = await db.stripe_events.find_one({})
+        assert claim["status"] == "processing" and claim["owner_token"] and claim["lease_until"]
+    finally:
+        release.set()
+        with pytest.raises(RuntimeError, match="first dispatch failed"):
+            await first
+    assert (await webhook(event())).status_code == 200
+    assert len(calls) == 2
+    assert (await db.stripe_events.find_one({}))["status"] == "done"
+
+
+async def test_release_db_failure_recovers_via_lease(webhook, db, monkeypatch, clock):
+    from pymongo.errors import AutoReconnect
+    collection_type = type(db.stripe_events)
+    original = collection_type.delete_one
+    failures = []
+
+    async def fail_once(self, *args, **kwargs):
+        if self.name == "stripe_events" and not failures:
+            failures.append(True)
+            raise AutoReconnect("claim release unavailable")
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(collection_type, "delete_one", fail_once)
+    dispatch = AsyncMock(side_effect=[RuntimeError("dispatch failed"), None])
+    monkeypatch.setattr(billing, "dispatch_stripe_event", dispatch)
+    with pytest.raises(RuntimeError, match="dispatch failed"):
+        await webhook(event())
+    assert (await db.stripe_events.find_one({}))["status"] == "processing"
+    assert (await webhook(event())).status_code == 503
+    clock.advance(61)
+    assert (await webhook(event())).status_code == 200
+    assert (await db.stripe_events.find_one({}))["status"] == "done"
+    assert dispatch.await_count == 2
+
+
+@pytest.mark.parametrize("first_fails", [False, True])
+async def test_expired_owner_cannot_complete_or_delete_new_claim(webhook, db, monkeypatch, clock, first_fails):
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def dispatch(evt):
+        calls.append(evt["id"])
+        if len(calls) == 1:
+            entered.set()
+            await release.wait()
+            if first_fails:
+                raise RuntimeError("old owner failed")
+
+    monkeypatch.setattr(billing, "dispatch_stripe_event", dispatch)
+    first = asyncio.create_task(webhook(event()))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        old = await db.stripe_events.find_one({})
+        clock.advance(61)
+        assert (await webhook(event())).status_code == 200
+        done = await db.stripe_events.find_one({})
+        assert done["status"] == "done" and done["owner_token"] != old["owner_token"]
+    finally:
+        release.set()
+        if first_fails:
+            with pytest.raises(RuntimeError, match="old owner failed"):
+                await first
+        else:
+            assert (await first).status_code == 503
+    assert await db.stripe_events.find_one({}) == done

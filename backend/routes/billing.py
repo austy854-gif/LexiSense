@@ -3,6 +3,9 @@ from typing import Optional
 from datetime import datetime, timezone, timedelta
 import logging
 import hashlib
+import asyncio
+from uuid import uuid4
+from pymongo import ReturnDocument
 import stripe
 
 from models.billing import (
@@ -102,6 +105,8 @@ def has_used_in_app_trial(billing: OrganizationBilling) -> bool:
 #: API/network latency so a valid carry-over does not cross that minimum in flight.
 STRIPE_MIN_TRIAL_END = timedelta(hours=48, minutes=5)
 CHECKOUT_IDEMPOTENCY_WINDOW_SECONDS = 10 * 60
+STRIPE_EVENT_LEASE_SECONDS = 60
+STRIPE_EVENT_PROCESSING_TIMEOUT_SECONDS = 55
 
 
 def checkout_idempotency_key(org_id: str, price_id: str) -> str:
@@ -524,24 +529,58 @@ async def stripe_webhook(request: Request):
     if not getattr(request.app.state, "bootstrap_ok", True):
         raise HTTPException(status_code=503, detail="Billing is initializing")
 
-    # Claim only verified events. The unique index arbitrates across workers.
     event_id = event["id"]
-    try:
-        await db.stripe_events.insert_one({
-            "event_id": event_id,
-            "type": event["type"],
-            "created_at": datetime.now(timezone.utc),
-        })
-    except DuplicateKeyError:
+    owner_token = await claim_stripe_event(event)
+    if owner_token is None:
         return {"received": True, "duplicate": True}
-
+    owner_filter = {"event_id": event_id, "owner_token": owner_token, "status": "processing"}
     try:
-        await dispatch_stripe_event(event)
-    except Exception:
-        # Retryable failures must not poison the claim for Stripe's next delivery.
-        await db.stripe_events.delete_one({"event_id": event_id})
+        # Finish (or fail) before the lease expires under normal operation. A
+        # stopped worker is still recoverable by another delivery after expiry.
+        async with asyncio.timeout(STRIPE_EVENT_PROCESSING_TIMEOUT_SECONDS):
+            await dispatch_stripe_event(event)
+        result = await db.stripe_events.update_one(owner_filter, {
+            "$set": {"status": "done", "created_at": datetime.now(timezone.utc)},
+            "$unset": {"lease_until": ""},
+        })
+        if result.matched_count != 1:
+            raise HTTPException(status_code=503, detail="Webhook claim ownership changed. Please retry.")
+    except (Exception, asyncio.CancelledError):
+        try:
+            # A timed-out owner must never delete a successor's processing/done record.
+            await db.stripe_events.delete_one(owner_filter)
+        except Exception:
+            # Preserve the original failure. A failed release is recoverable via
+            # lease expiry rather than permanently acknowledging an unfinished event.
+            logger.exception("Stripe event claim release failed: %s", event_id)
         raise
     return {"received": True}
+
+
+async def claim_stripe_event(event) -> Optional[str]:
+    """Own a new/expired event lease; only completed records are duplicates."""
+    now = datetime.now(timezone.utc)
+    owner_token = uuid4().hex
+    lease = {"status": "processing", "owner_token": owner_token,
+             "lease_until": now + timedelta(seconds=STRIPE_EVENT_LEASE_SECONDS)}
+    try:
+        await db.stripe_events.insert_one({
+            "event_id": event["id"], "type": event["type"], "created_at": now, **lease,
+        })
+        return owner_token
+    except DuplicateKeyError:
+        existing = await db.stripe_events.find_one({"event_id": event["id"]})
+        if existing and existing.get("status") == "done":
+            return None
+        reclaimed = await db.stripe_events.find_one_and_update(
+            {"event_id": event["id"], "status": "processing", "lease_until": {"$lte": now}},
+            {"$set": lease}, return_document=ReturnDocument.AFTER,
+        )
+        if reclaimed:
+            return owner_token
+        # Includes an unexpired worker, a race with release/completion, and any
+        # unrecognised legacy record. Never acknowledge work that is not done.
+        raise HTTPException(status_code=503, detail="Webhook is still processing. Please retry.")
 
 
 async def dispatch_stripe_event(event):
