@@ -22,6 +22,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app/backend
 
+# Pull Debian security fixes for base-image OS packages the Trivy gate flags
+# (zlib1g: CVE-2026-76844, CVE-2026-85091; fixed in 1:1.3.dfsg+really1.3.1-1+deb13u1).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --only-upgrade zlib1g && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt backend/requirements-emergent.txt ./
 # emergentintegrations pins old litellm/openai; install it without deps.
 RUN grep -v '^litellm==' requirements.txt | tr -d '\r' > /tmp/requirements-without-litellm.txt && \
