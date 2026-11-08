@@ -138,6 +138,7 @@ async def lifespan(app: FastAPI):
     app.state.alert_index_task = None
 
     async def _bootstrap():
+        """Retry database and storage bootstrap before marking the application ready."""
         delay = 2.0
         attempt = 0
         while True:
@@ -182,6 +183,7 @@ async def lifespan(app: FastAPI):
                 from services.alert_service import ensure_alert_idempotency_index
 
                 def _enable_alerts():
+                    """Enable alert delivery after the unique idempotency index is verified."""
                     app.state.alerts_ready = True
 
                 app.state.alert_index_task = asyncio.create_task(

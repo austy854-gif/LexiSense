@@ -12,6 +12,7 @@ from tests.unit.conftest import API_PREFIX, auth_headers, make_contract, make_us
 
 @pytest.fixture
 async def stored_contract(db, org_id):
+    """Seed a stored contract and chat history owned by an administrator."""
     admin = make_user(org_id, role="admin")
     await db.users.insert_one(dict(admin))
     contract = make_contract(org_id, admin["id"], storageKey="org/contract.pdf")
@@ -26,6 +27,7 @@ async def stored_contract(db, org_id):
 async def test_storage_failure_preserves_contract_and_chat(
     client, db, stored_contract, monkeypatch, failure, caplog
 ):
+    """Keep the contract reference, chat, and audit unchanged after any storage failure."""
     admin, contract = stored_contract
     audit = AsyncMock()
     monkeypatch.setattr(contracts_route, "log_action", audit)
@@ -62,6 +64,7 @@ async def test_storage_failure_preserves_contract_and_chat(
 async def test_successful_storage_delete_removes_contract_and_chat(
     client, db, stored_contract, monkeypatch, storage
 ):
+    """Delete metadata only after storage confirms success or no file reference exists."""
     admin, contract = stored_contract
     audit = AsyncMock()
     monkeypatch.setattr(contracts_route, "log_action", audit)
@@ -95,3 +98,17 @@ async def test_successful_storage_delete_removes_contract_and_chat(
         delete.assert_not_awaited()
     else:
         delete.assert_awaited_once_with(contract["storageKey"])
+
+
+async def test_missing_storage_configuration_preserves_contract(
+    client, db, stored_contract, monkeypatch
+):
+    """An unconfigured storage client cannot confirm deletion of an existing stored file."""
+    admin, contract = stored_contract
+    monkeypatch.setattr(storage_service, "get_s3_client", lambda: None)
+    response = await client.delete(
+        f"{API_PREFIX}/contracts/{contract['id']}", headers=auth_headers(admin)
+    )
+    assert response.status_code == 502
+    assert await db.contracts.find_one({"id": contract["id"]}) is not None
+    assert await db.chat_history.count_documents({"contractId": contract["id"]}) == 1

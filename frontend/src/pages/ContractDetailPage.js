@@ -82,6 +82,7 @@ const WORKFLOW_CAPABILITY = {
   activate: 'canActivate',
 };
 
+/** Render a contract with organization, role, ownership, and access-aware action controls. */
 export default function ContractDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -90,6 +91,7 @@ export default function ContractDetailPage() {
   const [loading, setLoading] = useState(true);
   // Workflow buttons need the server capability AND a legal transition from
   // the current status (canPerformWorkflowAction mirrors routes/workflow.py).
+  /** Resolve a contract action against the current capability and uploader identity. */
   const canDo = (action) =>
     hasCapability(access, WORKFLOW_CAPABILITY[action]) &&
     canPerformWorkflowAction(user?.role, action, contract?.status);

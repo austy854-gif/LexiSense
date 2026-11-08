@@ -43,6 +43,7 @@ const CONTRACT_TYPES = [
   'Partnership', 'Licensing', 'Purchase Agreement', 'Other'
 ];
 
+/** Render template browsing while limiting management actions to authorized sessions. */
 export default function TemplatesPage() {
   const { access } = useAuth();
   const manageTemplates = hasCapability(access, 'canManageTemplates');

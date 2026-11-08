@@ -191,6 +191,7 @@ export function ContractsEmptyState({ searchQuery, filters, canUpload: canUpload
   );
 }
 
+/** Render contract browsing with capability-gated uploads, bulk actions, and empty states. */
 export default function ContractsPage() {
   const { access } = useAuth();
   const navigate = useNavigate();

@@ -41,6 +41,7 @@ export function readStoredUser() {
   return parsed;
 }
 
+/** Drop persisted user and token keys without failing when browser storage is unavailable. */
 function clearSessionKeys() {
   try {
     localStorage.removeItem(USER_KEY);
@@ -50,6 +51,7 @@ function clearSessionKeys() {
   }
 }
 
+/** Read a usable saved token, treating invalid or inaccessible storage as logged out. */
 function readToken() {
   try {
     const token = localStorage.getItem(TOKEN_KEY);
@@ -81,6 +83,7 @@ export function persistSession(accessToken, userData) {
   }
 }
 
+/** Own session restoration and fail-closed, session-scoped capability state. */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -89,14 +92,21 @@ export function AuthProvider({ children }) {
   const sessionGen = useRef(0);
   // Fail closed: every capability is false until /billing/capabilities answers.
   const [access, setAccess] = useState(LOADING_ACCESS);
+  const accessRequest = useRef(0);
 
+  /** Apply only the latest capability response for the current authenticated session. */
   const refreshAccess = async () => {
+    const generation = sessionGen.current;
+    const requestId = ++accessRequest.current;
+    const token = readToken();
+    const isCurrent = () => sessionGen.current === generation
+      && accessRequest.current === requestId && readToken() === token;
     try {
       const response = await billingAPI.getCapabilities();
-      setAccess(normalizeAccess(response?.data));
+      if (isCurrent()) setAccess(normalizeAccess(response?.data));
     } catch {
       // Least-privileged state: all capabilities false, workspace read-only.
-      setAccess(FAILED_ACCESS);
+      if (isCurrent()) setAccess(FAILED_ACCESS);
     }
   };
 
@@ -134,10 +144,13 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  /** Establish a new login session before loading its organization capabilities. */
   const login = async (email, password) => {
     const response = await authAPI.login(email, password);
     sessionGen.current += 1;
+    accessRequest.current += 1;
     setLoading(false);
+    setAccess(LOADING_ACCESS);
     const { access_token, user: userData } = response.data || {};
     persistSession(access_token, userData);
     setUser(userData && typeof userData === 'object' ? userData : null);
@@ -145,10 +158,13 @@ export function AuthProvider({ children }) {
     return userData;
   };
 
+  /** Establish the registered session and load its organization capabilities. */
   const register = async (data) => {
     const response = await authAPI.register(data);
     sessionGen.current += 1;
+    accessRequest.current += 1;
     setLoading(false);
+    setAccess(LOADING_ACCESS);
     const { access_token, user: userData } = response.data || {};
     persistSession(access_token, userData);
     setUser(userData && typeof userData === 'object' ? userData : null);
@@ -156,8 +172,10 @@ export function AuthProvider({ children }) {
     return userData;
   };
 
+  /** Invalidate pending capability requests and clear the local session after logout. */
   const logout = async () => {
     sessionGen.current += 1;
+    accessRequest.current += 1;
     try {
       await authAPI.logout();
     } catch {

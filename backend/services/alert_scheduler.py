@@ -33,6 +33,7 @@ def build_alert_scheduler(db, is_ready=lambda: True) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="UTC")
 
     async def run_scan():
+        """Scan for expiring contracts only after alert storage is ready."""
         if not is_ready():
             logger.warning("Skipping alert scan: bootstrap or alert index not ready")
             return
@@ -43,6 +44,7 @@ def build_alert_scheduler(db, is_ready=lambda: True) -> AsyncIOScheduler:
             logger.exception("Daily expiration alert scan failed")
 
     async def run_retries():
+        """Retry due alert deliveries only after alert storage is ready."""
         if not is_ready():
             return
         try:

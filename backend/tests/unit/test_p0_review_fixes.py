@@ -83,6 +83,7 @@ def _fail_contract_insert(monkeypatch, db):
 
 class TestUploadRollback:
     async def test_bulk_failure_deletes_s3_object_and_refunds_slot(self, client, db, org_id, pipeline, monkeypatch):
+        """Verify a failed bulk upload purges its stored bytes and refunds quota."""
         user = make_user(org_id, role="user")
         await db.users.insert_one(dict(user))
         _fail_contract_insert(monkeypatch, db)
@@ -106,6 +107,7 @@ class TestUploadRollback:
         assert pipeline["uploaded"] == []
 
     async def test_single_failure_deletes_s3_object_and_refunds_slot(self, client, db, org_id, pipeline, monkeypatch):
+        """Verify a failed single upload purges its stored bytes and refunds quota."""
         user = make_user(org_id, role="user")
         await db.users.insert_one(dict(user))
         _fail_contract_insert(monkeypatch, db)
@@ -145,22 +147,26 @@ class TestUploadRollback:
 
 class _FakeS3:
     def __init__(self, listing=None, list_error=None):
+        """Configure fake S3 version listings, optional failures, and deletion tracking."""
         self.listing = listing or {}
         self.list_error = list_error
         self.deleted = []
 
     def list_object_versions(self, **kw):
+        """Return the configured versions or simulate a listing permission failure."""
         if self.list_error:
             raise self.list_error
         return self.listing
 
     def delete_object(self, **kw):
+        """Record a successful object deletion for fake storage assertions."""
         self.deleted.append(kw)
         return {}
 
 
 class TestPurgeUploadedObject:
     async def test_deletes_every_version_of_the_exact_key(self, monkeypatch):
+        """Purge all versions and markers without touching similarly prefixed keys."""
         fake = _FakeS3({
             "Versions": [{"Key": "org/k.pdf", "VersionId": "v1"}, {"Key": "org/k.pdf.bak", "VersionId": "x"}],
             "DeleteMarkers": [{"Key": "org/k.pdf", "VersionId": "m1"}],
@@ -193,6 +199,7 @@ class TestPurgeUploadedObject:
 
         class _Down(_FakeS3):
             def delete_object(self, **kw):
+                """Raise a transport error to simulate an unreachable object store."""
                 raise EndpointConnectionError(endpoint_url="https://s3")
 
         monkeypatch.setattr(storage_service, "get_s3_client", lambda: _Down())
@@ -213,6 +220,39 @@ async def bclient(app):
 
 
 class TestCapabilities:
+    @pytest.mark.parametrize("used,allowed", [(24, True), (25, False), (26, False)])
+    @pytest.mark.parametrize("role", ["admin", "user", "viewer"])
+    async def test_active_trial_quota_controls_upload_capability(self, bclient, db, org_id, used, allowed, role):
+        """Advertise remaining trial uploads without reserving a slot or granting viewer access."""
+        await db.organization_billing.insert_one({
+            "id": "b1", "organizationId": org_id, "subscriptionTier": "trial", "billingStatus": "trialing",
+            "trialStartDate": _iso(-1), "trialEndDate": _iso(6),
+            "trialContractsUsed": used, "trialContractsLimit": 25,
+        })
+        user = make_user(org_id, role=role)
+        await db.users.insert_one(dict(user))
+        response = await bclient.get(f"{API_PREFIX}/billing/capabilities", headers=auth_headers(user))
+        assert response.status_code == 200
+        body = response.json()
+        assert body["readOnly"] is False
+        assert body["capabilities"]["canUpload"] is (allowed and role != "viewer")
+        assert (await db.organization_billing.find_one({"id": "b1"}))["trialContractsUsed"] == used
+
+    async def test_paid_plan_does_not_consume_or_enforce_trial_quota(self, bclient, db, org_id, monkeypatch):
+        """A paid subscriber keeps upload capability after exhausting its former trial."""
+        from tests.unit.test_billing_port import paid
+        from tests.unit.test_pricing_integrity import pid
+        monkeypatch.setenv("STRIPE_PRICE_TEAM_MONTHLY", pid("team", "monthly"))
+        await db.organization_billing.insert_one({
+            "id": "b1", "organizationId": org_id, **paid(),
+            "trialContractsUsed": 25, "trialContractsLimit": 25,
+        })
+        user = make_user(org_id, role="admin")
+        await db.users.insert_one(dict(user))
+        response = await bclient.get(f"{API_PREFIX}/billing/capabilities", headers=auth_headers(user))
+        assert response.status_code == 200
+        assert response.json()["capabilities"]["canUpload"] is True
+
     async def test_trial_expired_blocks_uploads_but_is_not_read_only(self, bclient, db, org_id):
         await db.organization_billing.insert_one({
             "id": "b1", "organizationId": org_id, "subscriptionTier": "trial", "billingStatus": "trialing",
@@ -227,6 +267,7 @@ class TestCapabilities:
         assert body["capabilities"]["canApprove"] is True
 
     async def test_past_due_after_grace_is_read_only(self, bclient, db, org_id):
+        """Deny write capabilities after a paid subscription exhausts its grace period."""
         from tests.unit.test_billing_port import paid
         await db.organization_billing.insert_one(
             {"id": "b1", "organizationId": org_id, **paid(billingStatus="past_due", pastDueSince=_iso(-9))})
@@ -249,6 +290,7 @@ class TestRequireContractWrite:
     ORG = "org-1"
 
     def _user(self, role, sub="u1", org=None):
+        """Build a policy identity with an optional organization override."""
         return {"sub": sub, "role": role, "organizationId": org or self.ORG}
 
     def _contract(self, uploaded_by="u1"):
@@ -277,6 +319,7 @@ class TestRequireContractWrite:
         assert exc.value.status_code == 404
 
     def test_capability_map_own_flags(self):
+        """Keep uploader-only permissions distinct from organization-wide permissions."""
         caps = policy.capability_map("user")
         assert caps["canEditOwnContract"] and caps["canRestoreOwn"]
         assert not caps["canEditContract"] and not caps["canRestore"] and not caps["canDelete"]
@@ -289,9 +332,11 @@ class TestRequireContractWrite:
 # --------------------------------------------------------------------------
 @pytest.fixture
 def sends(monkeypatch):
+    """Record provider attempts and return the configured delivery outcomes."""
     log = {"calls": 0, "results": []}
 
     async def _send(**kw):
+        """Consume a configured provider result, defaulting to a delivery failure."""
         log["calls"] += 1
         return log["results"].pop(0) if log["results"] else {"status": "error"}
 
@@ -318,6 +363,7 @@ async def _make_due(db):
 
 class TestAlertDelivery:
     async def test_attempts_persist_across_runs_and_cap_at_max(self, db, org_id, sends):
+        """Persist delivery attempts across scans and stop at the hard retry ceiling."""
         await _seed_alert_org(db, org_id)
         await alert_service.scan_expiration_alerts(db, org_id)
         rec = await db.expiration_alerts.find_one({})
@@ -339,6 +385,7 @@ class TestAlertDelivery:
         assert sends["calls"] == 1
 
     async def test_success_is_sent_once(self, db, org_id, sends):
+        """Never deliver an already-successful alert a second time."""
         await _seed_alert_org(db, org_id)
         sends["results"] = [{"status": "success", "email_id": "m1"}]
         await alert_service.scan_expiration_alerts(db, org_id)
@@ -356,6 +403,7 @@ class TestAlertDelivery:
         assert sends["calls"] == 0
 
     async def test_expired_lease_is_reclaimed(self, db, org_id, sends):
+        """Recover a sending claim after its ownership lease expires."""
         admin, contract = await _seed_alert_org(db, org_id)
         key = f"{org_id}:{contract['id']}:expiration:7:{admin['id']}"
         await db.expiration_alerts.insert_one({
@@ -368,6 +416,7 @@ class TestAlertDelivery:
         assert sends["calls"] == 1 and rec["status"] == "sent" and rec["attempts"] == 2
 
     async def test_retry_pass_runs_outside_expiry_date_selection(self, db, org_id, sends):
+        """Retry due failures even when the contract no longer matches the original expiry window."""
         admin, contract = await _seed_alert_org(db, org_id)
         await alert_service.scan_expiration_alerts(db, org_id)
         # Next day: the contract no longer matches the exact 7-day window.
@@ -380,6 +429,7 @@ class TestAlertDelivery:
         assert counts["sent"] == 1 and rec["status"] == "sent" and rec["attempts"] == 2
 
     async def test_retry_skips_ineligible_recipient(self, db, org_id, sends):
+        """Skip delivery when a previously eligible recipient loses the required role."""
         admin, _ = await _seed_alert_org(db, org_id)
         await alert_service.scan_expiration_alerts(db, org_id)
         await db.users.update_one({"id": admin["id"]}, {"$set": {"role": "viewer"}})
@@ -389,6 +439,7 @@ class TestAlertDelivery:
         assert sends["calls"] == 1 and rec["status"] == "skipped"
 
     async def test_provider_exception_is_recorded_as_failed(self, db, org_id, monkeypatch):
+        """Persist provider exceptions as retryable delivery failures."""
         async def _raise(**kw):
             raise RuntimeError("provider exploded")
 
@@ -436,6 +487,7 @@ class TestAlertRoutes:
         assert r.status_code == 403
 
     async def test_history_includes_legacy_records_without_org(self, aclient, db, org_id, other_org_id):
+        """Include owned legacy alerts while excluding another organization's history."""
         admin = make_user(org_id, role="admin")
         await db.users.insert_one(dict(admin))
         mine = make_contract(org_id, admin["id"])
@@ -454,6 +506,7 @@ class TestAlertRoutes:
 class TestSchedulerEnv:
     @pytest.mark.parametrize("raw,expected", [(None, 8), ("", 8), ("  ", 8), ("abc", 8), ("12", 12), ("99", 23), ("-3", 0)])
     def test_env_int_is_defensive(self, monkeypatch, raw, expected):
+        """Parse scheduler settings defensively and clamp values to the supported range."""
         if raw is None:
             monkeypatch.delenv("ALERT_SCAN_UTC_HOUR", raising=False)
         else:
@@ -461,6 +514,7 @@ class TestSchedulerEnv:
         assert alert_scheduler._env_int("ALERT_SCAN_UTC_HOUR", 8, 0, 23) == expected
 
     def test_bad_env_does_not_break_scheduler_and_retry_job_exists(self, monkeypatch, db):
+        """Keep both scheduler jobs registered despite malformed environment settings."""
         monkeypatch.setenv("ALERT_SCAN_UTC_HOUR", "eight")
         monkeypatch.setenv("ALERT_SCAN_UTC_MINUTE", "x")
         scheduler = alert_scheduler.build_alert_scheduler(db)
@@ -496,6 +550,7 @@ class TestRestoreTransitionCapability:
         assert r.status_code == 200, r.text
 
     def test_every_workflow_transition_has_a_capability(self):
+        """Require an authorization capability for every workflow state-machine edge."""
         from services.workflow_service import WORKFLOW_TRANSITIONS
         pairs = {(a, b) for a, targets in WORKFLOW_TRANSITIONS.items() for b in targets}
         assert pairs == set(contracts_route.RESTORE_TRANSITION_CAPABILITY)
@@ -517,6 +572,7 @@ class TestAlertReadinessGate:
         assert await alert_service.alert_idempotency_index_ready(db) is True
 
     async def test_scheduler_jobs_skip_until_ready(self, db, monkeypatch):
+        """Prevent scans and retries until the idempotency index is ready."""
         calls = []
 
         async def _scan(database):
@@ -554,6 +610,7 @@ class TestAlertReadinessGate:
 
 class TestUploadVerificationCleanup:
     async def test_failed_verification_purges_every_version(self, monkeypatch):
+        """Remove the uploaded version when durable storage verification fails."""
         class _S3(_FakeS3):
             def put_object(self, **kw):
                 return {"VersionId": "v1"}
@@ -562,6 +619,7 @@ class TestUploadVerificationCleanup:
                 return {"ContentLength": 1}  # wrong length -> verification fails
 
             def list_object_versions(self, **kw):
+                """Return the just-uploaded version for verification cleanup coverage."""
                 return {"Versions": [{"Key": kw["Prefix"], "VersionId": "v1"}]}
 
         fake = _S3()
@@ -610,11 +668,13 @@ class TestApprovedToReviewRestore:
 
 class TestAlertIndexRecovery:
     async def test_retries_until_index_verified_then_enables(self, db, monkeypatch):
+        """Enable alerts only after an interrupted index build succeeds and is verified."""
         attempts = {"n": 0}
         real = db.expiration_alerts
 
         class _Coll:
             async def create_index(self, *a, **kw):
+                """Simulate an interrupted index build before a successful retry."""
                 attempts["n"] += 1
                 if attempts["n"] < 3:
                     raise RuntimeError("mongo blip")
@@ -640,10 +700,12 @@ class TestAlertIndexRecovery:
 
 class TestPurgeVersionDeleteDenied:
     async def test_falls_back_to_key_delete_and_reports_failure(self, monkeypatch, caplog):
+        """Attempt a plain key delete without claiming a denied version purge succeeded."""
         from botocore.exceptions import ClientError
 
         class _S3(_FakeS3):
             def delete_object(self, **kw):
+                """Reject version deletion while recording a permitted plain key deletion."""
                 if "VersionId" in kw:
                     raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "DeleteObject")
                 self.deleted.append(kw)
@@ -660,10 +722,12 @@ class TestPurgeVersionDeleteDenied:
 
 class TestAlertIndexNotReadyWhileBuilding:
     async def test_listed_index_does_not_enable_when_create_failed(self, monkeypatch):
+        """Do not mistake a listed but unfinished index for a successful index build."""
         calls = {"create": 0}
 
         class _Coll:
             async def create_index(self, *a, **kw):
+                """Simulate an interrupted index build before a successful retry."""
                 calls["create"] += 1
                 if calls["create"] == 1:
                     raise RuntimeError("build interrupted")

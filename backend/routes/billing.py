@@ -396,6 +396,7 @@ async def get_capabilities(current_user: dict = Depends(get_current_user)):
     """Authoritative organization access and role capability state for the SPA."""
     entitlement = await get_entitlement(current_user["organizationId"])
     read_only = entitlement.state in READ_ONLY_STATES
+    can_upload, _ = await check_trial_access(current_user["organizationId"])
     return {
         "state": entitlement.state,
         "readOnly": read_only,
@@ -403,7 +404,7 @@ async def get_capabilities(current_user: dict = Depends(get_current_user)):
         "capabilities": capability_map(
             current_user.get("role"),
             read_only=read_only,
-            uploads_blocked=entitlement.state == ACCESS_TRIAL_EXPIRED,
+            uploads_blocked=entitlement.state == ACCESS_TRIAL_EXPIRED or not can_upload,
         ),
     }
 

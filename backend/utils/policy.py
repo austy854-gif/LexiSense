@@ -44,10 +44,12 @@ _OWNER_DENIAL = {
 
 
 def can(role: object, capability: str) -> bool:
+    """Return whether the normalized role grants the requested capability."""
     return capability in CAPABILITIES.get(normalize_role(role), frozenset())
 
 
 def deny(capability: str) -> HTTPException:
+    """Build a capability-specific forbidden response without exposing resource data."""
     labels = {
         "template_manage": "Only admins can manage templates.",
         "alert_settings": "Only admins can update alert settings.",
@@ -60,6 +62,7 @@ def deny(capability: str) -> HTTPException:
 
 
 def require_capability(user: dict, capability: str) -> None:
+    """Reject users whose role does not grant the requested capability."""
     if not can(user.get("role"), capability):
         raise deny(capability)
 

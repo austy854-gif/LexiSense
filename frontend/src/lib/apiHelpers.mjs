@@ -201,20 +201,30 @@ export function hasRole(role, allowed) {
   return Array.isArray(allowed) && allowed.includes(normalizeRole(role));
 }
 
+/** Indicate whether a normalized role may create contracts in the presentation layer. */
 export function canWriteContracts(role) {
   return canUpload(role);
 }
 
 // Explicit capabilities mirror backend/utils/policy.py. These helpers are
 // presentation guards only; every mutation is still authorized server-side.
+/** Allow upload controls for users, managers, and administrators. */
 export function canUpload(role) { return hasRole(role, [ROLE_USER, ROLE_MANAGER, ROLE_ADMIN]); }
+/** Allow deletion controls for managers and administrators. */
 export function canDelete(role) { return hasRole(role, [ROLE_MANAGER, ROLE_ADMIN]); }
+/** Allow restore controls for managers and administrators. */
 export function canRestore(role) { return hasRole(role, [ROLE_MANAGER, ROLE_ADMIN]); }
+/** Allow submission controls for users, managers, and administrators. */
 export function canSubmitForReview(role) { return hasRole(role, [ROLE_USER, ROLE_MANAGER, ROLE_ADMIN]); }
+/** Allow approval controls for designated approver roles. */
 export function canApprove(role) { return hasRole(role, APPROVER_ROLES); }
+/** Allow rejection controls for designated approver roles. */
 export function canReject(role) { return hasRole(role, APPROVER_ROLES); }
+/** Allow activation controls for designated approver roles. */
 export function canActivate(role) { return hasRole(role, APPROVER_ROLES); }
+/** Allow invitation controls only for administrators. */
 export function canInvite(role) { return hasRole(role, ADMIN_ROLES); }
+/** Allow template-management controls only for administrators. */
 export function canManageTemplates(role) { return hasRole(role, ADMIN_ROLES); }
 
 export function canReadAudit(role) {

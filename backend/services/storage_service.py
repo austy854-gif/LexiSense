@@ -156,11 +156,11 @@ async def generate_presigned_url(
 
 
 async def delete_file_from_s3(storage_key: str) -> bool:
-    """Delete a file from S3."""
+    """Confirm an idempotent S3 key deletion; missing storage configuration fails closed."""
     s3_client = get_s3_client()
     if not s3_client:
-        logger.info(f"Mock delete: {storage_key}")
-        return True
+        logger.error("Cannot delete file: S3 client is not configured")
+        return False
 
     try:
         await asyncio.to_thread(s3_client.delete_object, Bucket=get_bucket_name(), Key=storage_key)

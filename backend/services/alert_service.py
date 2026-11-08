@@ -82,10 +82,12 @@ async def ensure_alert_idempotency_index(
 
 
 def _now() -> datetime:
+    """Return the current timezone-aware UTC timestamp."""
     return datetime.now(timezone.utc)
 
 
 def _retry_delay(attempts: int) -> timedelta:
+    """Compute exponential backoff from the persisted delivery attempt count."""
     return RETRY_BASE_DELAY * (2 ** max(0, attempts - 1))
 
 
@@ -100,6 +102,7 @@ def _claimable(now: datetime) -> list:
 
 
 def _claim_update(token: str) -> dict:
+    """Atomically mark claim ownership and count an attempt before delivery."""
     # attempts is incremented here, atomically with the claim, so each provider
     # attempt is counted durably before it happens. ``claimedAt`` is stamped at
     # claim time (not scan start) so a long scan cannot shorten the lease.
@@ -145,6 +148,7 @@ async def _deliver(db, claim: dict, recipient_email: str, contract: dict, days: 
 
 
 async def _recipients(db, org_id: str) -> list:
+    """Load active administrators and managers belonging to one organization."""
     return await db.users.find(
         {"organizationId": org_id, "role": {"$in": ["admin", "manager"]}, "isActive": {"$ne": False}},
         {"_id": 0, "id": 1, "email": 1},

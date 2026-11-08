@@ -125,6 +125,7 @@ async def check_and_send_alerts(
 
 
 async def _run_manual_scan(organization_id: str, actor_id: str) -> None:
+    """Run an authorized manual scan without leaking background failures to the request."""
     try:
         result = await scan_expiration_alerts(db, organization_id, actor_id)
         logger.info("Manual expiration alert scan complete", extra=result)

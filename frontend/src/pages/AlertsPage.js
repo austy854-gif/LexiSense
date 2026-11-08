@@ -47,6 +47,7 @@ const UrgencyBadge = ({ days }) => {
   return <Badge className="bg-green-500/10 text-green-500 border-green-500/20">{days} days</Badge>;
 };
 
+/** Render organization alerts with capability-gated settings and manual delivery controls. */
 export default function AlertsPage() {
   const { access } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -81,6 +82,7 @@ export default function AlertsPage() {
     }
   };
 
+  /** Start an authorized alert scan and report background queue acceptance or failure. */
   const handleSendAlerts = async () => {
     setSendingAlerts(true);
     try {
