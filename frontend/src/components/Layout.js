@@ -43,7 +43,7 @@ const navItems = [
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
   { path: '/alerts', label: 'Alerts', icon: Bell },
   { path: '/team', label: 'Team', icon: Users },
-  { path: '/audit', label: 'Audit Log', icon: ScrollText, roles: AUDIT_READER_ROLES },
+  { path: '/audit', label: 'Audit log', icon: ScrollText, roles: AUDIT_READER_ROLES },
   { path: '/billing', label: 'Billing', icon: CreditCard, roles: ADMIN_ROLES },
 ];
 
@@ -172,8 +172,8 @@ export function Layout({ children }) {
                     data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
                     className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${
                       isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                        ? 'bg-accent text-accent-foreground'
+                        : 'text-muted-foreground hover:bg-accent/70 hover:text-accent-foreground'
                     }`}
                     onClick={() => setSidebarOpen(false)}
                   >
@@ -249,7 +249,7 @@ export function Layout({ children }) {
                   >
                     <Bell className="h-5 w-5" aria-hidden="true" />
                     {unreadCount > 0 && (
-                      <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      <span aria-hidden="true" className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center">
                         {unreadCount > 9 ? '9+' : unreadCount}
                       </span>
                     )}

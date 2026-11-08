@@ -101,7 +101,7 @@ describe('app shell accessible names', () => {
   });
 });
 
-describe('avatar initials contrast (WCAG AA, brand Steady Blue values)', () => {
+describe('avatar initials contrast (WCAG AA, brand blood-red values)', () => {
   const css = fs.readFileSync(path.join(__dirname, 'avatar-initials.css'), 'utf8');
   const block = (selector) => {
     const m = css.match(new RegExp(`${selector}\\s*\\{([^}]*)\\}`));
@@ -120,8 +120,8 @@ describe('avatar initials contrast (WCAG AA, brand Steady Blue values)', () => {
   };
 
   test.each([
-    ['dark', '\\.dark', '#1F2F47', '#6FA3F5'],
-    ['light', '\\.light', '#E7EEF9', '#0D4AA5'],
+    ['dark', '\\.dark', '#351D1D', '#F49A9D'],
+    ['light', '\\.light', '#F9E8E8', '#8A0303'],
   ])('%s theme uses brand colours at 4.5:1 or better', (_, selector, bg, fg) => {
     const c = block(selector);
     expect(c).toEqual({ bg, fg });

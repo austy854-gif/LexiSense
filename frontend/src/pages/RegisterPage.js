@@ -4,9 +4,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Loader2, Eye, EyeOff } from 'lucide-react';
-import { BrandLockup } from '../components/BrandLockup';
+import { AuthShell } from '../components/AuthShell';
 import { toast } from 'sonner';
 
 export default function RegisterPage() {
@@ -60,22 +59,11 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
-      <div className="absolute inset-0 bg-grid-pattern opacity-5" />
-      
-      <Card className="w-full max-w-md relative bg-card/95 backdrop-blur border-border/50 shadow-2xl">
-        <CardHeader className="text-center pb-2">
-          <div className="mb-4 flex justify-center">
-            <BrandLockup className="h-10 w-auto" />
-          </div>
-          <CardTitle className="text-2xl font-bold">Create Account</CardTitle>
-          <CardDescription>Get started with LexiSense</CardDescription>
-        </CardHeader>
-        <CardContent>
+    <AuthShell title="Create account" description="Get started with LexiSense" testId="register-page">
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="firstName">First Name</Label>
+                <Label htmlFor="firstName">First name</Label>
                 <Input
                   id="firstName"
                   name="firstName"
@@ -86,7 +74,7 @@ export default function RegisterPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="lastName">Last Name</Label>
+                <Label htmlFor="lastName">Last name</Label>
                 <Input
                   id="lastName"
                   name="lastName"
@@ -111,7 +99,7 @@ export default function RegisterPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="organizationName">Organization Name</Label>
+              <Label htmlFor="organizationName">Organization name</Label>
               <Input
                 id="organizationName"
                 name="organizationName"
@@ -178,8 +166,6 @@ export default function RegisterPage() {
               Sign in
             </Link>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+    </AuthShell>
   );
 }

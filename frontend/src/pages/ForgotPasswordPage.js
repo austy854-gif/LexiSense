@@ -4,9 +4,8 @@ import { authAPI } from '../api';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Loader2 } from 'lucide-react';
-import { BrandLockup } from '../components/BrandLockup';
+import { AuthShell } from '../components/AuthShell';
 import { toast } from 'sonner';
 import { getErrorInfo } from '../lib/apiHelpers.mjs';
 
@@ -30,20 +29,13 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
-      <Card className="w-full max-w-md relative bg-card/95 backdrop-blur border-border/50 shadow-2xl">
-        <CardHeader className="text-center pb-2">
-          <div className="mb-4 flex justify-center">
-            <BrandLockup className="h-10 w-auto" />
-          </div>
-          <CardTitle className="text-2xl font-bold">Reset your password</CardTitle>
-          <CardDescription>
-            {sent
-              ? 'If an account exists for that email, a reset link is on its way.'
-              : 'We will email you a link that expires in one hour.'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+    <AuthShell
+      title="Reset your password"
+      description={sent
+        ? 'If an account exists for that email, a reset link is on its way.'
+        : 'We will email you a link that expires in one hour.'}
+      testId="forgot-password-page"
+    >
           {!sent && (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
@@ -69,8 +61,6 @@ export default function ForgotPasswordPage() {
               Back to sign in
             </Link>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+        </AuthShell>
   );
 }

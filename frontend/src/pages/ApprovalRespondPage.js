@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../api';
+import { AuthShell } from '../components/AuthShell';
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
+import { AlertCircle } from 'lucide-react';
 
 // Landing page for the one-click Approve/Reject links in approval emails.
 // The token arrives in the URL fragment (#token=...), which browsers never
@@ -60,19 +62,24 @@ export default function ApprovalRespondPage() {
   const isApprove = preview?.action === 'approve';
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-6">
-      <div className="w-full max-w-md rounded-xl border bg-card p-8 shadow-sm" data-testid="approval-respond">
-        <h1 className="text-2xl font-bold text-primary mb-6">LexiSense</h1>
+    <AuthShell title="Approval response" testId="approval-respond">
         {error && (
-          <div data-testid="approval-error">
-            <p className="text-destructive font-medium mb-4">{error}</p>
-            <Link className="text-primary underline" to="/contracts">Open LexiSense</Link>
+          <div data-testid="approval-error" role="alert" className="space-y-4">
+            <p className="text-destructive font-medium flex gap-2 items-start">
+              <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" aria-hidden="true" />
+              <span>{error}</span>
+            </p>
+            <Button asChild variant="outline" className="w-full">
+              <Link to="/contracts">Open LexiSense</Link>
+            </Button>
           </div>
         )}
         {!error && result && (
-          <div data-testid="approval-done">
-            <p className="text-lg font-medium mb-4">{result.message}</p>
-            <Link className="text-primary underline" to={`/contracts/${result.contractId}`}>View the contract</Link>
+          <div data-testid="approval-done" className="space-y-4">
+            <p className="text-lg font-medium">{result.message}</p>
+            <Button asChild className="w-full">
+              <Link to={`/contracts/${result.contractId}`}>View the contract</Link>
+            </Button>
           </div>
         )}
         {!error && !result && !preview && <p className="text-muted-foreground">Verifying link…</p>}
@@ -91,7 +98,7 @@ export default function ApprovalRespondPage() {
               onChange={(e) => setComment(e.target.value)}
               className="mb-4"
             />
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
               <Button
                 onClick={confirm}
                 disabled={submitting}
@@ -100,13 +107,12 @@ export default function ApprovalRespondPage() {
               >
                 {submitting ? 'Working…' : isApprove ? 'Confirm approval' : 'Confirm rejection'}
               </Button>
-              <Link className="self-center text-sm underline" to={`/contracts/${preview.contractId}`}>
-                View contract
-              </Link>
+              <Button asChild variant="outline">
+                <Link to={`/contracts/${preview.contractId}`}>View contract</Link>
+              </Button>
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </AuthShell>
   );
 }

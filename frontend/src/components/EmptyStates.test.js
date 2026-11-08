@@ -142,12 +142,16 @@ describe('uploadErrorDetails', () => {
 });
 
 describe('ErrorFallback', () => {
-  test('shows the error state, retries, and has no support email', () => {
+  test('shows the error state, retries, and links to support@lexisense.net (UI-ES-03)', () => {
     const resetError = jest.fn();
-    render(<ErrorFallback resetError={resetError} />);
+    act(() => {
+      root.render(<ErrorFallback resetError={resetError} />);
+    });
     expect(container.querySelector('h1').textContent).toBe('Something went wrong');
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
-    expect(container.textContent).not.toMatch(/support@|email/i);
+    const mail = container.querySelector('a[href="mailto:support@lexisense.net"]');
+    expect(mail).not.toBeNull();
+    expect(mail.textContent).toBe('support@lexisense.net');
     act(() => container.querySelector('button').click());
     expect(resetError).toHaveBeenCalled();
   });
