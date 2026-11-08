@@ -1082,7 +1082,17 @@ async def delete_contract(
     require_owner_or_capability(current_user, contract, "delete")
     
     if contract.get("storageKey"):
-        await delete_file_from_s3(contract["storageKey"])
+        try:
+            storage_deleted = await delete_file_from_s3(contract["storageKey"])
+        except Exception as exc:
+            logger.error("Storage deletion raised %s for contract %s", type(exc).__name__, contract_id)
+            storage_deleted = False
+        if not storage_deleted:
+            logger.error("Failed to delete contract file for contract %s; retaining database record", contract_id)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to delete contract file. Please try again.",
+            )
     
     await db.contracts.delete_one({"id": contract_id})
     await db.chat_history.delete_many({"contractId": contract_id})
