@@ -21,7 +21,7 @@ contracts            the hottest collection: every list/dashboard query is
                      lookup (unique) backs every by-id endpoint.
 contract_versions    version history per contract.
 invitations          token-hash lookup on acceptance + per-org listing.
-expiration_alerts    the alert scheduler looks alerts up per contract and the
+expiration_alerts    the alert scan looks alerts up per contract and the
                      alerts screen lists them per organisation.
 templates            per-org template listing.
 audit_logs           per-org audit listing filtered by resource/action.

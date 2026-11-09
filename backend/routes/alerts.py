@@ -118,7 +118,7 @@ async def check_and_send_alerts(
     """
     require_capability(current_user, "alert_trigger")
     await assert_org_writable(current_user["organizationId"])
-    if not getattr(request.app.state, "alerts_ready", True):
+    if not getattr(request.app.state, "alerts_ready", False):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Alerts are temporarily unavailable. Please try again shortly.",

@@ -219,20 +219,12 @@ async def lifespan(app: FastAPI):
                 delay = min(delay * 2, 60.0)
 
     bootstrap_task = asyncio.create_task(_bootstrap())
-    from services.alert_scheduler import build_alert_scheduler
-
-    alert_scheduler = build_alert_scheduler(
-        db,
-        is_ready=lambda: bool(getattr(app.state, "bootstrap_ok", False))
-        and bool(getattr(app.state, "alerts_ready", False)),
-    )
-    alert_scheduler.start()
-    app.state.alert_scheduler = alert_scheduler
+    # Scheduled alert delivery runs as a separate cron job, not in-process,
+    # so no scheduler starts on boot (or once per replica).
 
     yield
 
     logger.info("LexiSense API shutting down...")
-    alert_scheduler.shutdown(wait=False)
     if not bootstrap_task.done():
         bootstrap_task.cancel()
     alert_index_task = getattr(app.state, "alert_index_task", None)

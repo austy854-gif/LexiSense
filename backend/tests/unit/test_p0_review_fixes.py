@@ -10,7 +10,6 @@
   claim is never re-claimed, failed alerts retry outside the expiry-date
   selection, and ``MAX_ATTEMPTS`` is a hard ceiling;
 * manual check-and-send answers 202 and history includes legacy records;
-* scheduler env parsing never breaks startup.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -22,7 +21,7 @@ from httpx import ASGITransport, AsyncClient
 from routes import alerts as alerts_route
 from routes import billing as billing_route
 from routes import contracts as contracts_route
-from services import alert_scheduler, alert_service, storage_service
+from services import alert_service, storage_service
 from utils import policy
 from tests.unit.conftest import API_PREFIX, auth_headers, make_contract, make_user
 
@@ -600,7 +599,7 @@ async def aclient(app, db):
 
 class TestAlertRoutes:
     async def test_check_and_send_returns_202_and_runs_in_background(
-        self, aclient, db, org_id, monkeypatch
+        self, aclient, app, db, org_id, monkeypatch
     ):
         ran = []
 
@@ -613,6 +612,7 @@ class TestAlertRoutes:
 
         monkeypatch.setattr(alerts_route, "scan_expiration_alerts", _scan)
         monkeypatch.setattr(alerts_route, "assert_org_writable", _writable)
+        monkeypatch.setattr(app.state, "alerts_ready", True, raising=False)
         admin = make_user(org_id, role="admin")
         await db.users.insert_one(dict(admin))
         r = await aclient.post(
@@ -656,30 +656,6 @@ class TestAlertRoutes:
         )
         ids = {a["id"] for a in r.json()["alerts"]}
         assert ids == {"legacy", "new"}
-
-
-class TestSchedulerEnv:
-    @pytest.mark.parametrize(
-        "raw,expected",
-        [(None, 8), ("", 8), ("  ", 8), ("abc", 8), ("12", 12), ("99", 23), ("-3", 0)],
-    )
-    def test_env_int_is_defensive(self, monkeypatch, raw, expected):
-        """Parse scheduler settings defensively and clamp values to the supported range."""
-        if raw is None:
-            monkeypatch.delenv("ALERT_SCAN_UTC_HOUR", raising=False)
-        else:
-            monkeypatch.setenv("ALERT_SCAN_UTC_HOUR", raw)
-        assert alert_scheduler._env_int("ALERT_SCAN_UTC_HOUR", 8, 0, 23) == expected
-
-    def test_bad_env_does_not_break_scheduler_and_retry_job_exists(
-        self, monkeypatch, db
-    ):
-        """Keep both scheduler jobs registered despite malformed environment settings."""
-        monkeypatch.setenv("ALERT_SCAN_UTC_HOUR", "eight")
-        monkeypatch.setenv("ALERT_SCAN_UTC_MINUTE", "x")
-        scheduler = alert_scheduler.build_alert_scheduler(db)
-        ids = {job.id for job in scheduler.get_jobs()}
-        assert {"daily-expiration-renewal-alerts", "expiration-alert-retries"} <= ids
 
 
 class TestRestoreTransitionCapability:
@@ -768,41 +744,18 @@ class TestAlertReadinessGate:
         )
         assert await alert_service.alert_idempotency_index_ready(db) is True
 
-    async def test_scheduler_jobs_skip_until_ready(self, db, monkeypatch):
-        """Prevent scans and retries until the idempotency index is ready."""
-        calls = []
-
-        async def _scan(database):
-            calls.append("scan")
-            return {}
-
-        async def _retry(database):
-            calls.append("retry")
-            return {}
-
-        monkeypatch.setattr(alert_scheduler, "scan_expiration_alerts", _scan)
-        monkeypatch.setattr(alert_scheduler, "retry_failed_alerts", _retry)
-        ready = {"ok": False}
-        scheduler = alert_scheduler.build_alert_scheduler(
-            db, is_ready=lambda: ready["ok"]
-        )
-        jobs = {job.id: job.func for job in scheduler.get_jobs()}
-        await jobs["daily-expiration-renewal-alerts"]()
-        await jobs["expiration-alert-retries"]()
-        assert calls == []
-        ready["ok"] = True
-        await jobs["daily-expiration-renewal-alerts"]()
-        await jobs["expiration-alert-retries"]()
-        assert calls == ["scan", "retry"]
-
+    @pytest.mark.parametrize("flag", ["unset", False])
     async def test_manual_check_is_503_until_ready(
-        self, aclient, app, db, org_id, monkeypatch
+        self, aclient, app, db, org_id, monkeypatch, flag
     ):
         async def _writable(org):
             return None
 
         monkeypatch.setattr(alerts_route, "assert_org_writable", _writable)
-        app.state.alerts_ready = False
+        if flag == "unset":  # bootstrap has not reached the alert step yet
+            monkeypatch.delattr(app.state, "alerts_ready", raising=False)
+        else:
+            monkeypatch.setattr(app.state, "alerts_ready", flag, raising=False)
         admin = make_user(org_id, role="admin")
         await db.users.insert_one(dict(admin))
         r = await aclient.post(
