@@ -376,6 +376,11 @@ export default function ContractsPage() {
           <div>
             <h1 className="text-3xl font-bold">Contracts</h1>
             <p className="text-muted-foreground mt-1">Manage and analyze your contracts</p>
+            {access?.ready && !uploadAllowed && access.message && (
+              <p className="text-muted-foreground mt-2" role="status" data-testid="upload-access-message">
+                {access.message}
+              </p>
+            )}
           </div>
           {uploadAllowed && (
           <div className="flex gap-2">

@@ -236,6 +236,8 @@ class TestCapabilities:
         body = response.json()
         assert body["readOnly"] is False
         assert body["capabilities"]["canUpload"] is (allowed and role != "viewer")
+        if not allowed:
+            assert "trial uploads" in body["message"]
         assert (await db.organization_billing.find_one({"id": "b1"}))["trialContractsUsed"] == used
 
     async def test_paid_plan_does_not_consume_or_enforce_trial_quota(self, bclient, db, org_id, monkeypatch):
