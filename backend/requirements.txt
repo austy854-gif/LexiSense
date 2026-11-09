@@ -126,7 +126,7 @@ websockets==16.0
 yarl==1.25.1
 zipp==3.23.0
 celery==5.6.3
-redis==5.0.1
+redis==8.1.0
 # NOTE: emergentintegrations==0.2.2 hard-pins litellm==1.80.0 / openai==1.99.9,
 # which conflicts with the security bumps above. It is installed separately with
 # --no-deps from Emergent's index (see root Dockerfile / backend/Dockerfile).
