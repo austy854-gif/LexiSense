@@ -2,6 +2,7 @@
 Celery application for LexiSense Agentic AI Platform.
 Distributed task queue for background AI processing.
 """
+
 import logging
 import os
 import ssl
@@ -84,7 +85,9 @@ _ALL_BEAT_JOBS = {
 }
 
 BEAT_SCHEDULE = {
-    name: job for name, job in _ALL_BEAT_JOBS.items() if BEAT_JOB_GROUPS.get(name) in ENABLED_GROUPS
+    name: job
+    for name, job in _ALL_BEAT_JOBS.items()
+    if BEAT_JOB_GROUPS.get(name) in ENABLED_GROUPS
 }
 
 if not CELERY_BROKER_URL:
@@ -125,32 +128,25 @@ celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
-    
     # Timezone
     timezone="UTC",
     enable_utc=True,
-    
     # Task execution
     task_track_started=True,
     task_time_limit=30 * 60,  # 30 minutes hard limit
     task_soft_time_limit=25 * 60,  # 25 minutes soft limit
     task_acks_late=True,
     task_reject_on_worker_lost=True,
-    
     # Worker
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=1000,
     worker_disable_rate_limits=False,
-    
     # Results
     result_expires=3600,  # 1 hour
     result_extended=True,
-    
     # Beat schedule (periodic tasks)
-    
     # Beat schedule (periodic tasks) -- filtered by feature flags above.
     beat_schedule=BEAT_SCHEDULE,
-
     # Task routing
     task_routes={
         "services.agent_tasks.*": {"queue": "scheduled"},
@@ -160,7 +156,6 @@ celery_app.conf.update(
         "services.intake_tasks.*": {"queue": "high_priority"},
         "services.approval_tasks.*": {"queue": "high_priority"},
     },
-    
     # Queue definitions
     task_default_queue="default",
     task_queues=(
@@ -169,25 +164,28 @@ celery_app.conf.update(
         Queue("scheduled", routing_key="scheduled"),
         Queue("low_priority", routing_key="low_priority"),
     ),
-    
     # Broker connection timeouts: fail fast instead of hanging an API request
     # (or the worker) when Redis is unreachable.
-    broker_connection_timeout=float(os.environ.get("CELERY_BROKER_CONNECTION_TIMEOUT", "3")),
+    broker_connection_timeout=float(
+        os.environ.get("CELERY_BROKER_CONNECTION_TIMEOUT", "3")
+    ),
     broker_transport_options={
         "socket_timeout": float(os.environ.get("CELERY_BROKER_SOCKET_TIMEOUT", "5")),
-        "socket_connect_timeout": float(os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")),
+        "socket_connect_timeout": float(
+            os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")
+        ),
         # Seconds an idle worker blocks per BRPOP before re-polling. The kombu
         # default (1s) costs ~86k Redis commands/day per queue on metered
         # Redis such as Upstash; 10s cuts that ~10x. Requires kombu>=5.6.
         "polling_interval": 10,
     },
     redis_socket_timeout=float(os.environ.get("CELERY_BROKER_SOCKET_TIMEOUT", "5")),
-    redis_socket_connect_timeout=float(os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")),
-
+    redis_socket_connect_timeout=float(
+        os.environ.get("CELERY_BROKER_CONNECT_TIMEOUT", "3")
+    ),
     # Monitoring
     worker_send_task_events=True,
     task_send_sent_event=True,
-    
     # Retry policy
     task_autoretry_for=(Exception,),
     task_retry_backoff=True,
@@ -199,9 +197,17 @@ celery_app.conf.update(
 # unless ssl_cert_reqs is set, so default to verified TLS when the URL does
 # not carry the parameter itself.
 _REDIS_SSL = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
-if CELERY_BROKER_URL and CELERY_BROKER_URL.startswith("rediss://") and "ssl_cert_reqs" not in CELERY_BROKER_URL:
+if (
+    CELERY_BROKER_URL
+    and CELERY_BROKER_URL.startswith("rediss://")
+    and "ssl_cert_reqs" not in CELERY_BROKER_URL
+):
     celery_app.conf.broker_use_ssl = _REDIS_SSL
-if CELERY_RESULT_BACKEND and CELERY_RESULT_BACKEND.startswith("rediss://") and "ssl_cert_reqs" not in CELERY_RESULT_BACKEND:
+if (
+    CELERY_RESULT_BACKEND
+    and CELERY_RESULT_BACKEND.startswith("rediss://")
+    and "ssl_cert_reqs" not in CELERY_RESULT_BACKEND
+):
     celery_app.conf.redis_backend_use_ssl = _REDIS_SSL
 
 
@@ -221,6 +227,7 @@ def _db_name_from(url: str) -> str:
         return name
     try:
         from pymongo.uri_parser import parse_uri
+
         return parse_uri(url).get("database") or "lexisense"
     except Exception:
         return "lexisense"
@@ -235,7 +242,9 @@ def _wire_task_database(task_id=None, **_):
     from motor.motor_asyncio import AsyncIOMotorClient
     from services.task_db import current_db
 
-    client = AsyncIOMotorClient(url, connect=False, serverSelectionTimeoutMS=5_000, appname="lexisense-worker")
+    client = AsyncIOMotorClient(
+        url, connect=False, serverSelectionTimeoutMS=5_000, appname="lexisense-worker"
+    )
     token = current_db.set(client[_db_name_from(url)])
     _task_mongo_clients[task_id] = (client, token)
 

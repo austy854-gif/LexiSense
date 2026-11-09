@@ -4,6 +4,7 @@ The accept page calls this before showing the sign-up form so it can tell the
 invitee which team and role they are joining, and show a clear state for
 invalid, expired or already-used links. It must be read-only.
 """
+
 from tests.unit.conftest import API_PREFIX, iso_in, make_invitation
 
 PREVIEW_URL = f"{API_PREFIX}/team/accept-invite/preview"
@@ -72,7 +73,9 @@ async def test_accepted_invitation_is_409(client, db, org_id, users):
 
 async def test_after_accepting_preview_reports_409(client, db, org_id, users):
     await _seed(db, org_id, users, token="tok-flow")
-    ok = await client.post(ACCEPT_URL, json={"token": "tok-flow", "password": "Sup3rSecret!"})
+    ok = await client.post(
+        ACCEPT_URL, json={"token": "tok-flow", "password": "Sup3rSecret!"}
+    )
     assert ok.status_code == 200
     response = await client.post(PREVIEW_URL, json={"token": "tok-flow"})
     assert response.status_code == 409
@@ -109,9 +112,14 @@ async def test_is_rate_limited(client, db):
     assert 429 in codes
 
 
-async def test_reports_when_the_invitee_already_has_an_account(client, db, org_id, users):
+async def test_reports_when_the_invitee_already_has_an_account(
+    client, db, org_id, users
+):
     from tests.unit.conftest import make_user
-    inv = await _seed(db, org_id, users, token="tok-acct", email="has-account@example.com")
+
+    inv = await _seed(
+        db, org_id, users, token="tok-acct", email="has-account@example.com"
+    )
     await db.users.insert_one(make_user("org-other", email=inv["email"]))
     response = await client.post(PREVIEW_URL, json={"token": "tok-acct"})
     assert response.json()["accountExists"] is True
@@ -120,6 +128,7 @@ async def test_reports_when_the_invitee_already_has_an_account(client, db, org_i
 
 async def test_existing_member_is_not_flagged_as_other_team(client, db, org_id, users):
     from tests.unit.conftest import make_user
+
     inv = await _seed(db, org_id, users, token="tok-same", email="same@example.com")
     await db.users.insert_one(make_user(org_id, email=inv["email"]))
     body = (await client.post(PREVIEW_URL, json={"token": "tok-same"})).json()
@@ -134,10 +143,14 @@ async def test_looks_up_by_token_hash_and_never_returns_it(client, db, org_id, u
     assert response.status_code == 200
     assert "tokenHash" not in response.json()
     # The stored hash itself is not a valid token.
-    assert (await client.post(PREVIEW_URL, json={"token": inv["tokenHash"]})).status_code == 404
+    assert (
+        await client.post(PREVIEW_URL, json={"token": inv["tokenHash"]})
+    ).status_code == 404
 
 
-async def test_legacy_plaintext_invitation_is_found_and_migrated(client, db, org_id, users):
+async def test_legacy_plaintext_invitation_is_found_and_migrated(
+    client, db, org_id, users
+):
     inv = await _seed(db, org_id, users, token="tok-legacy", legacy_plaintext=True)
     response = await client.post(PREVIEW_URL, json={"token": "tok-legacy"})
     assert response.status_code == 200

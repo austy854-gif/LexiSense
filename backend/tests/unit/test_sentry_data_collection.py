@@ -8,6 +8,7 @@ These tests check three things:
   exactly, so collection has not been widened;
 * frame locals stay off.
 """
+
 import warnings
 
 import pytest
@@ -56,9 +57,13 @@ def test_resolved_privacy_matches_legacy_send_default_pii_false():
     assert not client.options.get("send_default_pii")
     assert client.options["include_local_variables"] is False
     assert client.options["max_request_body_size"] == "never"
-    assert _scrubber_config(client.options["event_scrubber"]) == _scrubber_config(legacy.options["event_scrubber"])
+    assert _scrubber_config(client.options["event_scrubber"]) == _scrubber_config(
+        legacy.options["event_scrubber"]
+    )
 
-    if "data_collection" not in client.options:  # sentry-sdk < 2.72: nothing more to compare
+    if (
+        "data_collection" not in client.options
+    ):  # sentry-sdk < 2.72: nothing more to compare
         return
     dc = client.options["data_collection"]
     assert dc == legacy.options["data_collection"]
@@ -70,7 +75,11 @@ def test_resolved_privacy_matches_legacy_send_default_pii_false():
     assert dc["gen_ai"] == {"inputs": False, "outputs": False}
     assert dc["graphql"] == {"document": False, "variables": False}
     # PII-ish headers/cookies/query params stay on the denylist.
-    for terms in (dc["cookies"]["terms"], dc["http_headers"]["request"]["terms"], dc["url_query_params"]["terms"]):
+    for terms in (
+        dc["cookies"]["terms"],
+        dc["http_headers"]["request"]["terms"],
+        dc["url_query_params"]["terms"],
+    ):
         assert {"forwarded", "-ip", "remote-", "via", "-user"} <= set(terms)
 
 

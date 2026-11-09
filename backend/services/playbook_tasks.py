@@ -2,6 +2,7 @@
 Celery tasks for Playbook-Driven Automated Redlining.
 Handles contract analysis against legal playbooks and redline generation.
 """
+
 import asyncio
 import logging
 import re
@@ -91,7 +92,7 @@ def extract_clauses(contract_text: str) -> Dict[str, List[str]]:
     """Extract clause text segments from contract."""
     clauses = {}
     text_lower = contract_text.lower()
-    
+
     for clause_name, patterns in CLAUSE_PATTERNS.items():
         matches = []
         for pattern in patterns:
@@ -104,14 +105,14 @@ def extract_clauses(contract_text: str) -> Dict[str, List[str]]:
                     matches.append(context)
         if matches:
             clauses[clause_name] = matches
-    
+
     return clauses
 
 
 def match_clause_to_rule(clause_text: str, rule) -> Optional[Dict[str, Any]]:
     """Match a clause against a playbook rule and generate suggestion."""
     clause_lower = clause_text.lower()
-    
+
     # Check if rule applies to this clause
     rule_clause = rule.get("clause_name", "").lower()
     if rule_clause not in clause_lower and clause_lower not in rule_clause:
@@ -120,9 +121,9 @@ def match_clause_to_rule(clause_text: str, rule) -> Optional[Dict[str, Any]]:
         clause_words = set(clause_lower.split())
         if not rule_words & clause_words:
             return None
-    
+
     rule_type = rule.get("rule_type")
-    
+
     if rule_type == "must_have":
         # Check if required clause exists - already matched above
         return {
@@ -130,7 +131,7 @@ def match_clause_to_rule(clause_text: str, rule) -> Optional[Dict[str, Any]]:
             "message": f"Required clause '{rule.get('clause_name')}' found",
             "suggested_text": rule.get("preferred_text"),
         }
-    
+
     elif rule_type == "must_not_have":
         # Clause should not exist - flag for removal
         return {
@@ -138,7 +139,7 @@ def match_clause_to_rule(clause_text: str, rule) -> Optional[Dict[str, Any]]:
             "message": f"Clause '{rule.get('clause_name')}' should be removed per playbook",
             "suggested_text": "",
         }
-    
+
     elif rule_type == "preferred_language":
         # Check if preferred language is present
         preferred = rule.get("preferred_text", "").lower()
@@ -149,7 +150,7 @@ def match_clause_to_rule(clause_text: str, rule) -> Optional[Dict[str, Any]]:
                 "suggested_text": rule.get("preferred_text"),
                 "original_text": clause_text[:500],
             }
-    
+
     elif rule_type == "fallback_language":
         # Check if any fallback is present
         fallbacks = rule.get("fallback_texts", [])
@@ -160,15 +161,15 @@ def match_clause_to_rule(clause_text: str, rule) -> Optional[Dict[str, Any]]:
                 "suggested_text": fallbacks[0] if fallbacks else "",
                 "original_text": clause_text[:500],
             }
-    
+
     elif rule_type == "negotiation_boundary":
         # Check numerical boundaries
         min_val = rule.get("min_value")
         max_val = rule.get("max_value")
         unit = rule.get("unit", "")
-        
+
         # Extract numbers from clause
-        numbers = re.findall(r'[\d,]+\.?\d*', clause_text)
+        numbers = re.findall(r"[\d,]+\.?\d*", clause_text)
         if numbers and (min_val is not None or max_val is not None):
             for num_str in numbers:
                 try:
@@ -189,7 +190,7 @@ def match_clause_to_rule(clause_text: str, rule) -> Optional[Dict[str, Any]]:
                         }
                 except ValueError:
                     pass
-    
+
     elif rule_type == "conditional":
         # Conditional rules - check if condition met
         condition = rule.get("condition", "")
@@ -200,12 +201,14 @@ def match_clause_to_rule(clause_text: str, rule) -> Optional[Dict[str, Any]]:
                 "message": f"Condition met for '{rule.get('clause_name')}'",
                 "then_rule_id": then_rule_id,
             }
-    
+
     return None
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
-def analyze_contract_with_playbook(self, contract_id: str, playbook_id: str, auto_apply: bool = False):
+def analyze_contract_with_playbook(
+    self, contract_id: str, playbook_id: str, auto_apply: bool = False
+):
     """Analyze a contract against a legal playbook."""
     if get_db() is None:
         logger.error("Database not initialized for playbook analysis")
@@ -216,7 +219,9 @@ def analyze_contract_with_playbook(self, contract_id: str, playbook_id: str, aut
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_analyze_contract_with_playbook_async(contract_id, playbook_id, auto_apply))
+        result = loop.run_until_complete(
+            _analyze_contract_with_playbook_async(contract_id, playbook_id, auto_apply)
+        )
         loop.close()
         return result
     except Exception as e:
@@ -224,7 +229,9 @@ def analyze_contract_with_playbook(self, contract_id: str, playbook_id: str, aut
         raise self.retry(exc=e)
 
 
-async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: str, auto_apply: bool = False):
+async def _analyze_contract_with_playbook_async(
+    contract_id: str, playbook_id: str, auto_apply: bool = False
+):
     """Async implementation of playbook analysis."""
     from models.agentic import RedlineSession, RedlineSuggestion, PlaybookClauseRule
 
@@ -241,11 +248,22 @@ async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: s
         from routes.billing import background_ai_entitlement
 
         org_id = contract.get("organizationId")
-        if await background_ai_entitlement(org_id, db, f"playbook analysis of {contract_id}") is None:
-            return {"status": "skipped", "reason": "no_ai_entitlement", "contract_id": contract_id}
+        if (
+            await background_ai_entitlement(
+                org_id, db, f"playbook analysis of {contract_id}"
+            )
+            is None
+        ):
+            return {
+                "status": "skipped",
+                "reason": "no_ai_entitlement",
+                "contract_id": contract_id,
+            }
 
         # Org scoping: the playbook must belong to the contract's org.
-        playbook = await db.legal_playbooks.find_one({"id": playbook_id, "organizationId": org_id}, {"_id": 0})
+        playbook = await db.legal_playbooks.find_one(
+            {"id": playbook_id, "organizationId": org_id}, {"_id": 0}
+        )
         if not playbook:
             return {"status": "error", "message": "Playbook not found"}
 
@@ -273,10 +291,10 @@ async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: s
 
         for rule_data in rules:
             rule = PlaybookClauseRule(**rule_data)
-            
+
             # Find matching clauses
             matching_clauses = clauses.get(rule.clause_name, [])
-            
+
             if rule.rule_type == "must_have" and not matching_clauses:
                 # Required clause missing
                 suggestion = RedlineSuggestion(
@@ -286,14 +304,15 @@ async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: s
                     clause_name=rule.clause_name,
                     clause_type=rule.clause_type,
                     original_text="[MISSING - Clause not found in contract]",
-                    suggested_text=rule.preferred_text or f"[Add {rule.clause_name} clause per playbook]",
+                    suggested_text=rule.preferred_text
+                    or f"[Add {rule.clause_name} clause per playbook]",
                     rule_type=rule.rule_type,
                     description=rule.description,
                     priority=rule.priority,
                     confidence=0.9,
                 )
                 suggestions.append(suggestion)
-            
+
             else:
                 # Check each matching clause segment
                 for clause_text in matching_clauses:
@@ -305,7 +324,9 @@ async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: s
                             ruleId=rule.id,
                             clause_name=rule.clause_name,
                             clause_type=rule.clause_type,
-                            original_text=match_result.get("original_text", clause_text[:500]),
+                            original_text=match_result.get(
+                                "original_text", clause_text[:500]
+                            ),
                             suggested_text=match_result.get("suggested_text", ""),
                             rule_type=rule.rule_type,
                             description=match_result.get("message", rule.description),
@@ -319,7 +340,7 @@ async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: s
         session.total_suggestions = len(suggestions)
         session.pending_count = len(suggestions)
         session.status = "ready_for_review"
-        
+
         if auto_apply:
             session.status = "completed"
             # In auto-apply mode, accept all suggestions
@@ -327,16 +348,17 @@ async def _analyze_contract_with_playbook_async(contract_id: str, playbook_id: s
             pass
 
         await db.redline_sessions.update_one(
-            {"id": session.id},
-            {"$set": session.model_dump()}
+            {"id": session.id}, {"$set": session.model_dump()}
         )
 
-        logger.info(f"Playbook analysis completed: {len(suggestions)} suggestions generated")
+        logger.info(
+            f"Playbook analysis completed: {len(suggestions)} suggestions generated"
+        )
         return {
             "status": "success",
             "session_id": session.id,
             "suggestions_count": len(suggestions),
-            "suggestions": [s.model_dump() for s in suggestions]
+            "suggestions": [s.model_dump() for s in suggestions],
         }
 
     except Exception as e:
@@ -356,7 +378,9 @@ def apply_redlines(self, session_id: str, suggestion_ids: List[str]):
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_apply_redlines_async(session_id, suggestion_ids))
+        result = loop.run_until_complete(
+            _apply_redlines_async(session_id, suggestion_ids)
+        )
         loop.close()
         return result
     except Exception as e:
@@ -375,7 +399,9 @@ async def _apply_redlines_async(session_id: str, suggestion_ids: List[str]):
         if not session:
             return {"status": "error", "message": "Session not found"}
 
-        contract = await db.contracts.find_one({"id": session["contractId"]}, {"_id": 0})
+        contract = await db.contracts.find_one(
+            {"id": session["contractId"]}, {"_id": 0}
+        )
         if not contract:
             return {"status": "error", "message": "Contract not found"}
 
@@ -402,16 +428,9 @@ async def _apply_redlines_async(session_id: str, suggestion_ids: List[str]):
         session["status"] = "completed"
         session["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-        await db.redline_sessions.update_one(
-            {"id": session_id},
-            {"$set": session}
-        )
+        await db.redline_sessions.update_one({"id": session_id}, {"$set": session})
 
-        return {
-            "status": "success",
-            "applied": applied,
-            "session_id": session_id
-        }
+        return {"status": "success", "applied": applied, "session_id": session_id}
 
     except Exception as e:
         logger.error(f"Redline application error: {e}")
@@ -430,7 +449,9 @@ def bulk_analyze_with_playbook(self, organization_id: str, playbook_id: str):
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_bulk_analyze_with_playbook_async(organization_id, playbook_id))
+        result = loop.run_until_complete(
+            _bulk_analyze_with_playbook_async(organization_id, playbook_id)
+        )
         loop.close()
         return result
     except Exception as e:
@@ -446,13 +467,18 @@ async def _bulk_analyze_with_playbook_async(organization_id: str, playbook_id: s
 
     try:
         contracts = await db.contracts.find(
-            {"organizationId": organization_id, "status": {"$in": ["draft", "review", "approved"]}},
-            {"_id": 0, "id": 1}
+            {
+                "organizationId": organization_id,
+                "status": {"$in": ["draft", "review", "approved"]},
+            },
+            {"_id": 0, "id": 1},
         ).to_list(200)
-        
+
         queued = 0
         for contract in contracts:
-            analyze_contract_with_playbook.delay(contract["id"], playbook_id, auto_apply=False)
+            analyze_contract_with_playbook.delay(
+                contract["id"], playbook_id, auto_apply=False
+            )
             queued += 1
 
         logger.info(f"Queued {queued} contracts for playbook analysis")

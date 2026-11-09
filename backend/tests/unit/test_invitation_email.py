@@ -1,4 +1,5 @@
 """Rendering tests for the team-invite email (services.email_service)."""
+
 import pytest
 
 from services import email_service
@@ -20,14 +21,22 @@ def _app_url(monkeypatch):
 
 class TestAcceptUrl:
     def test_strips_trailing_slash_and_uses_accept_invite_route(self):
-        assert build_accept_url("tok") == "https://app.lexisense.net/accept-invite?token=tok"
+        assert (
+            build_accept_url("tok")
+            == "https://app.lexisense.net/accept-invite?token=tok"
+        )
 
     def test_url_encodes_the_token(self):
         url = build_accept_url("a+b/c=d&e f")
-        assert url == "https://app.lexisense.net/accept-invite?token=a%2Bb%2Fc%3Dd%26e%20f"
+        assert (
+            url == "https://app.lexisense.net/accept-invite?token=a%2Bb%2Fc%3Dd%26e%20f"
+        )
 
     def test_strips_multiple_trailing_slashes(self):
-        assert build_accept_url("t", app_url="http://x//") == "http://x/accept-invite?token=t"
+        assert (
+            build_accept_url("t", app_url="http://x//")
+            == "http://x/accept-invite?token=t"
+        )
 
     def test_url_safe_secrets_token_is_unchanged(self):
         # secrets.token_urlsafe only emits [A-Za-z0-9_-]
@@ -59,14 +68,24 @@ class TestInviteCopy:
 
     def test_old_template_artifacts_are_gone(self):
         _, html, text = render_invitation_email(DATA)
-        for banned in ("⚖", "Contract Lifecycle Management", "#a78bfa",
-                       "You're Invited!", "Accept Invitation", "PENDING LAUNCH"):
+        for banned in (
+            "⚖",
+            "Contract Lifecycle Management",
+            "#a78bfa",
+            "You're Invited!",
+            "Accept Invitation",
+            "PENDING LAUNCH",
+        ):
             assert banned not in html
             assert banned not in text
 
     def test_account_email_has_no_unsubscribe_rows(self):
         _, html, text = render_invitation_email(DATA)
-        for banned in ("nsubscribe", "notification_settings", "Manage email notifications"):
+        for banned in (
+            "nsubscribe",
+            "notification_settings",
+            "Manage email notifications",
+        ):
             assert banned not in html
             assert banned not in text
 
@@ -84,8 +103,11 @@ class TestInviteCopy:
 
 class TestEscaping:
     def test_inviter_and_org_names_are_html_escaped(self):
-        data = dict(DATA, inviter_name='<script>alert(1)</script>',
-                    organization_name='Tom & "Jerry" <Co>')
+        data = dict(
+            DATA,
+            inviter_name="<script>alert(1)</script>",
+            organization_name='Tom & "Jerry" <Co>',
+        )
         _, html, text = render_invitation_email(data)
         assert "<script>" not in html
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
@@ -97,7 +119,10 @@ class TestEscaping:
         data = dict(DATA, token='"><img src=x onerror=alert(1)>')
         _, html, _ = render_invitation_email(data)
         assert "<img src=x" not in html
-        assert "accept-invite?token=%22%3E%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E" in html
+        assert (
+            "accept-invite?token=%22%3E%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E"
+            in html
+        )
 
     def test_newlines_in_names_cannot_split_the_subject(self):
         data = dict(DATA, inviter_name="Eve\r\nBcc: x@evil.test")
@@ -105,7 +130,9 @@ class TestEscaping:
         assert "\n" not in subject and "\r" not in subject
 
     def test_fallbacks_when_names_missing(self):
-        subject, html, _ = render_invitation_email(dict(DATA, inviter_name="", organization_name=None))
+        subject, html, _ = render_invitation_email(
+            dict(DATA, inviter_name="", organization_name=None)
+        )
         assert subject == "A teammate invited you to LexiSense"
         assert "your team" in html
 
@@ -136,21 +163,33 @@ class TestSendEmailPassesPlainText:
         monkeypatch.setattr(email_service, "RESEND_API_KEY", "re_test")
         monkeypatch.setattr(email_service.resend.Emails, "send", fake_send)
         result = await email_service.send_invitation_email(
-            to_email="new@example.com", inviter_name="Ada Lovelace",
-            organization_name="Acme Studio", role="user", token="tok-1",
+            to_email="new@example.com",
+            inviter_name="Ada Lovelace",
+            organization_name="Acme Studio",
+            role="user",
+            token="tok-1",
         )
         assert result["status"] == "success"
         assert captured["subject"] == "Ada Lovelace invited you to LexiSense"
-        assert "Accept invite: https://app.lexisense.net/accept-invite?token=tok-1" in captured["text"]
+        assert (
+            "Accept invite: https://app.lexisense.net/accept-invite?token=tok-1"
+            in captured["text"]
+        )
         assert "invited new@example.com to LexiSense" in captured["text"]
-        assert 'href="https://app.lexisense.net/accept-invite?token=tok-1"' in captured["html"]
+        assert (
+            'href="https://app.lexisense.net/accept-invite?token=tok-1"'
+            in captured["html"]
+        )
 
     async def test_token_is_not_logged_without_api_key(self, monkeypatch, caplog):
         monkeypatch.setattr(email_service, "RESEND_API_KEY", None)
         caplog.set_level("INFO")
         await email_service.send_invitation_email(
-            to_email="new@example.com", inviter_name="A", organization_name="B",
-            role="user", token="super-secret-token",
+            to_email="new@example.com",
+            inviter_name="A",
+            organization_name="B",
+            role="user",
+            token="super-secret-token",
         )
         assert "super-secret-token" not in caplog.text
 
@@ -168,6 +207,7 @@ def test_developer_comments_are_not_sent_to_recipients():
 
 def test_uses_the_brand_account_invite_template_verbatim():
     from pathlib import Path
+
     tpl = Path(email_service._TEMPLATE_DIR)
     assert email_service.INVITE_HTML_TEMPLATE == "lexisense-account-invite.html"
     assert (tpl / "lexisense-account-invite.html").is_file()
@@ -187,7 +227,10 @@ def test_plain_text_has_no_header_lines_and_matches_copy():
 def test_every_referenced_header_image_is_served_by_the_frontend():
     import re
     from pathlib import Path
-    html = (Path(email_service._TEMPLATE_DIR) / "lexisense-account-invite.html").read_text()
+
+    html = (
+        Path(email_service._TEMPLATE_DIR) / "lexisense-account-invite.html"
+    ).read_text()
     public = Path(__file__).resolve().parents[3] / "frontend" / "public"
     srcs = set(re.findall(r'src="https://lexisense\.net(/[^"]+)"', html))
     assert srcs, "template should reference hosted header images"

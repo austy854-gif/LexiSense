@@ -16,6 +16,7 @@ to write. Output never includes tokens, hashes or email addresses.
 Idempotent: only ``pending`` invites match, so re-running is a no-op.
 Expired invites can be re-sent by inviting the same address again.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,9 +37,15 @@ from utils.invite_expiry import (  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--before", help="ISO-8601 cutoff; default: when migration 003 was applied")
-    parser.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--before", help="ISO-8601 cutoff; default: when migration 003 was applied"
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="write changes (default: dry run)"
+    )
     return parser
 
 
@@ -52,6 +59,7 @@ def _connect():
     name = get_env("DB_NAME")
     if not name:
         from pymongo.uri_parser import parse_uri
+
         name = parse_uri(url).get("database")
     if not name:
         raise SystemExit("DB_NAME must be set (or included in the connection string)")
@@ -68,14 +76,20 @@ async def run(db, before=None, apply=False, out=print) -> int:
     else:
         cutoff = await default_cutoff(db)
         if cutoff is None:
-            out(f"error: migration {HASH_MIGRATION_VERSION:03d} has not run; pass --before explicitly")
+            out(
+                f"error: migration {HASH_MIGRATION_VERSION:03d} has not run; pass --before explicitly"
+            )
             return 2
 
     report = await expire_pending_invites_before(db, cutoff, apply=apply)
-    out(f"mode:            {'APPLY' if apply else 'DRY RUN (no changes written; use --apply)'}")
+    out(
+        f"mode:            {'APPLY' if apply else 'DRY RUN (no changes written; use --apply)'}"
+    )
     out(f"cutoff:          {report.cutoff}")
     out(f"pending total:   {report.pending_total}")
-    out(f"created before:  {report.matched} (incl. {report.unparseable} with unparseable createdAt)")
+    out(
+        f"created before:  {report.matched} (incl. {report.unparseable} with unparseable createdAt)"
+    )
     out(f"expired now:     {report.expired}")
     return 0
 

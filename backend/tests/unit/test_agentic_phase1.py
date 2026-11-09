@@ -4,6 +4,7 @@ The routers run in-process against mongomock; Celery is never contacted. The
 enqueue path is exercised up to ``run_in_threadpool(task.apply_async, ...)``,
 which is replaced with a stub that records the call.
 """
+
 import os
 from types import SimpleNamespace
 
@@ -17,7 +18,12 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 from routes import agentic as agentic_route  # noqa: E402
 from services import celery_app as celery_module  # noqa: E402
-from tests.unit.conftest import API_PREFIX, auth_headers, make_contract, make_user  # noqa: E402
+from tests.unit.conftest import (
+    API_PREFIX,
+    auth_headers,
+    make_contract,
+    make_user,
+)  # noqa: E402
 
 PHASE1 = {"risk", "obligations"}
 
@@ -76,7 +82,13 @@ def mallory(other_org_id):
 async def seeded(db, org_id, alice):
     await db.contracts.insert_one(make_contract(org_id, alice["id"], contract_id="c-1"))
     await db.extracted_obligations.insert_one(
-        {"id": "ob-1", "contractId": "c-1", "organizationId": org_id, "status": "pending", "title": "Pay"}
+        {
+            "id": "ob-1",
+            "contractId": "c-1",
+            "organizationId": org_id,
+            "status": "pending",
+            "title": "Pay",
+        }
     )
     await db.obligation_alerts.insert_one(
         {"id": "al-1", "organizationId": org_id, "acknowledged": False}
@@ -92,7 +104,11 @@ def test_enabled_groups_default_off(monkeypatch):
 
 def test_phase1_flag_enables_only_risk_and_obligations(monkeypatch):
     monkeypatch.setenv("AGENTIC_PHASE1_ENABLED", "true")
-    for flag in ("AGENTIC_AGENTS_ENABLED", "AGENTIC_INTAKE_ENABLED", "AGENTIC_REDLINE_ENABLED"):
+    for flag in (
+        "AGENTIC_AGENTS_ENABLED",
+        "AGENTIC_INTAKE_ENABLED",
+        "AGENTIC_REDLINE_ENABLED",
+    ):
         monkeypatch.delenv(flag, raising=False)
     assert agentic_route.enabled_groups() == PHASE1
 
@@ -113,7 +129,9 @@ def test_phase1_flag_enables_only_risk_and_obligations(monkeypatch):
 async def test_flags_off_routes_404(method, path, alice):
     transport = ASGITransport(app=_app(set()))
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        resp = await getattr(client, method)(API_PREFIX + path, headers=auth_headers(alice))
+        resp = await getattr(client, method)(
+            API_PREFIX + path, headers=auth_headers(alice)
+        )
     assert resp.status_code == 404
 
 
@@ -140,11 +158,17 @@ async def test_phase1_does_not_mount_other_groups(phase1, method, path, alice):
         ("get", "/agentic/risk/c-1", None),
         ("post", "/agentic/obligations/extract", {"contractId": "c-1"}),
         ("get", "/agentic/obligations/contract/c-1", None),
-        ("patch", "/agentic/obligations/ob-1/status", {"obligationId": "ob-1", "status": "completed"}),
+        (
+            "patch",
+            "/agentic/obligations/ob-1/status",
+            {"obligationId": "ob-1", "status": "completed"},
+        ),
         ("post", "/agentic/obligations/alerts/al-1/acknowledge", None),
     ],
 )
-async def test_cross_org_access_is_404(phase1, seeded, queued, mallory, method, path, body):
+async def test_cross_org_access_is_404(
+    phase1, seeded, queued, mallory, method, path, body
+):
     kwargs = {"headers": auth_headers(mallory)}
     if body is not None:
         kwargs["json"] = body
@@ -159,9 +183,16 @@ async def test_cross_org_writes_do_not_modify(phase1, seeded, db, mallory):
         json={"obligationId": "ob-1", "status": "completed"},
         headers=auth_headers(mallory),
     )
-    await phase1.post(f"{API_PREFIX}/agentic/obligations/alerts/al-1/acknowledge", headers=auth_headers(mallory))
-    assert (await db.extracted_obligations.find_one({"id": "ob-1"}))["status"] == "pending"
-    assert (await db.obligation_alerts.find_one({"id": "al-1"}))["acknowledged"] is False
+    await phase1.post(
+        f"{API_PREFIX}/agentic/obligations/alerts/al-1/acknowledge",
+        headers=auth_headers(mallory),
+    )
+    assert (await db.extracted_obligations.find_one({"id": "ob-1"}))[
+        "status"
+    ] == "pending"
+    assert (await db.obligation_alerts.find_one({"id": "al-1"}))[
+        "acknowledged"
+    ] is False
 
 
 async def test_same_org_status_update_and_ack(phase1, seeded, db, alice):
@@ -171,30 +202,51 @@ async def test_same_org_status_update_and_ack(phase1, seeded, db, alice):
         headers=auth_headers(alice),
     )
     assert r.status_code == 200
-    r = await phase1.post(f"{API_PREFIX}/agentic/obligations/alerts/al-1/acknowledge", headers=auth_headers(alice))
+    r = await phase1.post(
+        f"{API_PREFIX}/agentic/obligations/alerts/al-1/acknowledge",
+        headers=auth_headers(alice),
+    )
     assert r.status_code == 200
-    assert (await db.extracted_obligations.find_one({"id": "ob-1"}))["status"] == "completed"
+    assert (await db.extracted_obligations.find_one({"id": "ob-1"}))[
+        "status"
+    ] == "completed"
     assert (await db.obligation_alerts.find_one({"id": "al-1"}))["acknowledged"] is True
 
 
 async def test_same_org_assess_and_extract_are_queued(phase1, seeded, queued, alice):
-    r = await phase1.post(f"{API_PREFIX}/agentic/risk/assess", json={"contractId": "c-1"}, headers=auth_headers(alice))
+    r = await phase1.post(
+        f"{API_PREFIX}/agentic/risk/assess",
+        json={"contractId": "c-1"},
+        headers=auth_headers(alice),
+    )
     assert r.status_code == 200
-    r = await phase1.post(f"{API_PREFIX}/agentic/obligations/extract", json={"contractId": "c-1"}, headers=auth_headers(alice))
+    r = await phase1.post(
+        f"{API_PREFIX}/agentic/obligations/extract",
+        json={"contractId": "c-1"},
+        headers=auth_headers(alice),
+    )
     assert r.status_code == 200 and r.json()["task_id"] == "task-123"
     assert len(queued) == 2
 
 
 # ------------------------------------------------------------------------ RBAC
-@pytest.mark.parametrize("path", ["/agentic/risk/bulk-assess", "/agentic/obligations/bulk-extract"])
-@pytest.mark.parametrize("role,expected", [("viewer", 403), ("user", 403), ("manager", 200), ("admin", 200)])
-async def test_bulk_requires_admin_or_manager(phase1, queued, users, path, role, expected):
+@pytest.mark.parametrize(
+    "path", ["/agentic/risk/bulk-assess", "/agentic/obligations/bulk-extract"]
+)
+@pytest.mark.parametrize(
+    "role,expected", [("viewer", 403), ("user", 403), ("manager", 200), ("admin", 200)]
+)
+async def test_bulk_requires_admin_or_manager(
+    phase1, queued, users, path, role, expected
+):
     resp = await phase1.post(API_PREFIX + path, headers=auth_headers(users[role]))
     assert resp.status_code == expected
 
 
 async def test_unauthenticated_is_rejected(phase1):
-    resp = await phase1.post(f"{API_PREFIX}/agentic/risk/assess", json={"contractId": "c-1"})
+    resp = await phase1.post(
+        f"{API_PREFIX}/agentic/risk/assess", json={"contractId": "c-1"}
+    )
     assert resp.status_code in (401, 403)
 
 
@@ -208,7 +260,9 @@ async def test_unauthenticated_is_rejected(phase1):
         ("/agentic/obligations/bulk-extract", None, "admin"),
     ],
 )
-async def test_no_broker_returns_503(phase1, seeded, monkeypatch, org_id, path, body, role):
+async def test_no_broker_returns_503(
+    phase1, seeded, monkeypatch, org_id, path, body, role
+):
     monkeypatch.setattr(celery_module, "CELERY_BROKER_URL", None)
     user = make_user(org_id, role=role)
     kwargs = {"headers": auth_headers(user)}
@@ -225,30 +279,53 @@ async def test_broker_down_returns_503(phase1, seeded, monkeypatch, alice):
         raise ConnectionError("broker unreachable")
 
     monkeypatch.setattr(agentic_route, "run_in_threadpool", boom)
-    resp = await phase1.post(f"{API_PREFIX}/agentic/risk/assess", json={"contractId": "c-1"}, headers=auth_headers(alice))
+    resp = await phase1.post(
+        f"{API_PREFIX}/agentic/risk/assess",
+        json={"contractId": "c-1"},
+        headers=auth_headers(alice),
+    )
     assert resp.status_code == 503
 
 
 # ------------------------------------------------------------------------- 429
-async def test_task_rate_limit_is_per_org(phase1, seeded, queued, monkeypatch, alice, mallory):
+async def test_task_rate_limit_is_per_org(
+    phase1, seeded, queued, monkeypatch, alice, mallory
+):
     limit = agentic_route.AGENTIC_TASK_LIMITER._inner.max_requests
     for _ in range(limit):
-        r = await phase1.post(f"{API_PREFIX}/agentic/risk/assess", json={"contractId": "c-1"}, headers=auth_headers(alice))
+        r = await phase1.post(
+            f"{API_PREFIX}/agentic/risk/assess",
+            json={"contractId": "c-1"},
+            headers=auth_headers(alice),
+        )
         assert r.status_code == 200
-    r = await phase1.post(f"{API_PREFIX}/agentic/obligations/extract", json={"contractId": "c-1"}, headers=auth_headers(alice))
+    r = await phase1.post(
+        f"{API_PREFIX}/agentic/obligations/extract",
+        json={"contractId": "c-1"},
+        headers=auth_headers(alice),
+    )
     assert r.status_code == 429
     assert "Retry-After" in r.headers
     # Another organisation has its own budget.
-    r = await phase1.post(f"{API_PREFIX}/agentic/risk/assess", json={"contractId": "c-1"}, headers=auth_headers(mallory))
+    r = await phase1.post(
+        f"{API_PREFIX}/agentic/risk/assess",
+        json={"contractId": "c-1"},
+        headers=auth_headers(mallory),
+    )
     assert r.status_code == 404
 
 
 async def test_bulk_rate_limit(phase1, queued, users):
     limit = agentic_route.AGENTIC_BULK_LIMITER._inner.max_requests
     for _ in range(limit):
-        r = await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["admin"]))
+        r = await phase1.post(
+            f"{API_PREFIX}/agentic/risk/bulk-assess",
+            headers=auth_headers(users["admin"]),
+        )
         assert r.status_code == 200
-    r = await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["manager"]))
+    r = await phase1.post(
+        f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["manager"])
+    )
     assert r.status_code == 429
 
 
@@ -256,26 +333,55 @@ async def test_bulk_budgets_are_separate_per_feature(phase1, queued, users):
     """agentic:bulk:risk and agentic:bulk:obligations are independent budgets."""
     limit = agentic_route.AGENTIC_BULK_LIMITER._inner.max_requests
     for _ in range(limit):
-        r = await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["admin"]))
+        r = await phase1.post(
+            f"{API_PREFIX}/agentic/risk/bulk-assess",
+            headers=auth_headers(users["admin"]),
+        )
         assert r.status_code == 200
-    assert (await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["admin"]))).status_code == 429
+    assert (
+        await phase1.post(
+            f"{API_PREFIX}/agentic/risk/bulk-assess",
+            headers=auth_headers(users["admin"]),
+        )
+    ).status_code == 429
     for _ in range(limit):
-        r = await phase1.post(f"{API_PREFIX}/agentic/obligations/bulk-extract", headers=auth_headers(users["admin"]))
+        r = await phase1.post(
+            f"{API_PREFIX}/agentic/obligations/bulk-extract",
+            headers=auth_headers(users["admin"]),
+        )
         assert r.status_code == 200
-    r = await phase1.post(f"{API_PREFIX}/agentic/obligations/bulk-extract", headers=auth_headers(users["admin"]))
+    r = await phase1.post(
+        f"{API_PREFIX}/agentic/obligations/bulk-extract",
+        headers=auth_headers(users["admin"]),
+    )
     assert r.status_code == 429
 
 
-async def test_single_tasks_are_enqueued_with_the_callers_org(phase1, seeded, queued, alice, org_id):
-    await phase1.post(f"{API_PREFIX}/agentic/risk/assess", json={"contractId": "c-1"}, headers=auth_headers(alice))
-    await phase1.post(f"{API_PREFIX}/agentic/obligations/extract", json={"contractId": "c-1"}, headers=auth_headers(alice))
+async def test_single_tasks_are_enqueued_with_the_callers_org(
+    phase1, seeded, queued, alice, org_id
+):
+    await phase1.post(
+        f"{API_PREFIX}/agentic/risk/assess",
+        json={"contractId": "c-1"},
+        headers=auth_headers(alice),
+    )
+    await phase1.post(
+        f"{API_PREFIX}/agentic/obligations/extract",
+        json={"contractId": "c-1"},
+        headers=auth_headers(alice),
+    )
     assert [kw["args"][-1] for _, kw in queued] == [org_id, org_id]
 
 
 async def test_forbidden_callers_do_not_consume_bulk_budget(phase1, queued, users):
     limit = agentic_route.AGENTIC_BULK_LIMITER._inner.max_requests
     for _ in range(limit + 2):
-        r = await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["viewer"]))
+        r = await phase1.post(
+            f"{API_PREFIX}/agentic/risk/bulk-assess",
+            headers=auth_headers(users["viewer"]),
+        )
         assert r.status_code == 403
-    r = await phase1.post(f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["admin"]))
+    r = await phase1.post(
+        f"{API_PREFIX}/agentic/risk/bulk-assess", headers=auth_headers(users["admin"])
+    )
     assert r.status_code == 200

@@ -2,6 +2,7 @@
 Celery tasks for Zero-Training Business Intake.
 Handles Resend webhook processing, email attachment parsing, and contract classification.
 """
+
 import asyncio
 import logging
 import base64
@@ -44,13 +45,9 @@ def verify_resend_signature(payload: bytes, signature: str, secret: str) -> bool
     for import compatibility. Use :func:`utils.svix.verify` instead."""
     if not secret or not signature:
         return False
-    
-    expected = hmac.new(
-        secret.encode('utf-8'),
-        payload,
-        hashlib.sha256
-    ).hexdigest()
-    
+
+    expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
     return hmac.compare_digest(expected, signature)
 
 
@@ -119,18 +116,18 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
         # Extract email data from Resend webhook
         # Resend webhook format: https://resend.com/docs/webhooks
         email_data = payload.get("data", {})
-        
+
         # Get sender
         from_email = email_data.get("from", "")
         if isinstance(from_email, dict):
             from_email = from_email.get("email", "")
-        
+
         # Get subject
         subject = email_data.get("subject", "")
-        
+
         # Get attachments
         attachments = email_data.get("attachments", [])
-        
+
         # Get organization - lookup by domain mapping
         organization_id = await _resolve_organization_from_sender(from_email, db)
         if not organization_id:
@@ -156,17 +153,28 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
         # plan) get a record of the email for manual review and nothing else.
         from routes.billing import SKIPPED_NO_ENTITLEMENT, background_ai_entitlement
 
-        if await background_ai_entitlement(organization_id, db, f"email intake from {from_email}") is None:
+        if (
+            await background_ai_entitlement(
+                organization_id, db, f"email intake from {from_email}"
+            )
+            is None
+        ):
             intake.status = IntakeStatus.MANUAL_REVIEW
             intake_doc = intake.model_dump()
-            intake_doc.update({
-                "error_message": "Not processed: the organization's plan does not include uploads or AI analysis right now.",
-                "processing_skip_reason": "no_ai_entitlement",
-                "playbook_analysis_status": SKIPPED_NO_ENTITLEMENT,
-                "processing_completed_at": datetime.now(timezone.utc).isoformat(),
-            })
+            intake_doc.update(
+                {
+                    "error_message": "Not processed: the organization's plan does not include uploads or AI analysis right now.",
+                    "processing_skip_reason": "no_ai_entitlement",
+                    "playbook_analysis_status": SKIPPED_NO_ENTITLEMENT,
+                    "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             await db.contract_intakes.insert_one(intake_doc)
-            return {"status": SKIPPED_NO_ENTITLEMENT, "intake_id": intake.id, "reason": "no_ai_entitlement"}
+            return {
+                "status": SKIPPED_NO_ENTITLEMENT,
+                "intake_id": intake.id,
+                "reason": "no_ai_entitlement",
+            }
 
         # Process attachments
         processed_attachments = []
@@ -175,137 +183,154 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
             content_b64 = attachment.get("content", "")
             filename = attachment.get("filename", "unknown")
             content_type = attachment.get("content_type", "application/octet-stream")
-            
+
             # Decode base64
             try:
                 file_content = base64.b64decode(content_b64)
             except Exception as e:
                 logger.error(f"Failed to decode attachment {filename}: {e}")
                 continue
-            
+
             # Extract text for classification
             extracted_text = ""
             if content_type == "application/pdf":
                 extracted_text = extract_text_from_pdf(file_content)
             elif content_type == "text/plain":
                 try:
-                    extracted_text = file_content.decode('utf-8', errors='ignore')
+                    extracted_text = file_content.decode("utf-8", errors="ignore")
                 except Exception:
                     extracted_text = ""
-            elif content_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+            elif content_type in [
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ]:
                 extracted_text = extract_text_from_docx(file_content)
-            
+
             # Upload to S3
             storage_key = await upload_file_to_s3(
                 file_content=file_content,
                 filename=filename,
                 organization_id=organization_id,
-                content_type=content_type
+                content_type=content_type,
             )
-            
-            processed_attachments.append({
-                "filename": filename,
-                "size": len(file_content),
-                "mime_type": content_type,
-                "storage_key": storage_key,
-                "extracted_text": extracted_text[:5000] if extracted_text else "",  # Store first 5000 chars
-            })
-        
+
+            processed_attachments.append(
+                {
+                    "filename": filename,
+                    "size": len(file_content),
+                    "mime_type": content_type,
+                    "storage_key": storage_key,
+                    "extracted_text": (
+                        extracted_text[:5000] if extracted_text else ""
+                    ),  # Store first 5000 chars
+                }
+            )
+
         intake.attachments = processed_attachments
-        
+
         # Save initial intake record
         await db.contract_intakes.insert_one(intake.model_dump())
-        
+
         # If no attachments, mark as failed
         if not processed_attachments:
             await db.contract_intakes.update_one(
                 {"id": intake.id},
-                {"$set": {
-                    "status": IntakeStatus.FAILED,
-                    "error_message": "No valid attachments found",
-                    "processing_completed_at": datetime.now(timezone.utc).isoformat()
-                }}
+                {
+                    "$set": {
+                        "status": IntakeStatus.FAILED,
+                        "error_message": "No valid attachments found",
+                        "processing_completed_at": datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                    }
+                },
             )
-            return {"status": "error", "message": "No valid attachments", "intake_id": intake.id}
+            return {
+                "status": "error",
+                "message": "No valid attachments",
+                "intake_id": intake.id,
+            }
 
         # Update status to processing
         await db.contract_intakes.update_one(
             {"id": intake.id},
-            {"$set": {
-                "status": IntakeStatus.PROCESSING,
-                "processing_started_at": datetime.now(timezone.utc).isoformat()
-            }}
+            {
+                "$set": {
+                    "status": IntakeStatus.PROCESSING,
+                    "processing_started_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
         )
 
         # Classify the contract using AI
         # Use first attachment text for classification
         first_attachment = processed_attachments[0]
-        
+
         # Use extracted text for classification
         extracted_text = first_attachment.get("extracted_text", "")
-        
+
         classification = await classify_intake_contract(
             sender_email=from_email,
             subject=subject,
             filename=first_attachment.get("filename", "unknown"),
             mime_type=first_attachment.get("mime_type", "application/octet-stream"),
-            extracted_text=extracted_text
+            extracted_text=extracted_text,
         )
-        
+
         # Update with classification
         await db.contract_intakes.update_one(
             {"id": intake.id},
-            {"$set": {
-                "status": IntakeStatus.CLASSIFIED,
-                "classified_type": classification.get("contract_type"),
-                "classified_counterparty": classification.get("counterparty"),
-                "confidence": classification.get("confidence", 0.0),
-                "classification_reasoning": classification.get("reasoning"),
-                "risk_indicators": classification.get("risk_indicators", []),
-            }}
+            {
+                "$set": {
+                    "status": IntakeStatus.CLASSIFIED,
+                    "classified_type": classification.get("contract_type"),
+                    "classified_counterparty": classification.get("counterparty"),
+                    "confidence": classification.get("confidence", 0.0),
+                    "classification_reasoning": classification.get("reasoning"),
+                    "risk_indicators": classification.get("risk_indicators", []),
+                }
+            },
         )
 
         # Auto-route to playbook if applicable
         playbook_id = await _find_applicable_playbook(
-            organization_id, 
+            organization_id,
             classification.get("contract_type"),
             classification.get("counterparty"),
-            db
+            db,
         )
-        
+
         if playbook_id:
             # Keep the in-memory record in sync: _create_contract_from_intake
             # reads intake.playbook_id to decide whether to run the playbook.
             intake.playbook_id = playbook_id
             await db.contract_intakes.update_one(
-                {"id": intake.id},
-                {"$set": {"playbook_id": playbook_id}}
+                {"id": intake.id}, {"$set": {"playbook_id": playbook_id}}
             )
 
         # Auto-assign to team/user based on rules
         assigned_to = await _auto_assign_intake(organization_id, classification, db)
         if assigned_to:
             await db.contract_intakes.update_one(
-                {"id": intake.id},
-                {"$set": {"assigned_to": assigned_to}}
+                {"id": intake.id}, {"$set": {"assigned_to": assigned_to}}
             )
 
         # Mark as routed
         await db.contract_intakes.update_one(
             {"id": intake.id},
-            {"$set": {
-                "status": IntakeStatus.ROUTED,
-                "processing_completed_at": datetime.now(timezone.utc).isoformat()
-            }}
+            {
+                "$set": {
+                    "status": IntakeStatus.ROUTED,
+                    "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
         )
 
         # Create contract record from intake (optional - could wait for human review)
         contract_id = await _create_contract_from_intake(intake, classification, db)
-        
+
         if contract_id:
             await db.contract_intakes.update_one(
-                {"id": intake.id},
-                {"$set": {"created_contract_id": contract_id}}
+                {"id": intake.id}, {"$set": {"created_contract_id": contract_id}}
             )
 
         logger.info(f"Intake processed successfully: {intake.id}")
@@ -314,19 +339,23 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
             "intake_id": intake.id,
             "contract_id": contract_id,
             "classified_type": classification.get("contract_type"),
-            "confidence": classification.get("confidence")
+            "confidence": classification.get("confidence"),
         }
 
     except Exception as e:
         logger.error(f"Intake processing error: {e}")
-        if 'intake' in locals():
+        if "intake" in locals():
             await db.contract_intakes.update_one(
                 {"id": intake.id},
-                {"$set": {
-                    "status": IntakeStatus.FAILED,
-                    "error_message": str(e),
-                    "processing_completed_at": datetime.now(timezone.utc).isoformat()
-                }}
+                {
+                    "$set": {
+                        "status": IntakeStatus.FAILED,
+                        "error_message": str(e),
+                        "processing_completed_at": datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                    }
+                },
             )
         return {"status": "error", "message": str(e)}
 
@@ -335,111 +364,119 @@ async def _resolve_organization_from_sender(sender_email: str, db) -> Optional[s
     """Resolve organization ID from sender email domain using domain mapping."""
     if not sender_email:
         return None
-    
+
     # Extract domain
     domain = sender_email.split("@")[-1].lower() if "@" in sender_email else ""
     if not domain:
         return None
-    
+
     # Look up organization by email domain in domain mapping collection
     domain_mapping = await db.organization_domains.find_one(
-        {"domain": domain, "verified": True},
-        {"_id": 0, "organizationId": 1}
+        {"domain": domain, "verified": True}, {"_id": 0, "organizationId": 1}
     )
-    
+
     if domain_mapping:
         return domain_mapping["organizationId"]
-    
+
     # Fallback: look up organization by domains array
-    org = await db.organizations.find_one(
-        {"domains": domain},
-        {"_id": 0, "id": 1}
-    )
-    
+    org = await db.organizations.find_one({"domains": domain}, {"_id": 0, "id": 1})
+
     if org:
         return org["id"]
-    
+
     # Fallback: find org with matching email in users
     user = await db.users.find_one(
-        {"email": sender_email},
-        {"_id": 0, "organizationId": 1}
+        {"email": sender_email}, {"_id": 0, "organizationId": 1}
     )
-    
+
     if user:
         return user["organizationId"]
-    
+
     return None
 
 
-async def _find_applicable_playbook(org_id: str, contract_type: str, counterparty: str, db) -> Optional[str]:
+async def _find_applicable_playbook(
+    org_id: str, contract_type: str, counterparty: str, db
+) -> Optional[str]:
     """Find an applicable playbook for the contract."""
     if not contract_type:
         return None
-    
-    playbook = await db.legal_playbooks.find_one({
-        "organizationId": org_id,
-        "is_active": True,
-        "$or": [
-            {"contract_types": contract_type},
-            {"contract_types": []},
-        ]
-    }, {"_id": 0, "id": 1})
-    
+
+    playbook = await db.legal_playbooks.find_one(
+        {
+            "organizationId": org_id,
+            "is_active": True,
+            "$or": [
+                {"contract_types": contract_type},
+                {"contract_types": []},
+            ],
+        },
+        {"_id": 0, "id": 1},
+    )
+
     if playbook:
         return playbook["id"]
-    
+
     # Try default playbook
-    default_playbook = await db.legal_playbooks.find_one({
-        "organizationId": org_id,
-        "is_default": True,
-        "is_active": True
-    }, {"_id": 0, "id": 1})
-    
+    default_playbook = await db.legal_playbooks.find_one(
+        {"organizationId": org_id, "is_default": True, "is_active": True},
+        {"_id": 0, "id": 1},
+    )
+
     return default_playbook["id"] if default_playbook else None
 
 
 async def _auto_assign_intake(org_id: str, classification: Dict, db) -> Optional[str]:
     """Auto-assign intake to a user based on workload and expertise."""
     # Get admin/manager users
-    users = await db.users.find({
-        "organizationId": org_id,
-        "role": {"$in": ["admin", "manager"]},
-        "isActive": True
-    }, {"_id": 0, "id": 1, "email": 1}).to_list(20)
-    
+    users = await db.users.find(
+        {
+            "organizationId": org_id,
+            "role": {"$in": ["admin", "manager"]},
+            "isActive": True,
+        },
+        {"_id": 0, "id": 1, "email": 1},
+    ).to_list(20)
+
     if not users:
         return None
-    
+
     # Simple round-robin or least-loaded assignment
     # In production, would check current workload
     return users[0]["id"]
 
 
-async def _create_contract_from_intake(intake: ContractIntake, classification: Dict, db) -> Optional[str]:
+async def _create_contract_from_intake(
+    intake: ContractIntake, classification: Dict, db
+) -> Optional[str]:
     """Create a contract record from processed intake."""
     from models.contract import Contract
     import uuid
-    
+
     # Use first attachment for contract creation
     if not intake.attachments:
         return None
-    
+
     attachment = intake.attachments[0]
-    
+
     # Initialize workflow history with initial draft state
-    initial_workflow_history = [{
-        "fromStatus": None,
-        "toStatus": "draft",
-        "action": "created_from_intake",
-        "userId": intake.assigned_to or intake.source_metadata.get("resend_id", "system"),
-        "userEmail": intake.source_email,
-        "comment": "Contract created from email intake",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }]
-    
+    initial_workflow_history = [
+        {
+            "fromStatus": None,
+            "toStatus": "draft",
+            "action": "created_from_intake",
+            "userId": intake.assigned_to
+            or intake.source_metadata.get("resend_id", "system"),
+            "userEmail": intake.source_email,
+            "comment": "Contract created from email intake",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    ]
+
     contract = Contract(
         organizationId=intake.organizationId,
-        uploadedBy=intake.assigned_to or intake.source_metadata.get("resend_id", "system"),
+        uploadedBy=intake.assigned_to
+        or intake.source_metadata.get("resend_id", "system"),
         title=f"Intake: {attachment.get('filename', 'Contract')}",
         counterparty=classification.get("counterparty"),
         contractType=classification.get("contract_type", "General"),
@@ -453,18 +490,26 @@ async def _create_contract_from_intake(intake: ContractIntake, classification: D
         createdAt=datetime.now(timezone.utc).isoformat(),
         updatedAt=datetime.now(timezone.utc).isoformat(),
     )
-    
+
     await db.contracts.insert_one(contract.model_dump())
-    
+
     # Trigger risk assessment
     from services.risk_tasks import assess_contract_risk
+
     assess_contract_risk.delay(contract.id, force_refresh=True)
-    
+
     # Trigger obligation extraction if active
-    if classification.get("contract_type") in ["Service Agreement", "Lease", "Partnership", "Licensing", "Purchase Agreement"]:
+    if classification.get("contract_type") in [
+        "Service Agreement",
+        "Lease",
+        "Partnership",
+        "Licensing",
+        "Purchase Agreement",
+    ]:
         from services.obligation_tasks import extract_obligations_from_contract
+
         extract_obligations_from_contract.delay(contract.id, force_refresh=True)
-    
+
     # Trigger playbook analysis if playbook assigned -- only for orgs entitled
     # to AI; otherwise record that it was skipped (no crash, no AI call).
     if intake.playbook_id:
@@ -476,20 +521,25 @@ async def _create_contract_from_intake(intake: ContractIntake, classification: D
         if entitled is None:
             await db.contract_intakes.update_one(
                 {"id": intake.id, "organizationId": intake.organizationId},
-                {"$set": {
-                    "playbook_analysis_status": SKIPPED_NO_ENTITLEMENT,
-                    "playbook_analysis_skip_reason": "no_ai_entitlement",
-                    "updatedAt": datetime.now(timezone.utc).isoformat(),
-                }},
+                {
+                    "$set": {
+                        "playbook_analysis_status": SKIPPED_NO_ENTITLEMENT,
+                        "playbook_analysis_skip_reason": "no_ai_entitlement",
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
         else:
             from services.playbook_tasks import analyze_contract_with_playbook
-            analyze_contract_with_playbook.delay(contract.id, intake.playbook_id, auto_apply=False)
+
+            analyze_contract_with_playbook.delay(
+                contract.id, intake.playbook_id, auto_apply=False
+            )
             await db.contract_intakes.update_one(
                 {"id": intake.id, "organizationId": intake.organizationId},
                 {"$set": {"playbook_analysis_status": "queued"}},
             )
-    
+
     return contract.id
 
 
@@ -522,25 +572,26 @@ async def _retry_failed_intakes_async():
     try:
         # Find failed intakes from last 24 hours
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-        
-        failed_intakes = await db.contract_intakes.find({
-            "status": "failed",
-            "createdAt": {"$gte": cutoff}
-        }).to_list(50)
-        
+
+        failed_intakes = await db.contract_intakes.find(
+            {"status": "failed", "createdAt": {"$gte": cutoff}}
+        ).to_list(50)
+
         retried = 0
         for intake in failed_intakes:
             # Reset status and reprocess
             await db.contract_intakes.update_one(
                 {"id": intake["id"]},
-                {"$set": {
-                    "status": "received",
-                    "error_message": None,
-                    "processing_started_at": None,
-                    "processing_completed_at": None
-                }}
+                {
+                    "$set": {
+                        "status": "received",
+                        "error_message": None,
+                        "processing_started_at": None,
+                        "processing_completed_at": None,
+                    }
+                },
             )
-            
+
             # Re-process
             payload = {
                 "data": {

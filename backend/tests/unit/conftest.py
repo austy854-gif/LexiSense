@@ -22,6 +22,7 @@ DB-authoritative behaviour is invisible to the suite. Tests that exercise it
 request the ``db_authoritative_auth`` fixture, which wires the store through
 ``monkeypatch`` and therefore cannot leak into the other test modules.
 """
+
 import os
 import sys
 import uuid
@@ -87,12 +88,20 @@ def _reset_rate_limiters():
     to do with the behaviour under test. Dedicated rate-limit tests drive the
     limiter directly instead.
     """
-    for limiter in (rbac_module.AUTH_RATE_LIMITER, rbac_module.INVITE_RATE_LIMITER,
-                    contracts_route.CHAT_USER_LIMITER, contracts_route.CHAT_ORG_LIMITER):
+    for limiter in (
+        rbac_module.AUTH_RATE_LIMITER,
+        rbac_module.INVITE_RATE_LIMITER,
+        contracts_route.CHAT_USER_LIMITER,
+        contracts_route.CHAT_ORG_LIMITER,
+    ):
         limiter.reset()
     yield
-    for limiter in (rbac_module.AUTH_RATE_LIMITER, rbac_module.INVITE_RATE_LIMITER,
-                    contracts_route.CHAT_USER_LIMITER, contracts_route.CHAT_ORG_LIMITER):
+    for limiter in (
+        rbac_module.AUTH_RATE_LIMITER,
+        rbac_module.INVITE_RATE_LIMITER,
+        contracts_route.CHAT_USER_LIMITER,
+        contracts_route.CHAT_ORG_LIMITER,
+    ):
         limiter.reset()
 
 
@@ -129,7 +138,9 @@ def app(db, monkeypatch):
 async def client(app):
     """An async HTTP client bound to the in-process ASGI app."""
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as http_client:
+    async with AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as http_client:
         yield http_client
 
 
@@ -263,7 +274,9 @@ def other_org_id():
 @pytest.fixture
 def users(org_id):
     """One user per role, all inside ``org_id``."""
-    return {role: make_user(org_id, role=role, user_id=f"user-{role}") for role in ROLES}
+    return {
+        role: make_user(org_id, role=role, user_id=f"user-{role}") for role in ROLES
+    }
 
 
 @pytest.fixture

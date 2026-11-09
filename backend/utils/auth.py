@@ -25,6 +25,7 @@ Design decisions worth knowing
    service that shares the secret cannot be replayed here, and ``jti`` gives
    every session a unique, revocable identity (needed for a future deny-list).
 """
+
 from __future__ import annotations
 
 import logging
@@ -158,7 +159,9 @@ def stored_version_mismatch(user: dict, payload: dict) -> bool:
     return _as_int(user.get("sessionVersion")) != _as_int(payload.get("sv"))
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> dict:
     """Return the authenticated principal.
 
     The returned mapping is token-shaped (``sub``/``email``/``role``/
@@ -210,7 +213,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
     jti = payload.get("jti")
     if isinstance(jti, str) and jti:
-        revoked = await _users_collection.database.revoked_tokens.find_one({"jti": jti}, {"_id": 1})
+        revoked = await _users_collection.database.revoked_tokens.find_one(
+            {"jti": jti}, {"_id": 1}
+        )
         if revoked:
             raise _unauthorized()
 

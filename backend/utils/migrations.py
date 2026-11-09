@@ -15,6 +15,7 @@ function that accepts the Motor db handle). Migrations MUST be idempotent
 -- they may be re-executed against a partially applied database during
 recovery.
 """
+
 from __future__ import annotations
 
 import logging
@@ -33,6 +34,7 @@ class Migration(TypedDict):
 # ---------------------------------------------------------------------------
 # Migration bodies
 # ---------------------------------------------------------------------------
+
 
 async def _m001_backfill_billing_trial_limits(db) -> None:
     """Ensure every billing record has trialContractsLimit and trialContractsUsed.
@@ -94,7 +96,9 @@ async def _m004_raise_trial_contract_cap(db) -> None:
         {"subscriptionTier": "trial", "trialContractsLimit": 3},
         {"$set": {"trialContractsLimit": 25}},
     )
-    logger.info("Raised trial contract cap on %d billing record(s)", result.modified_count)
+    logger.info(
+        "Raised trial contract cap on %d billing record(s)", result.modified_count
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -102,10 +106,26 @@ async def _m004_raise_trial_contract_cap(db) -> None:
 # ---------------------------------------------------------------------------
 
 MIGRATIONS: List[Migration] = [
-    {"version": 1, "name": "backfill_billing_trial_limits", "run": _m001_backfill_billing_trial_limits},
-    {"version": 2, "name": "add_ai_analysis_status", "run": _m002_add_ai_analysis_status},
-    {"version": 3, "name": "hash_invitation_tokens", "run": _m003_hash_invitation_tokens},
-    {"version": 4, "name": "raise_trial_contract_cap", "run": _m004_raise_trial_contract_cap},
+    {
+        "version": 1,
+        "name": "backfill_billing_trial_limits",
+        "run": _m001_backfill_billing_trial_limits,
+    },
+    {
+        "version": 2,
+        "name": "add_ai_analysis_status",
+        "run": _m002_add_ai_analysis_status,
+    },
+    {
+        "version": 3,
+        "name": "hash_invitation_tokens",
+        "run": _m003_hash_invitation_tokens,
+    },
+    {
+        "version": 4,
+        "name": "raise_trial_contract_cap",
+        "run": _m004_raise_trial_contract_cap,
+    },
 ]
 
 
@@ -113,11 +133,14 @@ MIGRATIONS: List[Migration] = [
 # Runner
 # ---------------------------------------------------------------------------
 
+
 async def run_migrations(db) -> None:
     """Apply any pending migrations. Idempotent and safe to run concurrently."""
     # Ensure the ledger collection has a unique index on version so parallel
     # workers cannot double-apply a migration.
-    await db.schema_migrations.create_index("version", unique=True, name="uq_migrations_version")
+    await db.schema_migrations.create_index(
+        "version", unique=True, name="uq_migrations_version"
+    )
 
     applied_versions = set()
     async for doc in db.schema_migrations.find({}, {"version": 1, "_id": 0}):
@@ -138,11 +161,13 @@ async def run_migrations(db) -> None:
             raise
 
         try:
-            await db.schema_migrations.insert_one({
-                "version": version,
-                "name": name,
-                "appliedAt": datetime.now(timezone.utc).isoformat(),
-            })
+            await db.schema_migrations.insert_one(
+                {
+                    "version": version,
+                    "name": name,
+                    "appliedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            )
         except Exception:
             # Duplicate key means another worker beat us to it -- fine.
             logger.info("Migration %03d already recorded by another worker", version)

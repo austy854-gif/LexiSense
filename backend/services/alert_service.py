@@ -14,6 +14,7 @@ Delivery semantics
 * Failed records get an exponential ``nextAttemptAt`` and are retried by a
   separate pass that does not depend on today's expiry-date selection.
 """
+
 from __future__ import annotations
 
 import logging
@@ -60,7 +61,11 @@ async def ensure_alert_idempotency_index(
     from utils.database import INDEX_SPECIFICATION
 
     sleep = sleep or asyncio.sleep
-    spec = next(s for s in INDEX_SPECIFICATION["expiration_alerts"] if s["name"] == "uq_alerts_idempotency")
+    spec = next(
+        s
+        for s in INDEX_SPECIFICATION["expiration_alerts"]
+        if s["name"] == "uq_alerts_idempotency"
+    )
     options = {k: v for k, v in spec.items() if k != "keys"}
     delay = initial_delay
     while True:
@@ -69,7 +74,9 @@ async def ensure_alert_idempotency_index(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("Alert index creation retry failed (error_type=%s)", type(exc).__name__)
+            logger.warning(
+                "Alert index creation retry failed (error_type=%s)", type(exc).__name__
+            )
         else:
             # Only after createIndexes returned: a listed index may still be
             # building, and its unique constraint is enforced only on commit.
@@ -96,8 +103,16 @@ def _claimable(now: datetime) -> list:
     iso = now.isoformat()
     return [
         {"status": {"$exists": False}},
-        {"status": "failed", "nextAttemptAt": {"$lte": iso}, "attempts": {"$lt": MAX_ATTEMPTS}},
-        {"status": "sending", "claimedAt": {"$lte": (now - CLAIM_LEASE).isoformat()}, "attempts": {"$lt": MAX_ATTEMPTS}},
+        {
+            "status": "failed",
+            "nextAttemptAt": {"$lte": iso},
+            "attempts": {"$lt": MAX_ATTEMPTS},
+        },
+        {
+            "status": "sending",
+            "claimedAt": {"$lte": (now - CLAIM_LEASE).isoformat()},
+            "attempts": {"$lt": MAX_ATTEMPTS},
+        },
     ]
 
 
@@ -107,20 +122,28 @@ def _claim_update(token: str) -> dict:
     # attempt is counted durably before it happens. ``claimedAt`` is stamped at
     # claim time (not scan start) so a long scan cannot shorten the lease.
     return {
-        "$set": {"status": "sending", "claimToken": token, "claimedAt": _now().isoformat()},
+        "$set": {
+            "status": "sending",
+            "claimToken": token,
+            "claimedAt": _now().isoformat(),
+        },
         "$inc": {"attempts": 1},
     }
 
 
-async def _deliver(db, claim: dict, recipient_email: str, contract: dict, days: int, counts: dict) -> None:
+async def _deliver(
+    db, claim: dict, recipient_email: str, contract: dict, days: int, counts: dict
+) -> None:
     """Make exactly one provider attempt for a claimed record and persist the outcome."""
     token = claim["claimToken"]
     try:
         result = await send_expiration_alert(
-            to_email=recipient_email, contract_id=contract["id"],
+            to_email=recipient_email,
+            contract_id=contract["id"],
             contract_title=contract.get("title", "Untitled Contract"),
             counterparty=contract.get("counterparty", "Not specified"),
-            expiry_date=contract.get("expiryDate", "Unknown"), days_remaining=days,
+            expiry_date=contract.get("expiryDate", "Unknown"),
+            days_remaining=days,
         )
     except Exception:
         logger.exception("Expiration alert provider call raised")
@@ -128,17 +151,38 @@ async def _deliver(db, claim: dict, recipient_email: str, contract: dict, days: 
     provider_status = (result or {}).get("status")
     owned = {"_id": claim["_id"], "claimToken": token}
     if provider_status == "success":
-        await db.expiration_alerts.update_one(owned, {"$set": {
-            "status": "sent", "emailSent": True, "emailSentAt": _now().isoformat(),
-            "providerMessageId": (result or {}).get("email_id")}, "$unset": {"nextAttemptAt": ""}})
+        await db.expiration_alerts.update_one(
+            owned,
+            {
+                "$set": {
+                    "status": "sent",
+                    "emailSent": True,
+                    "emailSentAt": _now().isoformat(),
+                    "providerMessageId": (result or {}).get("email_id"),
+                },
+                "$unset": {"nextAttemptAt": ""},
+            },
+        )
         counts["sent"] += 1
     elif provider_status == "logged":
-        await db.expiration_alerts.update_one(owned, {"$set": {
-            "status": "skipped", "emailSent": False, "failureReason": "provider_not_configured"}})
+        await db.expiration_alerts.update_one(
+            owned,
+            {
+                "$set": {
+                    "status": "skipped",
+                    "emailSent": False,
+                    "failureReason": "provider_not_configured",
+                }
+            },
+        )
         counts["skipped"] += 1
     else:
         attempts = int(claim.get("attempts", 1))
-        update = {"status": "failed", "emailSent": False, "failureReason": "provider_delivery_failed"}
+        update = {
+            "status": "failed",
+            "emailSent": False,
+            "failureReason": "provider_delivery_failed",
+        }
         if attempts < MAX_ATTEMPTS:
             update["nextAttemptAt"] = (_now() + _retry_delay(attempts)).isoformat()
         else:
@@ -150,36 +194,70 @@ async def _deliver(db, claim: dict, recipient_email: str, contract: dict, days: 
 async def _recipients(db, org_id: str) -> list:
     """Load active administrators and managers belonging to one organization."""
     return await db.users.find(
-        {"organizationId": org_id, "role": {"$in": ["admin", "manager"]}, "isActive": {"$ne": False}},
+        {
+            "organizationId": org_id,
+            "role": {"$in": ["admin", "manager"]},
+            "isActive": {"$ne": False},
+        },
         {"_id": 0, "id": 1, "email": 1},
     ).to_list(100)
 
 
-async def retry_failed_alerts(db, organization_id: Optional[str] = None, counts: Optional[dict] = None) -> dict:
+async def retry_failed_alerts(
+    db, organization_id: Optional[str] = None, counts: Optional[dict] = None
+) -> dict:
     """Retry due ``failed`` records independently of the expiry-date selection."""
-    counts = counts if counts is not None else {"queued": 0, "sent": 0, "failed": 0, "skipped": 0}
+    counts = (
+        counts
+        if counts is not None
+        else {"queued": 0, "sent": 0, "failed": 0, "skipped": 0}
+    )
     now = _now()
-    query = {"status": "failed", "nextAttemptAt": {"$lte": now.isoformat()}, "attempts": {"$lt": MAX_ATTEMPTS}}
+    query = {
+        "status": "failed",
+        "nextAttemptAt": {"$lte": now.isoformat()},
+        "attempts": {"$lt": MAX_ATTEMPTS},
+    }
     if organization_id:
         query["organizationId"] = organization_id
     due = await db.expiration_alerts.find(
-        query, {"_id": 1, "organizationId": 1, "contractId": 1, "userId": 1, "daysBeforeExpiry": 1}
+        query,
+        {
+            "_id": 1,
+            "organizationId": 1,
+            "contractId": 1,
+            "userId": 1,
+            "daysBeforeExpiry": 1,
+        },
     ).to_list(1000)
     for record in due:
         org_id = record.get("organizationId")
         contract = await db.contracts.find_one(
-            {"id": record.get("contractId"), "organizationId": org_id, "status": {"$ne": "expired"}},
+            {
+                "id": record.get("contractId"),
+                "organizationId": org_id,
+                "status": {"$ne": "expired"},
+            },
             {"_id": 0, "id": 1, "title": 1, "counterparty": 1, "expiryDate": 1},
         )
         recipient = await db.users.find_one(
-            {"id": record.get("userId"), "organizationId": org_id,
-             "role": {"$in": ["admin", "manager"]}, "isActive": {"$ne": False}},
+            {
+                "id": record.get("userId"),
+                "organizationId": org_id,
+                "role": {"$in": ["admin", "manager"]},
+                "isActive": {"$ne": False},
+            },
             {"_id": 0, "id": 1, "email": 1},
         )
         if not contract or not recipient:
             await db.expiration_alerts.update_one(
                 {"_id": record["_id"], "status": "failed"},
-                {"$set": {"status": "skipped", "failureReason": "contract_or_recipient_no_longer_eligible"}},
+                {
+                    "$set": {
+                        "status": "skipped",
+                        "failureReason": "contract_or_recipient_no_longer_eligible",
+                    }
+                },
             )
             counts["skipped"] += 1
             continue
@@ -192,21 +270,35 @@ async def retry_failed_alerts(db, organization_id: Optional[str] = None, counts:
         if not claim or claim.get("claimToken") != token:
             continue
         counts["queued"] += 1
-        await _deliver(db, claim, recipient["email"], contract, int(record.get("daysBeforeExpiry", 0)), counts)
+        await _deliver(
+            db,
+            claim,
+            recipient["email"],
+            contract,
+            int(record.get("daysBeforeExpiry", 0)),
+            counts,
+        )
     return counts
 
 
-async def scan_expiration_alerts(db, organization_id: Optional[str] = None, actor_id: str = "scheduler") -> dict:
+async def scan_expiration_alerts(
+    db, organization_id: Optional[str] = None, actor_id: str = "scheduler"
+) -> dict:
     """Scan organizations and atomically claim/send each alert once, then retry due failures."""
     if organization_id:
         org_ids = [organization_id]
     else:
-        org_ids = await db.contracts.distinct("organizationId", {"expiryDate": {"$type": "string"}})
+        org_ids = await db.contracts.distinct(
+            "organizationId", {"expiryDate": {"$type": "string"}}
+        )
 
     counts = {"queued": 0, "sent": 0, "failed": 0, "skipped": 0}
     now = _now()
     for org_id in org_ids:
-        settings = await db.alert_settings.find_one({"organizationId": org_id}, {"_id": 0}) or {}
+        settings = (
+            await db.alert_settings.find_one({"organizationId": org_id}, {"_id": 0})
+            or {}
+        )
         if not settings.get("emailEnabled", True):
             continue
         alert_days = settings.get("alertDays") or list(DEFAULT_ALERT_DAYS)
@@ -222,22 +314,36 @@ async def scan_expiration_alerts(db, organization_id: Optional[str] = None, acto
             # matches one ``days`` window per day, never several at once.
             target = (now + timedelta(days=days)).strftime("%Y-%m-%d")
             contracts = await db.contracts.find(
-                {"organizationId": org_id, "expiryDate": target, "status": {"$ne": "expired"}},
+                {
+                    "organizationId": org_id,
+                    "expiryDate": target,
+                    "status": {"$ne": "expired"},
+                },
                 {"_id": 0, "id": 1, "title": 1, "counterparty": 1, "expiryDate": 1},
             ).to_list(1000)
             for contract in contracts:
                 for recipient in recipients:
-                    key = f"{org_id}:{contract['id']}:expiration:{days}:{recipient['id']}"
+                    key = (
+                        f"{org_id}:{contract['id']}:expiration:{days}:{recipient['id']}"
+                    )
                     token = uuid.uuid4().hex
                     try:
                         claim = await db.expiration_alerts.find_one_and_update(
                             {"idempotencyKey": key, "$or": _claimable(now)},
-                            {**_claim_update(token),
-                             "$setOnInsert": {
-                                 "id": str(uuid.uuid4()), "idempotencyKey": key, "organizationId": org_id,
-                                 "contractId": contract["id"], "userId": recipient["id"],
-                                 "alertType": "expiration", "daysBeforeExpiry": days,
-                                 "emailSent": False, "createdAt": now.isoformat()}},
+                            {
+                                **_claim_update(token),
+                                "$setOnInsert": {
+                                    "id": str(uuid.uuid4()),
+                                    "idempotencyKey": key,
+                                    "organizationId": org_id,
+                                    "contractId": contract["id"],
+                                    "userId": recipient["id"],
+                                    "alertType": "expiration",
+                                    "daysBeforeExpiry": days,
+                                    "emailSent": False,
+                                    "createdAt": now.isoformat(),
+                                },
+                            },
                             upsert=True,
                             return_document=ReturnDocument.AFTER,
                         )
@@ -247,6 +353,8 @@ async def scan_expiration_alerts(db, organization_id: Optional[str] = None, acto
                     if not claim or claim.get("claimToken") != token:
                         continue
                     counts["queued"] += 1
-                    await _deliver(db, claim, recipient["email"], contract, days, counts)
+                    await _deliver(
+                        db, claim, recipient["email"], contract, days, counts
+                    )
         await retry_failed_alerts(db, org_id, counts)
     return counts

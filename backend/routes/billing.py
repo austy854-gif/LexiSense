@@ -14,7 +14,7 @@ from models.billing import (
     SubscriptionInfo,
     SubscriptionTier,
     BillingStatus,
-    WebhookEvent
+    WebhookEvent,
 )
 from utils.auth import get_current_user, require_role
 from utils.billing_access import (
@@ -47,6 +47,7 @@ router = APIRouter(prefix="/billing", tags=["Billing"])
 db = None
 stripe_api_key = None
 
+
 def init_db(database):
     global db, stripe_api_key
     db = database
@@ -75,7 +76,9 @@ def resolve_checkout_price(request: CheckoutSessionRequest) -> str:
             "Checkout rejected: Stripe price allowlist is empty (set %s)",
             ", ".join(plan_config.STRIPE_PRICE_ENV_VARS),
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=CHECKOUT_PRICE_REJECTED)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=CHECKOUT_PRICE_REJECTED
+        )
     if request.planId:
         plan = plan_config.get_paid_plan(request.planId)
         price_id = plan.price_for_interval(request.interval) if plan else None
@@ -84,9 +87,15 @@ def resolve_checkout_price(request: CheckoutSessionRequest) -> str:
     if not price_id or price_id not in allowed:
         logger.warning(
             "Checkout rejected: price not in allowlist",
-            extra={"plan_id": request.planId, "interval": request.interval, "price_id": request.priceId},
+            extra={
+                "plan_id": request.planId,
+                "interval": request.interval,
+                "price_id": request.priceId,
+            },
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=CHECKOUT_PRICE_REJECTED)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=CHECKOUT_PRICE_REJECTED
+        )
     return price_id
 
 
@@ -104,7 +113,9 @@ def has_used_in_app_trial(billing: OrganizationBilling) -> bool:
 STRIPE_MIN_TRIAL_END = timedelta(hours=48, minutes=5)
 
 
-def checkout_subscription_data(billing: OrganizationBilling, org_id: str, now: Optional[datetime] = None) -> dict:
+def checkout_subscription_data(
+    billing: OrganizationBilling, org_id: str, now: Optional[datetime] = None
+) -> dict:
     """Subscription data for checkout.
 
     Never a second, fresh Stripe trial once the in-app trial has started. If
@@ -130,20 +141,25 @@ def checkout_subscription_data(billing: OrganizationBilling, org_id: str, now: O
 
 
 #: Statuses of a subscription that still exists and bills the customer.
-LIVE_BILLING_STATUSES = frozenset({BillingStatus.ACTIVE, BillingStatus.TRIALING, BillingStatus.PAST_DUE})
-LIVE_STRIPE_STATUSES = frozenset({"active", "trialing", "past_due", "unpaid"})
-MSG_ALREADY_SUBSCRIBED = (
-    "Your organization already has a subscription. Use the billing portal to manage or change it."
+LIVE_BILLING_STATUSES = frozenset(
+    {BillingStatus.ACTIVE, BillingStatus.TRIALING, BillingStatus.PAST_DUE}
 )
+LIVE_STRIPE_STATUSES = frozenset({"active", "trialing", "past_due", "unpaid"})
+MSG_ALREADY_SUBSCRIBED = "Your organization already has a subscription. Use the billing portal to manage or change it."
 
 
 def has_live_subscription(billing: OrganizationBilling) -> bool:
-    return billing.subscriptionTier == SubscriptionTier.TEAM and billing.billingStatus in LIVE_BILLING_STATUSES
+    return (
+        billing.subscriptionTier == SubscriptionTier.TEAM
+        and billing.billingStatus in LIVE_BILLING_STATUSES
+    )
 
 
 def _stripe_has_live_subscription(customer_id: str) -> bool:
     subs = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
-    return any(sub.get("status") in LIVE_STRIPE_STATUSES for sub in (subs.get("data") or []))
+    return any(
+        sub.get("status") in LIVE_STRIPE_STATUSES for sub in (subs.get("data") or [])
+    )
 
 
 async def member_limit_for_org(org_id: str) -> Optional[int]:
@@ -156,7 +172,10 @@ async def member_limit_for_org(org_id: str) -> Optional[int]:
     billing = await db.organization_billing.find_one({"organizationId": org_id}) or {}
     entitlement = compute_entitlement(billing)
     if entitlement.state == ACCESS_UNVERIFIED_PLAN:
-        logger.error("Org %s has a subscription on an unknown Stripe price; applying trial seat cap", org_id)
+        logger.error(
+            "Org %s has a subscription on an unknown Stripe price; applying trial seat cap",
+            org_id,
+        )
     return entitlement.max_members
 
 
@@ -169,7 +188,7 @@ async def get_or_create_billing(org_id: str, database=None) -> OrganizationBilli
     billing = await database.organization_billing.find_one({"organizationId": org_id})
     if billing:
         return OrganizationBilling(**billing)
-    
+
     # Create new trial billing record
     trial_end = datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS)
     new_billing = OrganizationBilling(
@@ -178,12 +197,14 @@ async def get_or_create_billing(org_id: str, database=None) -> OrganizationBilli
         billingStatus=BillingStatus.TRIALING,
         trialEndDate=trial_end.isoformat(),
         trialContractsUsed=0,
-        trialContractsLimit=TRIAL_CONTRACT_LIMIT
+        trialContractsLimit=TRIAL_CONTRACT_LIMIT,
     )
     try:
         await database.organization_billing.insert_one(new_billing.model_dump())
     except DuplicateKeyError:
-        existing = await database.organization_billing.find_one({"organizationId": org_id})
+        existing = await database.organization_billing.find_one(
+            {"organizationId": org_id}
+        )
         if existing:
             return OrganizationBilling(**existing)
         raise
@@ -228,7 +249,9 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
     now = datetime.now(timezone.utc).isoformat()
 
     # First check for paid subscription -- paid orgs never consume trial quota.
-    billing_doc = await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    billing_doc = (
+        await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    )
     entitlement = compute_entitlement(billing_doc)
     if entitlement.state in (ACCESS_PAID, ACCESS_GRACE):
         return True, ""
@@ -262,11 +285,17 @@ async def assert_org_writable(org_id: str) -> None:
     raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
     entitlement = compute_entitlement(raw)
     if entitlement.state in READ_ONLY_STATES:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message
+        )
 
 
 def trial_limit_message() -> str:
-    step = "Upgrade to keep adding contracts." if billing_ui_enabled() else "Please contact support to continue."
+    step = (
+        "Upgrade to keep adding contracts."
+        if billing_ui_enabled()
+        else "Please contact support to continue."
+    )
     return f"You've used all your trial uploads. {step}"
 
 
@@ -281,27 +310,39 @@ async def ensure_ai_access(org_id: str) -> Entitlement:
     """403 unless the org may spend AI credits (trial, paid, or past-due grace)."""
     entitlement = await get_entitlement(org_id)
     if entitlement.blocked:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message
+        )
     return entitlement
 
 
 #: Shown when a cancelled org tries to invite a teammate.
-MSG_CANCELLED_INVITE = "Your plan is cancelled. Reactivate your subscription to invite teammates."
+MSG_CANCELLED_INVITE = (
+    "Your plan is cancelled. Reactivate your subscription to invite teammates."
+)
 #: Billing UI off: the billing page is hidden, so point to support instead.
-MSG_CANCELLED_INVITE_SUPPORT = "Your plan is cancelled. Please contact support to invite teammates."
+MSG_CANCELLED_INVITE_SUPPORT = (
+    "Your plan is cancelled. Please contact support to invite teammates."
+)
 
 
 def cancelled_invite_message() -> str:
-    return MSG_CANCELLED_INVITE if billing_ui_enabled() else MSG_CANCELLED_INVITE_SUPPORT
+    return (
+        MSG_CANCELLED_INVITE if billing_ui_enabled() else MSG_CANCELLED_INVITE_SUPPORT
+    )
 
 
 async def ensure_invite_access(org_id: str) -> Entitlement:
     """403 for cancelled, read-only (past due after grace) and unverified-plan orgs."""
     entitlement = await get_entitlement(org_id)
     if entitlement.state == ACCESS_CANCELLED:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=cancelled_invite_message())
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=cancelled_invite_message()
+        )
     if entitlement.read_only or entitlement.state == ACCESS_UNVERIFIED_PLAN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message
+        )
     return entitlement
 
 
@@ -309,14 +350,21 @@ async def ensure_invite_access(org_id: str) -> Entitlement:
 SKIPPED_NO_ENTITLEMENT = "skipped"
 
 
-async def background_ai_entitlement(org_id: Optional[str], database, task: str) -> Optional[Entitlement]:
+async def background_ai_entitlement(
+    org_id: Optional[str], database, task: str
+) -> Optional[Entitlement]:
     """Worker-side gate: returns the entitlement, or logs and returns None (skip, don't raise)."""
     if not org_id:
         logger.warning("Skipping %s: no organization id", task)
         return None
     entitlement = await get_entitlement(org_id, database)
     if entitlement.blocked:
-        logger.info("Skipping %s for org %s: no AI entitlement (state=%s)", task, org_id, entitlement.state)
+        logger.info(
+            "Skipping %s for org %s: no AI entitlement (state=%s)",
+            task,
+            org_id,
+            entitlement.state,
+        )
         return None
     return entitlement
 
@@ -352,7 +400,10 @@ async def increment_trial_usage(org_id: str):
     """
     await db.organization_billing.update_one(
         {"organizationId": org_id},
-        {"$inc": {"trialContractsUsed": 1}, "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()}}
+        {
+            "$inc": {"trialContractsUsed": 1},
+            "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()},
+        },
     )
 
 
@@ -361,14 +412,14 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
     """Get current organization's subscription status"""
     org_id = current_user["organizationId"]
     billing = await get_or_create_billing(org_id)
-    
+
     # Check if trial expired
     is_trial_expired = False
     if billing.trialEndDate:
         trial_end = datetime.fromisoformat(billing.trialEndDate.replace("Z", "+00:00"))
         if datetime.now(timezone.utc) > trial_end:
             is_trial_expired = True
-    
+
     raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
     entitlement = compute_entitlement(raw)
     return SubscriptionInfo(
@@ -417,16 +468,15 @@ async def get_billing_config():
 
 @router.post("/checkout", response_model=CheckoutSessionResponse)
 async def create_checkout_session(
-    request: CheckoutSessionRequest,
-    current_user: dict = Depends(require_role("admin"))
+    request: CheckoutSessionRequest, current_user: dict = Depends(require_role("admin"))
 ):
     """Create Stripe Checkout session for subscription"""
     if not stripe_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Billing not configured. Please contact support."
+            detail="Billing not configured. Please contact support.",
         )
-    
+
     price_id = resolve_checkout_price(request)
 
     org_id = current_user["organizationId"]
@@ -434,74 +484,84 @@ async def create_checkout_session(
 
     # One subscription per org: a second checkout would bill the customer twice.
     if has_live_subscription(billing):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MSG_ALREADY_SUBSCRIBED)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=MSG_ALREADY_SUBSCRIBED
+        )
     # Webhooks can lag behind a just-completed checkout, so ask Stripe as well.
     if billing.stripeCustomerId:
         try:
             live = _stripe_has_live_subscription(billing.stripeCustomerId)
         except stripe.StripeError as e:
-            logger.error("Could not list subscriptions for org %s: %s", org_id, type(e).__name__)
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail="Billing is temporarily unavailable. Please try again.")
+            logger.error(
+                "Could not list subscriptions for org %s: %s", org_id, type(e).__name__
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Billing is temporarily unavailable. Please try again.",
+            )
         if live:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MSG_ALREADY_SUBSCRIBED)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=MSG_ALREADY_SUBSCRIBED
+            )
 
     # Create or get Stripe customer
     if not billing.stripeCustomerId:
         customer = stripe.Customer.create(
-            email=current_user["email"],
-            metadata={"organizationId": org_id}
+            email=current_user["email"], metadata={"organizationId": org_id}
         )
         billing.stripeCustomerId = customer.id
         await db.organization_billing.update_one(
             {"organizationId": org_id},
-            {"$set": {"stripeCustomerId": customer.id, "updatedAt": datetime.now(timezone.utc).isoformat()}}
+            {
+                "$set": {
+                    "stripeCustomerId": customer.id,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            },
         )
-    
+
     try:
         session = stripe.checkout.Session.create(
             customer=billing.stripeCustomerId,
             payment_method_types=["card"],
-            line_items=[{
-                "price": price_id,
-                "quantity": 1,
-            }],
+            line_items=[
+                {
+                    "price": price_id,
+                    "quantity": 1,
+                }
+            ],
             mode="subscription",
             success_url=request.successUrl,
             cancel_url=request.cancelUrl,
             subscription_data=checkout_subscription_data(billing, org_id),
-            metadata={"organizationId": org_id}
+            metadata={"organizationId": org_id},
         )
         return CheckoutSessionResponse(sessionId=session.id, url=session.url)
     except stripe.StripeError as e:
         logger.error(f"Stripe checkout error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.post("/portal", response_model=BillingPortalResponse)
 async def create_billing_portal(
-    request: BillingPortalRequest,
-    current_user: dict = Depends(require_role("admin"))
+    request: BillingPortalRequest, current_user: dict = Depends(require_role("admin"))
 ):
     """Create Stripe Billing Portal session for subscription management"""
     if not stripe_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Billing not configured. Please contact support."
+            detail="Billing not configured. Please contact support.",
         )
-    
+
     org_id = current_user["organizationId"]
     billing = await get_or_create_billing(org_id)
-    
+
     if not billing.stripeCustomerId:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No billing account found. Please subscribe first."
+            detail="No billing account found. Please subscribe first.",
         )
-    
+
     try:
         session = stripe.billing_portal.Session.create(
             customer=billing.stripeCustomerId,
@@ -510,10 +570,7 @@ async def create_billing_portal(
         return BillingPortalResponse(url=session.url)
     except stripe.StripeError as e:
         logger.error(f"Stripe portal error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.post("/webhook")
@@ -522,17 +579,17 @@ async def stripe_webhook(request: Request):
     if not stripe_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Billing not configured"
+            detail="Billing not configured",
         )
-    
+
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
     webhook_secret = get_env("STRIPE_WEBHOOK_SECRET")
-    
+
     if not webhook_secret:
         logger.error("STRIPE_WEBHOOK_SECRET not configured")
         raise HTTPException(status_code=500, detail="Webhook not configured")
-    
+
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     except ValueError as e:
@@ -541,13 +598,13 @@ async def stripe_webhook(request: Request):
     except stripe.SignatureVerificationError as e:
         logger.error(f"Invalid signature: {e}")
         raise HTTPException(status_code=400, detail="Invalid signature")
-    
+
     # Handle the event
     event_type = event["type"]
     data = event["data"]["object"]
-    
+
     logger.info(f"Received Stripe webhook: {event_type}")
-    
+
     if event_type == "checkout.session.completed":
         await handle_checkout_completed(data)
     elif event_type == "customer.subscription.created":
@@ -560,7 +617,7 @@ async def stripe_webhook(request: Request):
         await handle_payment_failed(data)
     elif event_type == "invoice.paid":
         await handle_invoice_paid(data)
-    
+
     return {"received": True}
 
 
@@ -569,10 +626,10 @@ async def handle_checkout_completed(session):
     org_id = session.get("metadata", {}).get("organizationId")
     if not org_id:
         return
-    
+
     subscription_id = session.get("subscription")
     customer_id = session.get("customer")
-    
+
     if subscription_id:
         subscription = stripe.Subscription.retrieve(subscription_id)
         await update_billing_from_subscription(org_id, subscription, customer_id)
@@ -594,7 +651,9 @@ async def handle_subscription_updated(subscription):
         # Try to find by customer
         customer_id = subscription.get("customer")
         if customer_id:
-            billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
+            billing = await db.organization_billing.find_one(
+                {"stripeCustomerId": customer_id}
+            )
             if billing:
                 org_id = billing["organizationId"]
     if not org_id:
@@ -609,16 +668,24 @@ async def handle_subscription_deleted(subscription):
     if not org_id:
         customer_id = subscription.get("customer")
         if customer_id:
-            billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
+            billing = await db.organization_billing.find_one(
+                {"stripeCustomerId": customer_id}
+            )
             if billing:
                 org_id = billing["organizationId"]
     if not org_id:
         return
-    current = (await db.organization_billing.find_one({"organizationId": org_id}) or {}).get("stripeSubscriptionId")
+    current = (
+        await db.organization_billing.find_one({"organizationId": org_id}) or {}
+    ).get("stripeSubscriptionId")
     if _is_foreign_subscription(current, subscription.get("id")):
         # Deleting a duplicate or abandoned subscription must not cancel the org.
-        logger.warning("Ignoring deletion of subscription %s for org %s (current %s)",
-                       subscription.get("id"), org_id, current)
+        logger.warning(
+            "Ignoring deletion of subscription %s for org %s (current %s)",
+            subscription.get("id"),
+            org_id,
+            current,
+        )
         return
 
     await db.organization_billing.update_one(
@@ -629,10 +696,10 @@ async def handle_subscription_deleted(subscription):
                 "billingStatus": BillingStatus.CANCELLED,
                 "cancelledAt": datetime.now(timezone.utc).isoformat(),
                 "stripeSubscriptionId": None,
-                "updatedAt": datetime.now(timezone.utc).isoformat()
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
             },
             "$unset": {"pastDueSince": ""},
-        }
+        },
     )
 
 
@@ -647,7 +714,9 @@ def _invoice_subscription_id(invoice) -> Optional[str]:
     return sub or None
 
 
-def _is_foreign_subscription(current: Optional[str], subscription_id: Optional[str]) -> bool:
+def _is_foreign_subscription(
+    current: Optional[str], subscription_id: Optional[str]
+) -> bool:
     return bool(subscription_id and current and subscription_id != current)
 
 
@@ -657,19 +726,26 @@ async def handle_payment_failed(invoice):
     billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
     if not billing:
         return
-    if _is_foreign_subscription(billing.get("stripeSubscriptionId"), _invoice_subscription_id(invoice)):
-        logger.warning("Ignoring payment failure for a non-current subscription of org %s", billing["organizationId"])
+    if _is_foreign_subscription(
+        billing.get("stripeSubscriptionId"), _invoice_subscription_id(invoice)
+    ):
+        logger.warning(
+            "Ignoring payment failure for a non-current subscription of org %s",
+            billing["organizationId"],
+        )
         return
-    
+
     now = datetime.now(timezone.utc).isoformat()
     await db.organization_billing.update_one(
         {"organizationId": billing["organizationId"]},
-        {"$set": {
-            "billingStatus": BillingStatus.PAST_DUE,
-            "subscriptionTier": SubscriptionTier.TEAM,
-            "pastDueSince": billing.get("pastDueSince") or now,
-            "updatedAt": now,
-        }}
+        {
+            "$set": {
+                "billingStatus": BillingStatus.PAST_DUE,
+                "subscriptionTier": SubscriptionTier.TEAM,
+                "pastDueSince": billing.get("pastDueSince") or now,
+                "updatedAt": now,
+            }
+        },
     )
 
 
@@ -679,7 +755,9 @@ async def handle_invoice_paid(invoice):
     billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
     if not billing:
         return
-    if _is_foreign_subscription(billing.get("stripeSubscriptionId"), _invoice_subscription_id(invoice)):
+    if _is_foreign_subscription(
+        billing.get("stripeSubscriptionId"), _invoice_subscription_id(invoice)
+    ):
         return
 
     # If was past_due, restore to active
@@ -687,9 +765,12 @@ async def handle_invoice_paid(invoice):
         await db.organization_billing.update_one(
             {"organizationId": billing["organizationId"]},
             {
-                "$set": {"billingStatus": BillingStatus.ACTIVE, "updatedAt": datetime.now(timezone.utc).isoformat()},
+                "$set": {
+                    "billingStatus": BillingStatus.ACTIVE,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                },
                 "$unset": {"pastDueSince": ""},
-            }
+            },
         )
 
 
@@ -704,42 +785,66 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
         "incomplete_expired": BillingStatus.CANCELLED,
         "unpaid": BillingStatus.PAST_DUE,
     }
-    
+
     stripe_status = subscription.get("status", "incomplete")
     billing_status = status_map.get(stripe_status, BillingStatus.INCOMPLETE)
-    
+
     # A failed payment stays on the team plan during the grace window. Only a
     # cancelled subscription (or an unfinished checkout) leaves the paid tier.
-    if billing_status in (BillingStatus.ACTIVE, BillingStatus.TRIALING, BillingStatus.PAST_DUE):
+    if billing_status in (
+        BillingStatus.ACTIVE,
+        BillingStatus.TRIALING,
+        BillingStatus.PAST_DUE,
+    ):
         tier = SubscriptionTier.TEAM
     elif billing_status == BillingStatus.CANCELLED:
         tier = SubscriptionTier.CANCELLED
     else:
         tier = SubscriptionTier.TRIAL
-    
+
     current_period_end = None
     if subscription.get("current_period_end"):
-        current_period_end = datetime.fromtimestamp(subscription["current_period_end"], tz=timezone.utc).isoformat()
-    
+        current_period_end = datetime.fromtimestamp(
+            subscription["current_period_end"], tz=timezone.utc
+        ).isoformat()
+
     trial_end = None
     if subscription.get("trial_end"):
-        trial_end = datetime.fromtimestamp(subscription["trial_end"], tz=timezone.utc).isoformat()
-    
+        trial_end = datetime.fromtimestamp(
+            subscription["trial_end"], tz=timezone.utc
+        ).isoformat()
+
     existing = await db.organization_billing.find_one({"organizationId": org_id}) or {}
     current = existing.get("stripeSubscriptionId")
-    if (_is_foreign_subscription(current, subscription.get("id"))
-            and existing.get("billingStatus") in LIVE_BILLING_STATUSES
-            and billing_status not in LIVE_BILLING_STATUSES):
+    if (
+        _is_foreign_subscription(current, subscription.get("id"))
+        and existing.get("billingStatus") in LIVE_BILLING_STATUSES
+        and billing_status not in LIVE_BILLING_STATUSES
+    ):
         # A dead duplicate must not overwrite the org's live subscription.
-        logger.warning("Ignoring %s subscription %s for org %s (current %s is live)",
-                       stripe_status, subscription.get("id"), org_id, current)
+        logger.warning(
+            "Ignoring %s subscription %s for org %s (current %s is live)",
+            stripe_status,
+            subscription.get("id"),
+            org_id,
+            current,
+        )
         return
 
-    price_id = subscription.get("items", {}).get("data", [{}])[0].get("price", {}).get("id")
-    if tier == SubscriptionTier.TEAM and plan_config.plan_for_price_id(price_id) is None:
+    price_id = (
+        subscription.get("items", {}).get("data", [{}])[0].get("price", {}).get("id")
+    )
+    if (
+        tier == SubscriptionTier.TEAM
+        and plan_config.plan_for_price_id(price_id) is None
+    ):
         # B4: recorded, but compute_entitlement grants no access (unverified_plan).
-        logger.error("Subscription %s for org %s uses unconfigured Stripe price %s",
-                     subscription.get("id"), org_id, price_id)
+        logger.error(
+            "Subscription %s for org %s uses unconfigured Stripe price %s",
+            subscription.get("id"),
+            org_id,
+            price_id,
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     fields = {
@@ -748,7 +853,13 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
         "stripePriceId": price_id,
         "subscriptionTier": tier,
         "billingStatus": billing_status,
-        "currentPeriodStart": datetime.fromtimestamp(subscription.get("current_period_start", 0), tz=timezone.utc).isoformat() if subscription.get("current_period_start") else None,
+        "currentPeriodStart": (
+            datetime.fromtimestamp(
+                subscription.get("current_period_start", 0), tz=timezone.utc
+            ).isoformat()
+            if subscription.get("current_period_start")
+            else None
+        ),
         "currentPeriodEnd": current_period_end,
         # Never erase the in-app trial end when Stripe has no trial.
         "trialEndDate": trial_end or existing.get("trialEndDate"),
@@ -766,7 +877,11 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
 def _plan_card(plan: plan_config.PlanConfig) -> dict:
     monthly = display_price(plan, "monthly")
     annual = display_price(plan, "annual")
-    seats = f"Up to {plan.max_members} team members" if plan.max_members else "Unlimited team members"
+    seats = (
+        f"Up to {plan.max_members} team members"
+        if plan.max_members
+        else "Unlimited team members"
+    )
     return {
         "id": plan.id,
         "name": f"{plan.name} plan",
@@ -779,9 +894,14 @@ def _plan_card(plan: plan_config.PlanConfig) -> dict:
         "taxBehavior": monthly["taxBehavior"],
         "taxInclusive": monthly["taxInclusive"],
         "priceLabel": monthly["priceLabel"],
-        "annual": {"price": annual["amount"], "interval": "year", "priceId": annual["priceId"],
-                   "priceSource": annual["source"], "taxInclusive": annual["taxInclusive"],
-                   "priceLabel": annual["priceLabel"]},
+        "annual": {
+            "price": annual["amount"],
+            "interval": "year",
+            "priceId": annual["priceId"],
+            "priceSource": annual["source"],
+            "taxInclusive": annual["taxInclusive"],
+            "priceLabel": annual["priceLabel"],
+        },
         "maxMembers": plan.max_members,
         "features": [
             "AI contract analysis",
@@ -811,12 +931,16 @@ async def get_plans():
                 "features": [
                     "Free trial",
                     "Limited contract uploads",
-                    f"Up to {trial_seats} team members" if trial_seats else "Unlimited team members",
+                    (
+                        f"Up to {trial_seats} team members"
+                        if trial_seats
+                        else "Unlimited team members"
+                    ),
                     "AI contract analysis",
                     "Contract repository",
-                    "Basic dashboard"
+                    "Basic dashboard",
                 ],
-                "cta": "Start free trial"
+                "cta": "Start free trial",
             },
             *[_plan_card(p) for p in plan_config.get_paid_plans().values()],
         ]

@@ -6,7 +6,7 @@ import uuid
 
 class ContractTemplate(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     # Default templates are shared, "system"-owned rows, so the seeder builds
     # them from DEFAULT_TEMPLATES without an explicit owner. These fields were
@@ -21,8 +21,12 @@ class ContractTemplate(BaseModel):
     tags: List[str] = Field(default_factory=list)
     isPublic: bool = False  # Shared across organizations
     createdBy: str = Field(default="system")
-    createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    createdAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    updatedAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
 
 class ContractTemplateCreate(BaseModel):

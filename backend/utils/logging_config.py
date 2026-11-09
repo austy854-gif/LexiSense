@@ -2,6 +2,7 @@
 Structured logging configuration for LexiSense.
 Provides JSON-formatted logs with correlation IDs for tracing.
 """
+
 import logging
 import sys
 import json
@@ -16,45 +17,70 @@ from starlette.requests import Request as _Request
 from utils.rbac import client_key
 
 # Context variable for request correlation ID
-request_id_var: ContextVar[str] = ContextVar('request_id', default='')
+request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
 
 class StructuredFormatter(jsonlogger.JsonFormatter):
     """Custom JSON formatter that adds standard fields."""
-    
-    def add_fields(self, log_record: Dict[str, Any], record: logging.LogRecord, message_dict: Dict[str, Any]) -> None:
+
+    def add_fields(
+        self,
+        log_record: Dict[str, Any],
+        record: logging.LogRecord,
+        message_dict: Dict[str, Any],
+    ) -> None:
         super().add_fields(log_record, record, message_dict)
-        
+
         # Standard fields
-        log_record['timestamp'] = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
-        log_record['level'] = record.levelname
-        log_record['logger'] = record.name
-        log_record['module'] = record.module
-        log_record['function'] = record.funcName
-        log_record['line'] = record.lineno
-        
+        log_record["timestamp"] = (
+            datetime.fromtimestamp(record.created, tz=timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+        log_record["level"] = record.levelname
+        log_record["logger"] = record.name
+        log_record["module"] = record.module
+        log_record["function"] = record.funcName
+        log_record["line"] = record.lineno
+
         # Add correlation ID if available
         request_id = request_id_var.get()
         if request_id:
-            log_record['request_id'] = request_id
-        
+            log_record["request_id"] = request_id
+
         # Add extra fields from record
         for key, value in record.__dict__.items():
-            if key not in ['name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 
-                          'filename', 'module', 'lineno', 'funcName', 'created', 
-                          'msecs', 'relativeCreated', 'thread', 'threadName', 
-                          'processName', 'process', 'exc_info', 'exc_text', 'stack_info']:
+            if key not in [
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+            ]:
                 log_record[key] = value
 
 
 def setup_logging(
-    level: str = "INFO",
-    json_format: bool = True,
-    include_request_id: bool = True
+    level: str = "INFO", json_format: bool = True, include_request_id: bool = True
 ) -> logging.Logger:
     """
     Configure application logging.
-    
+
     Args:
         level: Log level (DEBUG, INFO, WARNING, ERROR)
         json_format: Use JSON formatting (production) vs human-readable (dev)
@@ -62,26 +88,26 @@ def setup_logging(
     """
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, level.upper()))
-    
+
     # Clear existing handlers
     root_logger.handlers.clear()
-    
+
     handler = logging.StreamHandler(sys.stdout)
-    
+
     if json_format:
         formatter = StructuredFormatter(
-            fmt='%(timestamp)s %(level)s %(logger)s %(message)s',
-            datefmt='%Y-%m-%dT%H:%M:%S.%fZ'
+            fmt="%(timestamp)s %(level)s %(logger)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S.%fZ",
         )
     else:
         formatter = logging.Formatter(
-            fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
+            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
-    
+
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
-    
+
     # Reduce noise from third-party loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.error").setLevel(logging.INFO)
@@ -89,10 +115,12 @@ def setup_logging(
     logging.getLogger("pymongo").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    
+
     logger = logging.getLogger("lexisense")
-    logger.info("Logging configured", extra={"json_format": json_format, "level": level})
-    
+    logger.info(
+        "Logging configured", extra={"json_format": json_format, "level": level}
+    )
+
     return logger
 
 
@@ -112,7 +140,7 @@ def set_request_id(request_id: str) -> None:
 
 def clear_request_id() -> None:
     """Clear the request correlation ID."""
-    request_id_var.set('')
+    request_id_var.set("")
 
 
 _SENSITIVE_QUERY_KEYS = {"token", "access_token", "refresh_token", "code", "password"}
@@ -125,7 +153,13 @@ def redact_query(query: str) -> str:
     from urllib.parse import parse_qsl, urlencode
 
     pairs = parse_qsl(query, keep_blank_values=True)
-    return urlencode([(k, "[REDACTED]" if k.lower() in _SENSITIVE_QUERY_KEYS else v) for k, v in pairs], safe="[]")
+    return urlencode(
+        [
+            (k, "[REDACTED]" if k.lower() in _SENSITIVE_QUERY_KEYS else v)
+            for k, v in pairs
+        ],
+        safe="[]",
+    )
 
 
 class AccessLogRedactionFilter(logging.Filter):
@@ -134,7 +168,12 @@ class AccessLogRedactionFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
-        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "?" in args[2]:
+        if (
+            isinstance(args, tuple)
+            and len(args) >= 3
+            and isinstance(args[2], str)
+            and "?" in args[2]
+        ):
             path, _, query = args[2].partition("?")
             record.args = args[:2] + (f"{path}?{redact_query(query)}",) + args[3:]
         return True
@@ -149,26 +188,26 @@ def install_access_log_redaction() -> None:
 
 class RequestLoggingMiddleware:
     """ASGI middleware for request/response logging with correlation IDs."""
-    
+
     def __init__(self, app):
         self.app = app
-    
+
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        
+
         # Generate correlation ID
         request_id = get_request_id()
-        
+
         # Extract request info
         method = scope.get("method", "")
         path = scope.get("path", "")
         query_string = redact_query(scope.get("query_string", b"").decode())
         client = client_key(_Request(scope))
-        
+
         logger = logging.getLogger("lexisense.request")
-        
+
         # Log request start
         logger.info(
             "Request started",
@@ -178,18 +217,18 @@ class RequestLoggingMiddleware:
                 "path": path,
                 "query": query_string,
                 "client_ip": client,
-            }
+            },
         )
-        
+
         # Capture response status
         status_code = 0
-        
+
         async def send_wrapper(message):
             nonlocal status_code
             if message["type"] == "http.response.start":
                 status_code = message["status"]
             await send(message)
-        
+
         try:
             await self.app(scope, receive, send_wrapper)
         except Exception as e:
@@ -200,7 +239,7 @@ class RequestLoggingMiddleware:
                     "method": method,
                     "path": path,
                     "error": str(e),
-                }
+                },
             )
             raise
         finally:
@@ -212,7 +251,7 @@ class RequestLoggingMiddleware:
                     "method": method,
                     "path": path,
                     "status_code": status_code,
-                }
+                },
             )
             clear_request_id()
 

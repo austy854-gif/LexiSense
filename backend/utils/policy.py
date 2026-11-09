@@ -5,6 +5,7 @@ resource is involved, after loading it with an organization-scoped query.
 The UI mirrors these capabilities for affordances only; this module is the
 security boundary.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -15,17 +16,41 @@ from utils.rbac import ROLE_ADMIN, ROLE_MANAGER, ROLE_USER, ROLE_VIEWER, normali
 # The product role matrix is intentionally explicit. Users may upload and
 # submit their own work, but managers/admins own all other contract mutations.
 CAPABILITIES = {
-    ROLE_ADMIN: frozenset({
-        "upload", "delete", "restore", "version", "submit_for_review",
-        "approve", "reject", "activate", "template_manage", "invite",
-        "audit_view", "alert_settings", "alert_trigger", "contract_edit",
-        "tag_manage",
-    }),
-    ROLE_MANAGER: frozenset({
-        "upload", "delete", "restore", "version", "submit_for_review",
-        "approve", "reject", "activate", "audit_view", "alert_trigger",
-        "contract_edit", "tag_manage",
-    }),
+    ROLE_ADMIN: frozenset(
+        {
+            "upload",
+            "delete",
+            "restore",
+            "version",
+            "submit_for_review",
+            "approve",
+            "reject",
+            "activate",
+            "template_manage",
+            "invite",
+            "audit_view",
+            "alert_settings",
+            "alert_trigger",
+            "contract_edit",
+            "tag_manage",
+        }
+    ),
+    ROLE_MANAGER: frozenset(
+        {
+            "upload",
+            "delete",
+            "restore",
+            "version",
+            "submit_for_review",
+            "approve",
+            "reject",
+            "activate",
+            "audit_view",
+            "alert_trigger",
+            "contract_edit",
+            "tag_manage",
+        }
+    ),
     ROLE_USER: frozenset({"upload", "submit_for_review"}),
     ROLE_VIEWER: frozenset(),
 }
@@ -70,7 +95,9 @@ def require_capability(user: dict, capability: str) -> None:
 def require_owner_or_capability(user: dict, resource: dict, capability: str) -> None:
     """Require a capability and organization ownership for a loaded resource."""
     if resource.get("organizationId") != user.get("organizationId"):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
     require_capability(user, capability)
 
 
@@ -81,7 +108,9 @@ def require_contract_write(user: dict, contract: dict, capability: str) -> None:
     contracts they uploaded; viewers are always read-only.
     """
     if contract.get("organizationId") != user.get("organizationId"):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
+        )
     role = normalize_role(user.get("role"))
     if can(role, capability):
         return
@@ -90,21 +119,29 @@ def require_contract_write(user: dict, contract: dict, capability: str) -> None:
             return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=_OWNER_DENIAL.get(capability, f"Your role cannot perform '{capability}'."),
+            detail=_OWNER_DENIAL.get(
+                capability, f"Your role cannot perform '{capability}'."
+            ),
         )
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Viewers cannot modify contracts")
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail="Viewers cannot modify contracts"
+    )
 
 
 def require_uploader_for_user(user: dict, resource: dict) -> None:
     """Users may submit only contracts they uploaded themselves."""
-    if normalize_role(user.get("role")) == ROLE_USER and resource.get("uploadedBy") != user.get("sub"):
+    if normalize_role(user.get("role")) == ROLE_USER and resource.get(
+        "uploadedBy"
+    ) != user.get("sub"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Users may only submit contracts they uploaded.",
         )
 
 
-def capability_map(role: object, *, read_only: bool = False, uploads_blocked: bool = False) -> dict[str, bool]:
+def capability_map(
+    role: object, *, read_only: bool = False, uploads_blocked: bool = False
+) -> dict[str, bool]:
     """Serialize frontend capabilities from the same server-side matrix.
 
     ``can*Own`` flags mean "allowed only on contracts this user uploaded".
@@ -112,7 +149,9 @@ def capability_map(role: object, *, read_only: bool = False, uploads_blocked: bo
     normalized = normalize_role(role)
     owner = OWNER_CAPABILITIES.get(normalized, frozenset())
     return {
-        "canUpload": can(normalized, "upload") and not read_only and not uploads_blocked,
+        "canUpload": can(normalized, "upload")
+        and not read_only
+        and not uploads_blocked,
         "canDelete": can(normalized, "delete") and not read_only,
         "canRestore": can(normalized, "restore") and not read_only,
         "canSubmitForReview": can(normalized, "submit_for_review") and not read_only,
@@ -125,6 +164,10 @@ def capability_map(role: object, *, read_only: bool = False, uploads_blocked: bo
         "canUpdateAlertSettings": can(normalized, "alert_settings") and not read_only,
         "canTriggerAlerts": can(normalized, "alert_trigger") and not read_only,
         "canEditContract": can(normalized, "contract_edit") and not read_only,
-        "canEditOwnContract": ("contract_edit" in owner or can(normalized, "contract_edit")) and not read_only,
-        "canRestoreOwn": ("restore" in owner or can(normalized, "restore")) and not read_only,
+        "canEditOwnContract": (
+            "contract_edit" in owner or can(normalized, "contract_edit")
+        )
+        and not read_only,
+        "canRestoreOwn": ("restore" in owner or can(normalized, "restore"))
+        and not read_only,
     }

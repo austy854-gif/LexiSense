@@ -31,6 +31,7 @@ organization_billing the trial/quota record (one per org) and the Stripe
                      webhook lookup by customer id.
 ===================  ==========================================================
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,64 +44,140 @@ INDEX_SPECIFICATION: Dict[str, List[Dict[str, Any]]] = {
     "users": [
         {"keys": [("email", 1)], "unique": True, "name": "uq_users_email"},
         {"keys": [("id", 1)], "unique": True, "name": "uq_users_id"},
-        {"keys": [("organizationId", 1), ("createdAt", -1)], "name": "ix_users_org_created"},
+        {
+            "keys": [("organizationId", 1), ("createdAt", -1)],
+            "name": "ix_users_org_created",
+        },
         # One outstanding password-reset token per account. Sparse so accounts
         # without a reset request are not indexed.
-        {"keys": [("passwordResetHash", 1)], "unique": True, "sparse": True, "name": "uq_users_reset_hash"},
+        {
+            "keys": [("passwordResetHash", 1)],
+            "unique": True,
+            "sparse": True,
+            "name": "uq_users_reset_hash",
+        },
     ],
     "organizations": [
         {"keys": [("id", 1)], "unique": True, "name": "uq_organizations_id"},
     ],
     "contracts": [
         {"keys": [("id", 1)], "unique": True, "name": "uq_contracts_id"},
-        {"keys": [("organizationId", 1), ("createdAt", -1)], "name": "ix_contracts_org_created"},
-        {"keys": [("organizationId", 1), ("expiryDate", 1)], "name": "ix_contracts_org_expiry"},
-        {"keys": [("organizationId", 1), ("status", 1)], "name": "ix_contracts_org_status"},
-        {"keys": [("organizationId", 1), ("riskLevel", 1)], "name": "ix_contracts_org_risk"},
-        {"keys": [("organizationId", 1), ("contractType", 1)], "name": "ix_contracts_org_type"},
-        {"keys": [("organizationId", 1), ("uploadedBy", 1)], "name": "ix_contracts_org_uploader"},
+        {
+            "keys": [("organizationId", 1), ("createdAt", -1)],
+            "name": "ix_contracts_org_created",
+        },
+        {
+            "keys": [("organizationId", 1), ("expiryDate", 1)],
+            "name": "ix_contracts_org_expiry",
+        },
+        {
+            "keys": [("organizationId", 1), ("status", 1)],
+            "name": "ix_contracts_org_status",
+        },
+        {
+            "keys": [("organizationId", 1), ("riskLevel", 1)],
+            "name": "ix_contracts_org_risk",
+        },
+        {
+            "keys": [("organizationId", 1), ("contractType", 1)],
+            "name": "ix_contracts_org_type",
+        },
+        {
+            "keys": [("organizationId", 1), ("uploadedBy", 1)],
+            "name": "ix_contracts_org_uploader",
+        },
     ],
     "contract_versions": [
-        {"keys": [("contractId", 1), ("version", -1)], "name": "ix_versions_contract_version"},
+        {
+            "keys": [("contractId", 1), ("version", -1)],
+            "name": "ix_versions_contract_version",
+        },
     ],
     "invitations": [
         # Hashed invite token (utils.invite_tokens). Sparse: legacy records
         # lack it until migration 003 hashes them. The old plaintext
         # ``uq_invitations_token`` index is dropped by that migration.
-        {"keys": [("tokenHash", 1)], "unique": True, "sparse": True, "name": "uq_invitations_token_hash"},
-        {"keys": [("organizationId", 1), ("email", 1)], "name": "ix_invitations_org_email"},
-        {"keys": [("organizationId", 1), ("createdAt", -1)], "name": "ix_invitations_org_created"},
+        {
+            "keys": [("tokenHash", 1)],
+            "unique": True,
+            "sparse": True,
+            "name": "uq_invitations_token_hash",
+        },
+        {
+            "keys": [("organizationId", 1), ("email", 1)],
+            "name": "ix_invitations_org_email",
+        },
+        {
+            "keys": [("organizationId", 1), ("createdAt", -1)],
+            "name": "ix_invitations_org_created",
+        },
     ],
     "expiration_alerts": [
-        {"keys": [("idempotencyKey", 1)], "unique": True, "sparse": True, "name": "uq_alerts_idempotency"},
-        {"keys": [("organizationId", 1), ("contractId", 1), ("daysBeforeExpiry", 1)], "name": "ix_alerts_org_contract_days"},
-        {"keys": [("organizationId", 1), ("createdAt", -1)], "name": "ix_alerts_org_created"},
+        {
+            "keys": [("idempotencyKey", 1)],
+            "unique": True,
+            "sparse": True,
+            "name": "uq_alerts_idempotency",
+        },
+        {
+            "keys": [("organizationId", 1), ("contractId", 1), ("daysBeforeExpiry", 1)],
+            "name": "ix_alerts_org_contract_days",
+        },
+        {
+            "keys": [("organizationId", 1), ("createdAt", -1)],
+            "name": "ix_alerts_org_created",
+        },
         # retry_failed_alerts: status="failed" AND nextAttemptAt <= now.
-        {"keys": [("status", 1), ("nextAttemptAt", 1)], "name": "ix_alerts_status_next_attempt"},
+        {
+            "keys": [("status", 1), ("nextAttemptAt", 1)],
+            "name": "ix_alerts_status_next_attempt",
+        },
     ],
     "templates": [
         {"keys": [("organizationId", 1), ("name", 1)], "name": "ix_templates_org_name"},
-        {"keys": [("organizationId", 1), ("createdAt", -1)], "name": "ix_templates_org_created"},
+        {
+            "keys": [("organizationId", 1), ("createdAt", -1)],
+            "name": "ix_templates_org_created",
+        },
     ],
     "audit_logs": [
-        {"keys": [("organizationId", 1), ("createdAt", -1)], "name": "ix_audit_org_created"},
-        {"keys": [("organizationId", 1), ("resourceType", 1)], "name": "ix_audit_org_resource"},
+        {
+            "keys": [("organizationId", 1), ("createdAt", -1)],
+            "name": "ix_audit_org_created",
+        },
+        {
+            "keys": [("organizationId", 1), ("resourceType", 1)],
+            "name": "ix_audit_org_resource",
+        },
         {"keys": [("organizationId", 1), ("action", 1)], "name": "ix_audit_org_action"},
     ],
     "notifications": [
-        {"keys": [("userId", 1), ("createdAt", -1)], "name": "ix_notifications_user_created"},
+        {
+            "keys": [("userId", 1), ("createdAt", -1)],
+            "name": "ix_notifications_user_created",
+        },
         {"keys": [("userId", 1), ("isRead", 1)], "name": "ix_notifications_user_read"},
     ],
     "chat_history": [
-        {"keys": [("contractId", 1), ("createdAt", -1)], "name": "ix_chat_contract_created"},
+        {
+            "keys": [("contractId", 1), ("createdAt", -1)],
+            "name": "ix_chat_contract_created",
+        },
     ],
     "organization_billing": [
         {"keys": [("organizationId", 1)], "unique": True, "name": "uq_billing_org"},
-        {"keys": [("stripeCustomerId", 1)], "sparse": True, "name": "ix_billing_customer"},
+        {
+            "keys": [("stripeCustomerId", 1)],
+            "sparse": True,
+            "name": "ix_billing_customer",
+        },
     ],
     "approvals": [
         {"keys": [("id", 1)], "unique": True, "name": "uq_approvals_id"},
-        {"keys": [("organizationId", 1), ("contractId", 1), ("status", 1)], "name": "ix_approvals_org_contract_status"},
+        {
+            "keys": [("organizationId", 1), ("contractId", 1), ("status", 1)],
+            "name": "ix_approvals_org_contract_status",
+        },
     ],
     "approval_tokens": [
         {"keys": [("tokenHash", 1)], "unique": True, "name": "uq_approval_tokens_hash"},
@@ -108,8 +185,15 @@ INDEX_SPECIFICATION: Dict[str, List[Dict[str, Any]]] = {
     ],
     "email_notifications": [
         {"keys": [("id", 1)], "unique": True, "name": "uq_email_notifications_id"},
-        {"keys": [("resendEmailId", 1)], "sparse": True, "name": "ix_email_notifications_resend_id"},
-        {"keys": [("organizationId", 1), ("approvalId", 1)], "name": "ix_email_notifications_org_approval"},
+        {
+            "keys": [("resendEmailId", 1)],
+            "sparse": True,
+            "name": "ix_email_notifications_resend_id",
+        },
+        {
+            "keys": [("organizationId", 1), ("approvalId", 1)],
+            "name": "ix_email_notifications_org_approval",
+        },
     ],
     "schema_migrations": [
         {"keys": [("version", 1)], "unique": True, "name": "uq_migrations_version"},

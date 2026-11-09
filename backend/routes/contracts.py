@@ -1,11 +1,27 @@
-from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Response
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    status,
+    Depends,
+    UploadFile,
+    File,
+    Form,
+    Response,
+)
 from typing import List, Optional
 from datetime import datetime, timezone
 import logging
 import re
 import uuid
 
-from models.contract import Contract, ContractCreate, ContractResponse, ContractUpdate, ChatMessage, ChatResponse
+from models.contract import (
+    Contract,
+    ContractCreate,
+    ContractResponse,
+    ContractUpdate,
+    ChatMessage,
+    ChatResponse,
+)
 from models.contract_version import ContractVersion, ContractVersionResponse
 from utils.auth import get_current_user
 from utils.pagination import normalize_date_bound, resolve_pagination
@@ -13,10 +29,19 @@ from utils.rbac import (
     RateLimiterUnavailable,
     make_org_limiter,
 )
-from utils.policy import require_capability, require_contract_write, require_owner_or_capability
+from utils.policy import (
+    require_capability,
+    require_contract_write,
+    require_owner_or_capability,
+)
 from utils.env import get_env
 from services.ai_service import analyze_contract, get_chat_response
-from services.storage_service import upload_file_to_s3, delete_file_from_s3, generate_presigned_url, purge_uploaded_object
+from services.storage_service import (
+    upload_file_to_s3,
+    delete_file_from_s3,
+    generate_presigned_url,
+    purge_uploaded_object,
+)
 from services.pdf_service import FileRejected, extract_text_from_file
 from services.audit_service import log_action
 from utils.contract_fields import fields_from_analysis
@@ -52,11 +77,17 @@ def _env_int(name: str, default: int) -> int:
 #: Contract chat spends AI credits on every call: rate-limited per user and per
 #: org (per minute). Redis-backed when configured; falls back to the in-process
 #: window if Redis is down (fail open, like the other single-request limiters).
-CHAT_USER_LIMITER = make_org_limiter(_env_int("CHAT_RATE_LIMIT_PER_USER_PER_MINUTE", 10), 60.0, prefix="rl")
-CHAT_ORG_LIMITER = make_org_limiter(_env_int("CHAT_RATE_LIMIT_PER_ORG_PER_MINUTE", 60), 60.0, prefix="rl")
+CHAT_USER_LIMITER = make_org_limiter(
+    _env_int("CHAT_RATE_LIMIT_PER_USER_PER_MINUTE", 10), 60.0, prefix="rl"
+)
+CHAT_ORG_LIMITER = make_org_limiter(
+    _env_int("CHAT_RATE_LIMIT_PER_ORG_PER_MINUTE", 60), 60.0, prefix="rl"
+)
 
 
-async def _chat_rate_limited_user(current_user: dict = Depends(get_current_user)) -> dict:
+async def _chat_rate_limited_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
     """Auth first (anonymous callers can't burn a budget), then both limits."""
     org = current_user.get("organizationId") or "unknown"
     user = current_user.get("sub") or current_user.get("id") or "unknown"
@@ -76,6 +107,7 @@ async def _chat_rate_limited_user(current_user: dict = Depends(get_current_user)
             )
     return current_user
 
+
 db = None
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 DOWNLOAD_URL_TTL_SECONDS = 300
@@ -84,7 +116,12 @@ DOWNLOAD_URL_TTL_SECONDS = 300
 def _analysis_columns(ai_analysis):
     """Persisted date/value/risk columns. Invalid model output becomes None."""
     if isinstance(ai_analysis, dict) and ai_analysis.get("error"):
-        return {"riskLevel": None, "effectiveDate": None, "expiryDate": None, "value": None}
+        return {
+            "riskLevel": None,
+            "effectiveDate": None,
+            "expiryDate": None,
+            "value": None,
+        }
     return fields_from_analysis(ai_analysis)
 
 
@@ -105,11 +142,16 @@ async def _read_contract_file(filename: str, file_content: bytes):
         )
     return content_type, extension, extracted
 
+
 # User-facing analysis outcomes. These strings are stored on the contract and
 # shown verbatim in the UI, so they must never carry exception text; the
 # technical detail goes to the server log only.
-ANALYSIS_UNAVAILABLE_MESSAGE = "The analysis didn't run this time. Re-upload the contract to try again."
-ANALYSIS_FAILED_MESSAGE = "The analysis didn't finish. Re-upload the contract to try again."
+ANALYSIS_UNAVAILABLE_MESSAGE = (
+    "The analysis didn't run this time. Re-upload the contract to try again."
+)
+ANALYSIS_FAILED_MESSAGE = (
+    "The analysis didn't finish. Re-upload the contract to try again."
+)
 BULK_FILE_FAILED_MESSAGE = "We couldn't add this file. Please try again."
 
 
@@ -158,7 +200,7 @@ async def list_contracts(
     sort_by: Optional[str] = "createdAt",
     sort_order: Optional[str] = "desc",
     pagination: tuple = Depends(resolve_pagination),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """List all contracts with advanced filtering options.
 
@@ -169,7 +211,7 @@ async def list_contracts(
     """
     limit, offset = pagination
     query = {"organizationId": current_user["organizationId"]}
-    
+
     # Basic filters
     if status_filter and status_filter != "all":
         query["status"] = status_filter
@@ -179,16 +221,16 @@ async def list_contracts(
         query["riskLevel"] = risk_level
     if counterparty:
         query["counterparty"] = {"$regex": _escape_regex(counterparty), "$options": "i"}
-    
+
     # Text search
     if search:
         escaped = _escape_regex(search)
         query["$or"] = [
             {"title": {"$regex": escaped, "$options": "i"}},
             {"counterparty": {"$regex": escaped, "$options": "i"}},
-            {"tags": {"$regex": escaped, "$options": "i"}}
+            {"tags": {"$regex": escaped, "$options": "i"}},
         ]
-    
+
     # Date range filters. Callers may send a bare date (YYYY-MM-DD) or a full
     # ISO timestamp; a date-only upper bound is widened to the end of that UTC
     # day so "created before X" cannot silently exclude records created on X.
@@ -201,26 +243,33 @@ async def list_contracts(
         if normalized_to:
             created_filter["$lte"] = normalized_to
         query["createdAt"] = created_filter
-    
+
     # Expiring within N days
     if expiring_within:
         from datetime import timedelta
+
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        future = (datetime.now(timezone.utc) + timedelta(days=expiring_within)).strftime("%Y-%m-%d")
+        future = (
+            datetime.now(timezone.utc) + timedelta(days=expiring_within)
+        ).strftime("%Y-%m-%d")
         query["expiryDate"] = {"$gte": today, "$lte": future}
         # Do not clobber an explicit status filter the caller already supplied.
         if "status" not in query:
             query["status"] = {"$ne": "expired"}
-    
+
     # Tags filter
     if tags:
         tag_list = [t.strip() for t in tags.split(",")]
         query["tags"] = {"$in": tag_list}
-    
+
     # Sorting
     sort_direction = -1 if sort_order == "desc" else 1
-    sort_field = sort_by if sort_by in ["createdAt", "title", "expiryDate", "riskLevel"] else "createdAt"
-    
+    sort_field = (
+        sort_by
+        if sort_by in ["createdAt", "title", "expiryDate", "riskLevel"]
+        else "createdAt"
+    )
+
     total = await db.contracts.count_documents(query)
 
     contracts = (
@@ -234,59 +283,65 @@ async def list_contracts(
     response.headers["X-Total-Count"] = str(total)
     response.headers["X-Page-Limit"] = str(limit)
     response.headers["X-Page-Offset"] = str(offset)
-    
+
     # Batch fetch uploader emails to avoid N+1 queries
-    uploader_ids = list(set(c.get("uploadedBy") for c in contracts if c.get("uploadedBy")))
-    uploaders = await db.users.find({"id": {"$in": uploader_ids}}, {"_id": 0, "id": 1, "email": 1}).to_list(len(uploader_ids))
+    uploader_ids = list(
+        set(c.get("uploadedBy") for c in contracts if c.get("uploadedBy"))
+    )
+    uploaders = await db.users.find(
+        {"id": {"$in": uploader_ids}}, {"_id": 0, "id": 1, "email": 1}
+    ).to_list(len(uploader_ids))
     uploader_map = {u["id"]: u["email"] for u in uploaders}
-    
+
     result = []
     for c in contracts:
-        result.append(ContractResponse(
-            id=c["id"],
-            organizationId=c["organizationId"],
-            uploadedBy=c["uploadedBy"],
-            title=c["title"],
-            counterparty=c.get("counterparty"),
-            contractType=c.get("contractType", "General"),
-            status=c.get("status", "draft"),
-            value=c.get("value"),
-            effectiveDate=c.get("effectiveDate"),
-            expiryDate=c.get("expiryDate"),
-            riskLevel=c.get("riskLevel"),
-            aiAnalysis=c.get("aiAnalysis"),
-            aiAnalysisStatus=c.get("aiAnalysisStatus"),
-            aiAnalysisError=_public_analysis_error(c.get("aiAnalysisError")),
-            fileName=c.get("fileName"),
-            fileSize=c.get("fileSize"),
-            tags=c.get("tags", []),
-            createdAt=c["createdAt"],
-            updatedAt=c["updatedAt"],
-            uploaderEmail=uploader_map.get(c.get("uploadedBy"))
-        ))
-    
+        result.append(
+            ContractResponse(
+                id=c["id"],
+                organizationId=c["organizationId"],
+                uploadedBy=c["uploadedBy"],
+                title=c["title"],
+                counterparty=c.get("counterparty"),
+                contractType=c.get("contractType", "General"),
+                status=c.get("status", "draft"),
+                value=c.get("value"),
+                effectiveDate=c.get("effectiveDate"),
+                expiryDate=c.get("expiryDate"),
+                riskLevel=c.get("riskLevel"),
+                aiAnalysis=c.get("aiAnalysis"),
+                aiAnalysisStatus=c.get("aiAnalysisStatus"),
+                aiAnalysisError=_public_analysis_error(c.get("aiAnalysisError")),
+                fileName=c.get("fileName"),
+                fileSize=c.get("fileSize"),
+                tags=c.get("tags", []),
+                createdAt=c["createdAt"],
+                updatedAt=c["updatedAt"],
+                uploaderEmail=uploader_map.get(c.get("uploadedBy")),
+            )
+        )
+
     return result
 
 
 @router.get("/{contract_id}", response_model=ContractResponse)
 async def get_contract(
-    contract_id: str,
-    current_user: dict = Depends(get_current_user)
+    contract_id: str, current_user: dict = Depends(get_current_user)
 ):
     """Get a single contract by ID."""
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
-        {"_id": 0}
+        {"_id": 0},
     )
-    
+
     if not contract:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Contract not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
         )
-    
-    uploader = await db.users.find_one({"id": contract.get("uploadedBy")}, {"_id": 0, "email": 1})
-    
+
+    uploader = await db.users.find_one(
+        {"id": contract.get("uploadedBy")}, {"_id": 0, "email": 1}
+    )
+
     return ContractResponse(
         id=contract["id"],
         organizationId=contract["organizationId"],
@@ -307,8 +362,9 @@ async def get_contract(
         tags=contract.get("tags", []),
         createdAt=contract["createdAt"],
         updatedAt=contract["updatedAt"],
-        uploaderEmail=uploader["email"] if uploader else None
+        uploaderEmail=uploader["email"] if uploader else None,
     )
+
 
 @router.get("/{contract_id}/text")
 async def get_contract_text(
@@ -321,10 +377,14 @@ async def get_contract_text(
         {"_id": 0, "originalText": 1},
     )
     if not contract:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
+        )
     text = contract.get("originalText") or ""
     if not text.strip():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contract text not available")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract text not available"
+        )
     return {"text": text, "characters": len(text)}
 
 
@@ -339,13 +399,27 @@ async def download_contract_file(
         {"_id": 0, "originalText": 0},
     )
     if not contract:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
+        )
     storage_key = contract.get("storageKey")
     if not storage_key:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Original file is not available")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Original file is not available",
+        )
 
-    extension = "pdf" if (contract.get("mimeType") == "application/pdf" or str(storage_key).endswith(".pdf")) else "txt"
-    filename = attachment_filename(contract.get("fileName") or contract.get("title") or "contract", extension)
+    extension = (
+        "pdf"
+        if (
+            contract.get("mimeType") == "application/pdf"
+            or str(storage_key).endswith(".pdf")
+        )
+        else "txt"
+    )
+    filename = attachment_filename(
+        contract.get("fileName") or contract.get("title") or "contract", extension
+    )
     content_type = "application/pdf" if extension == "pdf" else "text/plain"
     url = await generate_presigned_url(
         storage_key,
@@ -361,7 +435,6 @@ async def download_contract_file(
     return {"url": url, "fileName": filename, "expiresIn": DOWNLOAD_URL_TTL_SECONDS}
 
 
-
 #: (current, restored) status -> capability required to restore across it.
 RESTORE_TRANSITION_CAPABILITY = {
     ("draft", "review"): "submit_for_review",
@@ -373,7 +446,9 @@ RESTORE_TRANSITION_CAPABILITY = {
 }
 
 
-async def _rollback_failed_upload(org_id: str, storage_key: Optional[str], contract_id: Optional[str]) -> None:
+async def _rollback_failed_upload(
+    org_id: str, storage_key: Optional[str], contract_id: Optional[str]
+) -> None:
     """Undo every partial artifact of a failed upload; the quota refund always runs.
 
     Each step is isolated so a storage or database error in one step cannot
@@ -387,7 +462,10 @@ async def _rollback_failed_upload(org_id: str, storage_key: Optional[str], contr
     try:
         if storage_key:
             if not await purge_uploaded_object(storage_key):
-                logger.error("Upload rollback: stored object %s may not have been fully removed", storage_key)
+                logger.error(
+                    "Upload rollback: stored object %s may not have been fully removed",
+                    storage_key,
+                )
     except Exception:
         logger.exception("Upload rollback: failed to delete stored object")
     finally:
@@ -403,7 +481,7 @@ async def upload_contract(
     title: str = Form(...),
     counterparty: Optional[str] = Form(None),
     contractType: str = Form("General"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Upload and analyze a new contract."""
     require_capability(current_user, "upload")
@@ -412,19 +490,20 @@ async def upload_contract(
     if len(file_content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File size exceeds maximum allowed (10MB)"
+            detail="File size exceeds maximum allowed (10MB)",
         )
 
-    content_type, extension, extracted_text = await _read_contract_file(file.filename, file_content)
-    
+    content_type, extension, extracted_text = await _read_contract_file(
+        file.filename, file_content
+    )
+
     # Atomically reserve one trial upload slot BEFORE any storage/DB writes.
     # Concurrent requests can never exceed the cap, and we can refund on failure.
-    reserved, trial_message = await reserve_trial_upload_atomic(current_user["organizationId"])
+    reserved, trial_message = await reserve_trial_upload_atomic(
+        current_user["organizationId"]
+    )
     if not reserved:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=trial_message
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=trial_message)
 
     storage_key = None
     contract_inserted = False
@@ -451,7 +530,11 @@ async def upload_contract(
                 ai_error = ANALYSIS_UNAVAILABLE_MESSAGE
             else:
                 if ai_analysis.get("error"):
-                    logger.warning("AI analysis returned an error for %r: %s", title, ai_analysis.get("error"))
+                    logger.warning(
+                        "AI analysis returned an error for %r: %s",
+                        title,
+                        ai_analysis.get("error"),
+                    )
                     ai_error = ANALYSIS_FAILED_MESSAGE
                 columns = _analysis_columns(ai_analysis)
                 risk_level = columns["riskLevel"]
@@ -478,7 +561,7 @@ async def upload_contract(
             storageKey=storage_key,
             fileName=file.filename,
             fileSize=len(file_content),
-            mimeType=content_type
+            mimeType=content_type,
         )
 
         contract_doc = contract.model_dump()
@@ -504,22 +587,28 @@ async def upload_contract(
     except HTTPException:
         # Refund the reserved slot and remove every partial artifact.
         await _rollback_failed_upload(
-            current_user["organizationId"], storage_key, contract.id if contract_inserted else None
+            current_user["organizationId"],
+            storage_key,
+            contract.id if contract_inserted else None,
         )
         raise
     except Exception as e:
         # Unknown failure -- refund quota and remove every partial artifact.
         await _rollback_failed_upload(
-            current_user["organizationId"], storage_key, contract.id if contract_inserted else None
+            current_user["organizationId"],
+            storage_key,
+            contract.id if contract_inserted else None,
         )
         logger.error(f"Contract upload failed after quota reservation: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Upload failed. Nothing was saved. Please retry."
+            detail="Upload failed. Nothing was saved. Please retry.",
         )
 
-    uploader = await db.users.find_one({"id": current_user["sub"]}, {"_id": 0, "email": 1})
-    
+    uploader = await db.users.find_one(
+        {"id": current_user["sub"]}, {"_id": 0, "email": 1}
+    )
+
     return ContractResponse(
         id=contract.id,
         organizationId=contract.organizationId,
@@ -540,7 +629,7 @@ async def upload_contract(
         tags=contract.tags,
         createdAt=contract.createdAt,
         updatedAt=contract.updatedAt,
-        uploaderEmail=uploader["email"] if uploader else None
+        uploaderEmail=uploader["email"] if uploader else None,
     )
 
 
@@ -548,49 +637,57 @@ async def upload_contract(
 async def bulk_upload_contracts(
     files: List[UploadFile] = File(...),
     contractType: str = Form("General"),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Bulk upload multiple contracts at once."""
     require_capability(current_user, "upload")
     if len(files) > 10:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Maximum 10 files allowed per bulk upload"
+            detail="Maximum 10 files allowed per bulk upload",
         )
-    
-    results = {
-        "successful": [],
-        "failed": []
-    }
-    
+
+    results = {"successful": [], "failed": []}
+
     for file in files:
         try:
             file_content = await file.read()
 
             if len(file_content) > MAX_FILE_SIZE:
-                results["failed"].append({
-                    "filename": file.filename,
-                    "error": "File size exceeds maximum allowed (10MB)"
-                })
+                results["failed"].append(
+                    {
+                        "filename": file.filename,
+                        "error": "File size exceeds maximum allowed (10MB)",
+                    }
+                )
                 continue
 
             try:
-                content_type, extension, extracted_text = await _read_contract_file(file.filename, file_content)
+                content_type, extension, extracted_text = await _read_contract_file(
+                    file.filename, file_content
+                )
             except HTTPException as exc:
-                results["failed"].append({
-                    "filename": file.filename,
-                    "error": exc.detail if isinstance(exc.detail, str) else "Could not read this file",
-                })
+                results["failed"].append(
+                    {
+                        "filename": file.filename,
+                        "error": (
+                            exc.detail
+                            if isinstance(exc.detail, str)
+                            else "Could not read this file"
+                        ),
+                    }
+                )
                 continue
-            
+
             # Atomically reserve one trial slot per file. Concurrent bulk
             # requests cannot exceed the cap.
-            reserved, trial_message = await reserve_trial_upload_atomic(current_user["organizationId"])
+            reserved, trial_message = await reserve_trial_upload_atomic(
+                current_user["organizationId"]
+            )
             if not reserved:
-                results["failed"].append({
-                    "filename": file.filename,
-                    "error": trial_message
-                })
+                results["failed"].append(
+                    {"filename": file.filename, "error": trial_message}
+                )
                 continue
 
             file_upload_ok = False
@@ -605,7 +702,12 @@ async def bulk_upload_contracts(
                 )
 
                 # Generate title from filename
-                title = file.filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").title()
+                title = (
+                    file.filename.rsplit(".", 1)[0]
+                    .replace("_", " ")
+                    .replace("-", " ")
+                    .title()
+                )
 
                 # Analyze contract
                 ai_analysis = None
@@ -622,7 +724,9 @@ async def bulk_upload_contracts(
                     else:
                         if ai_analysis.get("error"):
                             logger.warning(
-                                "AI analysis returned an error for %r: %s", file.filename, ai_analysis.get("error")
+                                "AI analysis returned an error for %r: %s",
+                                file.filename,
+                                ai_analysis.get("error"),
                             )
                             ai_error = ANALYSIS_FAILED_MESSAGE
                         columns = _analysis_columns(ai_analysis)
@@ -649,7 +753,7 @@ async def bulk_upload_contracts(
                     storageKey=storage_key,
                     fileName=file.filename,
                     fileSize=len(file_content),
-                    mimeType=content_type
+                    mimeType=content_type,
                 )
 
                 contract_doc = contract.model_dump()
@@ -661,30 +765,33 @@ async def bulk_upload_contracts(
                 await db.contracts.insert_one(contract_doc)
                 file_upload_ok = True
 
-                results["successful"].append({
-                    "id": contract.id,
-                    "filename": file.filename,
-                    "title": title,
-                    "riskLevel": risk_level
-                })
+                results["successful"].append(
+                    {
+                        "id": contract.id,
+                        "filename": file.filename,
+                        "title": title,
+                        "riskLevel": risk_level,
+                    }
+                )
             finally:
                 # If the DB insert never succeeded, delete the verified S3
                 # object (no contract references it) and refund the slot.
                 if not file_upload_ok:
-                    await _rollback_failed_upload(current_user["organizationId"], storage_key, None)
+                    await _rollback_failed_upload(
+                        current_user["organizationId"], storage_key, None
+                    )
 
         except Exception:
             logger.exception("Bulk upload failed for %r", file.filename)
-            results["failed"].append({
-                "filename": file.filename,
-                "error": BULK_FILE_FAILED_MESSAGE
-            })
-    
+            results["failed"].append(
+                {"filename": file.filename, "error": BULK_FILE_FAILED_MESSAGE}
+            )
+
     return {
         "message": f"Processed {len(files)} files",
         "successful": len(results["successful"]),
         "failed": len(results["failed"]),
-        "results": results
+        "results": results,
     }
 
 
@@ -692,54 +799,51 @@ async def bulk_upload_contracts(
 async def chat_with_contract(
     contract_id: str,
     message: ChatMessage,
-    current_user: dict = Depends(_chat_rate_limited_user)
+    current_user: dict = Depends(_chat_rate_limited_user),
 ):
     """Ask a question about a contract."""
     # Chat spends AI credits: only an active trial, a paid plan or past-due grace.
     await ensure_ai_access(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
-        {"_id": 0}
+        {"_id": 0},
     )
-    
+
     if not contract:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Contract not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
         )
-    
+
     if not contract.get("originalText"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Contract text not available for analysis"
+            detail="Contract text not available for analysis",
         )
-    
+
     session_id = f"chat-{contract_id}-{current_user['sub']}"
-    
+
     try:
         answer = await get_chat_response(
-            contract["originalText"],
-            message.question,
-            session_id
+            contract["originalText"], message.question, session_id
         )
-        
+
         chat_doc = {
             "id": str(uuid.uuid4()),
             "contractId": contract_id,
             "userId": current_user["sub"],
             "question": message.question,
             "answer": answer,
-            "createdAt": datetime.now(timezone.utc).isoformat()
+            "createdAt": datetime.now(timezone.utc).isoformat(),
         }
         await db.chat_history.insert_one(chat_doc)
-        
+
         return ChatResponse(answer=answer, contractId=contract_id)
-        
+
     except Exception as e:
         logger.error(f"Chat failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to process question"
+            detail="Unable to process question",
         )
 
 
@@ -747,19 +851,18 @@ async def chat_with_contract(
 async def update_contract(
     contract_id: str,
     payload: ContractUpdate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Update a contract's metadata and create a version history entry."""
     await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
-        {"_id": 0}
+        {"_id": 0},
     )
-    
+
     if not contract:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Contract not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
         )
 
     require_contract_write(current_user, contract, "contract_edit")
@@ -773,8 +876,7 @@ async def update_contract(
 
     if contract_status is not None and contract_status not in VALID_STATUSES:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid status value"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status value"
         )
 
     # A status change is a workflow transition, not a free-form field edit: it
@@ -804,12 +906,10 @@ async def update_contract(
 
     # Get current version number
     latest_version = await db.contract_versions.find_one(
-        {"contractId": contract_id},
-        {"_id": 0, "version": 1},
-        sort=[("version", -1)]
+        {"contractId": contract_id}, {"_id": 0, "version": 1}, sort=[("version", -1)]
     )
     new_version = (latest_version["version"] + 1) if latest_version else 1
-    
+
     # Create version snapshot before update
     version = ContractVersion(
         contractId=contract_id,
@@ -825,10 +925,10 @@ async def update_contract(
         originalText=contract.get("originalText"),
         aiAnalysis=contract.get("aiAnalysis"),
         changedBy=current_user["sub"],
-        changeReason=changeReason
+        changeReason=changeReason,
     )
     await db.contract_versions.insert_one(version.model_dump())
-    
+
     # Apply updates
     update_data = {"updatedAt": datetime.now(timezone.utc).isoformat()}
     if title is not None:
@@ -852,10 +952,7 @@ async def update_contract(
         update["$set"].update(transition["$set"])
         update["$push"] = transition["$push"]
 
-    await db.contracts.update_one(
-        {"id": contract_id},
-        update
-    )
+    await db.contracts.update_one({"id": contract_id}, update)
 
     if status_changed:
         await record_transition_audit(
@@ -872,84 +969,80 @@ async def update_contract(
 
 @router.get("/{contract_id}/versions", response_model=List[ContractVersionResponse])
 async def get_contract_versions(
-    contract_id: str,
-    current_user: dict = Depends(get_current_user)
+    contract_id: str, current_user: dict = Depends(get_current_user)
 ):
     """Get version history for a contract."""
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]}
     )
-    
+
     if not contract:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Contract not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
         )
-    
-    versions = await db.contract_versions.find(
-        {"contractId": contract_id},
-        {"_id": 0}
-    ).sort("version", -1).to_list(100)
-    
+
+    versions = (
+        await db.contract_versions.find({"contractId": contract_id}, {"_id": 0})
+        .sort("version", -1)
+        .to_list(100)
+    )
+
     result = []
     changer_ids = list(set(v["changedBy"] for v in versions if v.get("changedBy")))
-    changers = await db.users.find({"id": {"$in": changer_ids}}, {"_id": 0, "id": 1, "email": 1}).to_list(len(changer_ids))
+    changers = await db.users.find(
+        {"id": {"$in": changer_ids}}, {"_id": 0, "id": 1, "email": 1}
+    ).to_list(len(changer_ids))
     changer_map = {u["id"]: u["email"] for u in changers}
     for v in versions:
-        result.append(ContractVersionResponse(
-            id=v["id"],
-            contractId=v["contractId"],
-            version=v["version"],
-            title=v["title"],
-            status=v["status"],
-            changedBy=v["changedBy"],
-            changedByEmail=changer_map.get(v["changedBy"]),
-            changeReason=v.get("changeReason"),
-            createdAt=v["createdAt"]
-        ))
-    
+        result.append(
+            ContractVersionResponse(
+                id=v["id"],
+                contractId=v["contractId"],
+                version=v["version"],
+                title=v["title"],
+                status=v["status"],
+                changedBy=v["changedBy"],
+                changedByEmail=changer_map.get(v["changedBy"]),
+                changeReason=v.get("changeReason"),
+                createdAt=v["createdAt"],
+            )
+        )
+
     return result
 
 
 @router.get("/{contract_id}/versions/{version_num}")
 async def get_contract_version(
-    contract_id: str,
-    version_num: int,
-    current_user: dict = Depends(get_current_user)
+    contract_id: str, version_num: int, current_user: dict = Depends(get_current_user)
 ):
     """Get a specific version of a contract."""
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]}
     )
-    
+
     if not contract:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Contract not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
         )
-    
+
     version = await db.contract_versions.find_one(
-        {"contractId": contract_id, "version": version_num},
-        {"_id": 0}
+        {"contractId": contract_id, "version": version_num}, {"_id": 0}
     )
-    
+
     if not version:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Version not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Version not found"
         )
-    
+
     user = await db.users.find_one({"id": version["changedBy"]}, {"_id": 0, "email": 1})
     version["changedByEmail"] = user["email"] if user else None
-    
+
     return version
 
 
 @router.post("/{contract_id}/restore/{version_num}")
 async def restore_contract_version(
-    contract_id: str,
-    version_num: int,
-    current_user: dict = Depends(get_current_user)
+    contract_id: str, version_num: int, current_user: dict = Depends(get_current_user)
 ):
     """Restore a contract to a previous version.
 
@@ -962,22 +1055,19 @@ async def restore_contract_version(
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]}
     )
-    
+
     if not contract:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Contract not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
         )
-    
+
     version = await db.contract_versions.find_one(
-        {"contractId": contract_id, "version": version_num},
-        {"_id": 0}
+        {"contractId": contract_id, "version": version_num}, {"_id": 0}
     )
-    
+
     if not version:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Version not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Version not found"
         )
 
     require_contract_write(current_user, contract, "restore")
@@ -989,20 +1079,23 @@ async def restore_contract_version(
     validate_transition(current_status, restored_status)
     # A restore that changes status is a workflow transition: the actor needs
     # the same capability the workflow endpoint would require for it.
-    transition_capability = RESTORE_TRANSITION_CAPABILITY.get((current_status, restored_status))
+    transition_capability = RESTORE_TRANSITION_CAPABILITY.get(
+        (current_status, restored_status)
+    )
     if restored_status != current_status:
         if not transition_capability:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status transition")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid status transition",
+            )
         require_capability(current_user, transition_capability)
 
     # Create a new version entry for the current state before restoring
     latest_version = await db.contract_versions.find_one(
-        {"contractId": contract_id},
-        {"_id": 0, "version": 1},
-        sort=[("version", -1)]
+        {"contractId": contract_id}, {"_id": 0, "version": 1}, sort=[("version", -1)]
     )
     new_version = (latest_version["version"] + 1) if latest_version else 1
-    
+
     current_version = ContractVersion(
         contractId=contract_id,
         version=new_version,
@@ -1017,23 +1110,25 @@ async def restore_contract_version(
         originalText=contract.get("originalText"),
         aiAnalysis=contract.get("aiAnalysis"),
         changedBy=current_user["sub"],
-        changeReason=f"Before restoring to version {version_num}"
+        changeReason=f"Before restoring to version {version_num}",
     )
     await db.contract_versions.insert_one(current_version.model_dump())
-    
+
     # Restore the contract to the selected version
-    update = {"$set": {
-        "title": version["title"],
-        "counterparty": version.get("counterparty"),
-        "contractType": version["contractType"],
-        "value": version.get("value"),
-        "effectiveDate": version.get("effectiveDate"),
-        "expiryDate": version.get("expiryDate"),
-        "riskLevel": version.get("riskLevel"),
-        "originalText": version.get("originalText"),
-        "aiAnalysis": version.get("aiAnalysis"),
-        "updatedAt": datetime.now(timezone.utc).isoformat()
-    }}
+    update = {
+        "$set": {
+            "title": version["title"],
+            "counterparty": version.get("counterparty"),
+            "contractType": version["contractType"],
+            "value": version.get("value"),
+            "effectiveDate": version.get("effectiveDate"),
+            "expiryDate": version.get("expiryDate"),
+            "riskLevel": version.get("riskLevel"),
+            "originalText": version.get("originalText"),
+            "aiAnalysis": version.get("aiAnalysis"),
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
+    }
     if restored_status != current_status:
         transition = status_update_fields(
             current_status,
@@ -1058,45 +1153,53 @@ async def restore_contract_version(
             action="restore",
             comment=f"Restored to version {version_num}",
         )
-    
-    return {"message": f"Contract restored to version {version_num}", "newVersion": new_version}
+
+    return {
+        "message": f"Contract restored to version {version_num}",
+        "newVersion": new_version,
+    }
 
 
 @router.delete("/{contract_id}")
 async def delete_contract(
-    contract_id: str,
-    current_user: dict = Depends(get_current_user)
+    contract_id: str, current_user: dict = Depends(get_current_user)
 ):
     """Delete a contract."""
     await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]}
     )
-    
+
     if not contract:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Contract not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
         )
-    
+
     require_owner_or_capability(current_user, contract, "delete")
-    
+
     if contract.get("storageKey"):
         try:
             storage_deleted = await delete_file_from_s3(contract["storageKey"])
         except Exception as exc:
-            logger.error("Storage deletion raised %s for contract %s", type(exc).__name__, contract_id)
+            logger.error(
+                "Storage deletion raised %s for contract %s",
+                type(exc).__name__,
+                contract_id,
+            )
             storage_deleted = False
         if not storage_deleted:
-            logger.error("Failed to delete contract file for contract %s; retaining database record", contract_id)
+            logger.error(
+                "Failed to delete contract file for contract %s; retaining database record",
+                contract_id,
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to delete contract file. Please try again.",
             )
-    
+
     await db.contracts.delete_one({"id": contract_id})
     await db.chat_history.delete_many({"contractId": contract_id})
-    
+
     await log_action(
         organization_id=current_user["organizationId"],
         user_id=current_user["sub"],
@@ -1106,5 +1209,5 @@ async def delete_contract(
         resource_id=contract_id,
         resource_title=contract.get("title"),
     )
-    
+
     return {"message": "Contract deleted successfully"}

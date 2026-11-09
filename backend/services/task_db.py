@@ -8,6 +8,7 @@ pool (prefork, threads, solo): concurrent tasks in threads never see each
 other's client. ``asyncio`` copies the current context into the loop the task
 runs, so coroutines read the same value.
 """
+
 from contextvars import ContextVar
 
 current_db: ContextVar = ContextVar("lexisense_task_db", default=None)

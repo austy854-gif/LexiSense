@@ -176,7 +176,9 @@ async def workflow_action(
 
     approval_info = None
     if approval_emails_enabled():
-        approval_info = await _handle_approval_emails(contract, action, comment, approver_id, current_user, background)
+        approval_info = await _handle_approval_emails(
+            contract, action, comment, approver_id, current_user, background
+        )
 
     response = {
         "message": f"Contract status changed to '{new_status}'",
@@ -188,25 +190,45 @@ async def workflow_action(
     return response
 
 
-async def _handle_approval_emails(contract, action, comment, approver_id, current_user, background):
+async def _handle_approval_emails(
+    contract, action, comment, approver_id, current_user, background
+):
     """Best effort: never fails the workflow request."""
     from services import approval_service
     from services.approval_tasks import dispatch_notification
 
     try:
         if action == "submit_for_review":
-            created = await approval_service.request_approval(db, contract, current_user, approver_id, comment)
+            created = await approval_service.request_approval(
+                db, contract, current_user, approver_id, comment
+            )
             if not created:
                 return {"status": "no_approver"}
             approval = created["approval"]
-            background.add_task(dispatch_notification, db, created["notification"]["id"], approval["organizationId"])
-            return {"id": approval["id"], "approverId": approval["approverId"], "status": "pending"}
+            background.add_task(
+                dispatch_notification,
+                db,
+                created["notification"]["id"],
+                approval["organizationId"],
+            )
+            return {
+                "id": approval["id"],
+                "approverId": approval["approverId"],
+                "status": "pending",
+            }
         if action in ("approve", "reject"):
             await approval_service.sync_in_app_decision(
-                db, contract["id"], current_user["organizationId"], action, current_user, comment
+                db,
+                contract["id"],
+                current_user["organizationId"],
+                action,
+                current_user,
+                comment,
             )
     except Exception:
-        logger.exception("Approval email handling failed for contract %s", contract.get("id"))
+        logger.exception(
+            "Approval email handling failed for contract %s", contract.get("id")
+        )
     return None
 
 

@@ -2,6 +2,7 @@
 Celery tasks for Post-Signature Obligation Extraction.
 Handles obligation extraction from signed contracts, alert generation, and tracking.
 """
+
 import asyncio
 import logging
 import json
@@ -38,7 +39,17 @@ def get_db():
 # Obligation extraction patterns
 OBLIGATION_PATTERNS = {
     "payment": {
-        "keywords": ["pay", "payment", "fee", "invoice", "compensat", "remunerat", "price", "cost", "amount due"],
+        "keywords": [
+            "pay",
+            "payment",
+            "fee",
+            "invoice",
+            "compensat",
+            "remunerat",
+            "price",
+            "cost",
+            "amount due",
+        ],
         "date_patterns": [
             r"(?:within|on or before|by)\s+(\d+)\s*(day|week|month|year)s?",
             r"(?:due|payable)\s+(?:on|within)\s+(\d+)\s*(day|week|month|year)s?",
@@ -50,21 +61,47 @@ OBLIGATION_PATTERNS = {
         ],
     },
     "delivery": {
-        "keywords": ["deliver", "provide", "supply", "ship", "transfer", "hand over", "make available"],
+        "keywords": [
+            "deliver",
+            "provide",
+            "supply",
+            "ship",
+            "transfer",
+            "hand over",
+            "make available",
+        ],
         "date_patterns": [
             r"(?:by|on or before|within)\s+(\d+)\s*(day|week|month|year)s?",
             r"delivery\s+(?:date|schedule)",
         ],
     },
     "reporting": {
-        "keywords": ["report", "notify", "inform", "update", "status", "certif", "attest", "disclose"],
+        "keywords": [
+            "report",
+            "notify",
+            "inform",
+            "update",
+            "status",
+            "certif",
+            "attest",
+            "disclose",
+        ],
         "date_patterns": [
             r"(?:monthly|quarterly|annual|yearly|weekly)\s+(?:report|update)",
             r"(?:within|by)\s+(\d+)\s*(day|week|month)s?\s+(?:of|after)",
         ],
     },
     "compliance": {
-        "keywords": ["comply", "compliance", "adher", "conform", "meet standard", "regulat", "audit", "certif"],
+        "keywords": [
+            "comply",
+            "compliance",
+            "adher",
+            "conform",
+            "meet standard",
+            "regulat",
+            "audit",
+            "certif",
+        ],
         "date_patterns": [
             r"(?:annual|yearly)\s+(?:audit|review|certif)",
             r"(?:within|by)\s+(\d+)\s*(day|week|month)s?",
@@ -78,7 +115,13 @@ OBLIGATION_PATTERNS = {
         ],
     },
     "termination": {
-        "keywords": ["terminat", "cancel", "end agreement", "expire", "notice of termination"],
+        "keywords": [
+            "terminat",
+            "cancel",
+            "end agreement",
+            "expire",
+            "notice of termination",
+        ],
         "date_patterns": [
             r"(?:with|upon)\s+(\d+)\s*(day|week|month)s?\s+(?:written\s+)?notice",
             r"notice\s+period\s+(?:of\s+)?(\d+)\s*(day|week|month)s?",
@@ -96,7 +139,13 @@ OBLIGATION_PATTERNS = {
         "date_patterns": [],
     },
     "confidentiality": {
-        "keywords": ["confidential", "non-disclosure", "proprietary", "trade secret", "ndas"],
+        "keywords": [
+            "confidential",
+            "non-disclosure",
+            "proprietary",
+            "trade secret",
+            "ndas",
+        ],
         "date_patterns": [
             r"(?:for|period of)\s+(\d+)\s*(year|month)s?\s+(?:after|following)",
             r"surviv\w*\s+(\d+)\s*(year|month)s?",
@@ -105,19 +154,21 @@ OBLIGATION_PATTERNS = {
 }
 
 
-def extract_obligations_from_text(contract_text: str, contract_id: str, organization_id: str) -> List[Dict[str, Any]]:
+def extract_obligations_from_text(
+    contract_text: str, contract_id: str, organization_id: str
+) -> List[Dict[str, Any]]:
     """Extract obligations from contract text using pattern matching."""
     obligations = []
     text_lower = contract_text.lower()
-    
+
     # Split into sentences/paragraphs for context
-    paragraphs = re.split(r'\n\s*\n|\. \s*', contract_text)
-    
+    paragraphs = re.split(r"\n\s*\n|\. \s*", contract_text)
+
     for obligation_type, config in OBLIGATION_PATTERNS.items():
         keywords = config["keywords"]
         date_patterns = config["date_patterns"]
         amount_patterns = config.get("amount_patterns", [])
-        
+
         # Find paragraphs containing keywords
         for para in paragraphs:
             para_lower = para.lower()
@@ -125,30 +176,71 @@ def extract_obligations_from_text(contract_text: str, contract_id: str, organiza
                 # Extract due date
                 due_date = None
                 frequency = "once"
-                
+
                 for pattern in date_patterns:
                     match = re.search(pattern, para_lower)
                     if match:
                         try:
                             if len(match.groups()) >= 2:
                                 num = int(match.group(1))
-                                unit = match.group(2).rstrip('s')
+                                unit = match.group(2).rstrip("s")
                                 if unit == "day":
-                                    due_date = (datetime.now(timezone.utc) + timedelta(days=num)).date().isoformat()
+                                    due_date = (
+                                        (
+                                            datetime.now(timezone.utc)
+                                            + timedelta(days=num)
+                                        )
+                                        .date()
+                                        .isoformat()
+                                    )
                                 elif unit == "week":
-                                    due_date = (datetime.now(timezone.utc) + timedelta(weeks=num)).date().isoformat()
+                                    due_date = (
+                                        (
+                                            datetime.now(timezone.utc)
+                                            + timedelta(weeks=num)
+                                        )
+                                        .date()
+                                        .isoformat()
+                                    )
                                 elif unit == "month":
-                                    due_date = (datetime.now(timezone.utc) + timedelta(days=num*30)).date().isoformat()
+                                    due_date = (
+                                        (
+                                            datetime.now(timezone.utc)
+                                            + timedelta(days=num * 30)
+                                        )
+                                        .date()
+                                        .isoformat()
+                                    )
                                 elif unit == "year":
-                                    due_date = (datetime.now(timezone.utc) + timedelta(days=num*365)).date().isoformat()
-                                
+                                    due_date = (
+                                        (
+                                            datetime.now(timezone.utc)
+                                            + timedelta(days=num * 365)
+                                        )
+                                        .date()
+                                        .isoformat()
+                                    )
+
                                 # Determine frequency
-                                if "monthly" in para_lower or "quarterly" in para_lower or "annual" in para_lower or "yearly" in para_lower:
-                                    frequency = "monthly" if "monthly" in para_lower else "quarterly" if "quarterly" in para_lower else "annually"
+                                if (
+                                    "monthly" in para_lower
+                                    or "quarterly" in para_lower
+                                    or "annual" in para_lower
+                                    or "yearly" in para_lower
+                                ):
+                                    frequency = (
+                                        "monthly"
+                                        if "monthly" in para_lower
+                                        else (
+                                            "quarterly"
+                                            if "quarterly" in para_lower
+                                            else "annually"
+                                        )
+                                    )
                         except (ValueError, IndexError):
                             pass
                         break
-                
+
                 # Extract amount
                 amount = None
                 currency = "USD"
@@ -156,7 +248,15 @@ def extract_obligations_from_text(contract_text: str, contract_id: str, organiza
                     match = re.search(pattern, para)
                     if match:
                         try:
-                            amt_str = match.group(0).replace("$", "").replace(",", "").replace("USD", "").replace("EUR", "").replace("GBP", "").strip()
+                            amt_str = (
+                                match.group(0)
+                                .replace("$", "")
+                                .replace(",", "")
+                                .replace("USD", "")
+                                .replace("EUR", "")
+                                .replace("GBP", "")
+                                .strip()
+                            )
                             amount = float(amt_str)
                             if "EUR" in match.group(0):
                                 currency = "EUR"
@@ -165,14 +265,32 @@ def extract_obligations_from_text(contract_text: str, contract_id: str, organiza
                         except ValueError:
                             pass
                         break
-                
+
                 # Determine parties
                 obligated_party = "counterparty"  # Default
-                if any(w in para_lower for w in ["we shall", "we will", "our obligation", "company shall", "provider shall"]):
+                if any(
+                    w in para_lower
+                    for w in [
+                        "we shall",
+                        "we will",
+                        "our obligation",
+                        "company shall",
+                        "provider shall",
+                    ]
+                ):
                     obligated_party = "our_party"
-                elif any(w in para_lower for w in ["you shall", "you will", "your obligation", "client shall", "customer shall"]):
+                elif any(
+                    w in para_lower
+                    for w in [
+                        "you shall",
+                        "you will",
+                        "your obligation",
+                        "client shall",
+                        "customer shall",
+                    ]
+                ):
                     obligated_party = "counterparty"
-                
+
                 # Create obligation
                 obligation = {
                     "contractId": contract_id,
@@ -183,7 +301,11 @@ def extract_obligations_from_text(contract_text: str, contract_id: str, organiza
                     "clause_reference": None,
                     "original_text": para[:1000],
                     "obligated_party": obligated_party,
-                    "beneficiary_party": "our_party" if obligated_party == "counterparty" else "counterparty",
+                    "beneficiary_party": (
+                        "our_party"
+                        if obligated_party == "counterparty"
+                        else "counterparty"
+                    ),
                     "due_date": due_date,
                     "frequency": frequency,
                     "custom_schedule": None,
@@ -195,8 +317,14 @@ def extract_obligations_from_text(contract_text: str, contract_id: str, organiza
                     "status": "pending",
                     "assigned_to": None,
                     "assigned_team": None,
-                    "evidence_required": obligation_type in ["payment", "delivery", "reporting", "compliance"],
-                    "evidence_description": f"Proof of {obligation_type} completion" if obligation_type in ["payment", "delivery", "reporting", "compliance"] else None,
+                    "evidence_required": obligation_type
+                    in ["payment", "delivery", "reporting", "compliance"],
+                    "evidence_description": (
+                        f"Proof of {obligation_type} completion"
+                        if obligation_type
+                        in ["payment", "delivery", "reporting", "compliance"]
+                        else None
+                    ),
                     "evidence_submitted": [],
                     "alert_before_days": [30, 14, 7, 1],
                     "escalation_enabled": True,
@@ -209,12 +337,17 @@ def extract_obligations_from_text(contract_text: str, contract_id: str, organiza
                     "verified_at": None,
                 }
                 obligations.append(obligation)
-    
+
     return obligations
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
-def extract_obligations_from_contract(self, contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None):
+def extract_obligations_from_contract(
+    self,
+    contract_id: str,
+    force_refresh: bool = False,
+    organization_id: Optional[str] = None,
+):
     """Extract obligations from a signed contract."""
     if get_db() is None:
         logger.error("Database not initialized for obligation extraction")
@@ -225,7 +358,11 @@ def extract_obligations_from_contract(self, contract_id: str, force_refresh: boo
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_extract_obligations_from_contract_async(contract_id, force_refresh, organization_id))
+        result = loop.run_until_complete(
+            _extract_obligations_from_contract_async(
+                contract_id, force_refresh, organization_id
+            )
+        )
         loop.close()
         return result
     except Exception as e:
@@ -233,7 +370,9 @@ def extract_obligations_from_contract(self, contract_id: str, force_refresh: boo
         raise self.retry(exc=e)
 
 
-async def _extract_obligations_from_contract_async(contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None):
+async def _extract_obligations_from_contract_async(
+    contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None
+):
     """Async implementation of obligation extraction."""
     from models.agentic import ExtractedObligation, ObligationExtractionJob
 
@@ -245,7 +384,9 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
         return {"status": "error", "message": "organization_id is required"}
 
     try:
-        contract = await db.contracts.find_one({"id": contract_id, "organizationId": organization_id}, {"_id": 0})
+        contract = await db.contracts.find_one(
+            {"id": contract_id, "organizationId": organization_id}, {"_id": 0}
+        )
         if not contract:
             return {"status": "error", "message": "Contract not found"}
 
@@ -255,7 +396,11 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
                 {"contractId": contract_id, "organizationId": organization_id}
             )
             if existing_count > 0:
-                return {"status": "skipped", "message": f"Already has {existing_count} obligations", "count": existing_count}
+                return {
+                    "status": "skipped",
+                    "message": f"Already has {existing_count} obligations",
+                    "count": existing_count,
+                }
 
         # Create extraction job record
         job = ObligationExtractionJob(
@@ -274,17 +419,25 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
             ai_analysis = contract.get("aiAnalysis", {})
             if ai_analysis:
                 contract_text = json.dumps(ai_analysis)
-        
+
         if not contract_text:
             await db.obligation_extraction_jobs.update_one(
                 {"id": job.id, "organizationId": organization_id},
-                {"$set": {"status": "failed", "errors": ["No contract text available"], "completed_at": datetime.now(timezone.utc).isoformat()}}
+                {
+                    "$set": {
+                        "status": "failed",
+                        "errors": ["No contract text available"],
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
             return {"status": "error", "message": "No contract text available"}
 
         # Extract obligations using pattern matching
-        extracted = extract_obligations_from_text(contract_text, contract_id, organization_id)
-        
+        extracted = extract_obligations_from_text(
+            contract_text, contract_id, organization_id
+        )
+
         # Save obligations
         obligation_ids = []
         for obl_data in extracted:
@@ -293,7 +446,13 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
             obligation_ids.append(obligation.id)
 
         # Update job
-        duration_ms = int((datetime.now(timezone.utc) - datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))).total_seconds() * 1000)
+        duration_ms = int(
+            (
+                datetime.now(timezone.utc)
+                - datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
+            ).total_seconds()
+            * 1000
+        )
         await db.obligation_extraction_jobs.update_one(
             {"id": job.id, "organizationId": organization_id},
             {
@@ -302,25 +461,33 @@ async def _extract_obligations_from_contract_async(contract_id: str, force_refre
                     "extracted_count": len(obligation_ids),
                     "obligations": obligation_ids,
                     "completed_at": datetime.now(timezone.utc).isoformat(),
-                    "duration_ms": duration_ms
+                    "duration_ms": duration_ms,
                 }
-            }
+            },
         )
 
-        logger.info(f"Extracted {len(obligation_ids)} obligations from contract {contract_id}")
+        logger.info(
+            f"Extracted {len(obligation_ids)} obligations from contract {contract_id}"
+        )
         return {
             "status": "success",
             "job_id": job.id,
             "extracted_count": len(obligation_ids),
-            "obligation_ids": obligation_ids
+            "obligation_ids": obligation_ids,
         }
 
     except Exception as e:
         logger.error(f"Obligation extraction error: {e}")
-        if 'job' in locals():
+        if "job" in locals():
             await db.obligation_extraction_jobs.update_one(
                 {"id": job.id, "organizationId": organization_id},
-                {"$set": {"status": "failed", "errors": [str(e)], "completed_at": datetime.now(timezone.utc).isoformat()}}
+                {
+                    "$set": {
+                        "status": "failed",
+                        "errors": [str(e)],
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
         return {"status": "error", "message": str(e)}
 
@@ -363,10 +530,16 @@ async def _send_daily_obligation_alerts_async():
         for org_id in await organization_ids(db):
             async for obligations in iter_batches(
                 db.extracted_obligations,
-                {"organizationId": org_id, "status": {"$in": ["pending", "in_progress"]}, "due_date": {"$ne": None}},
+                {
+                    "organizationId": org_id,
+                    "status": {"$in": ["pending", "in_progress"]},
+                    "due_date": {"$ne": None},
+                },
             ):
                 for obl in obligations:
-                    alerts_sent += await _process_obligation_alerts(obl, org_id, today, db)
+                    alerts_sent += await _process_obligation_alerts(
+                        obl, org_id, today, db
+                    )
 
         logger.info(f"Daily obligation alerts sent: {alerts_sent}")
         return {"status": "success", "alerts_sent": alerts_sent}
@@ -374,7 +547,6 @@ async def _send_daily_obligation_alerts_async():
     except Exception as e:
         logger.error(f"Daily obligation alerts error: {e}")
         return {"status": "error", "message": str(e)}
-
 
 
 async def _process_obligation_alerts(obl: Dict, org_id: str, today, db) -> int:
@@ -393,12 +565,14 @@ async def _process_obligation_alerts(obl: Dict, org_id: str, today, db) -> int:
         for alert_day in alert_days:
             if days_until == alert_day:
                 # Check if already sent
-                existing = await db.obligation_alerts.find_one({
-                    "organizationId": org_id,
-                    "obligationId": obl["id"],
-                    "alert_type": "upcoming",
-                    "days_until_due": alert_day
-                })
+                existing = await db.obligation_alerts.find_one(
+                    {
+                        "organizationId": org_id,
+                        "obligationId": obl["id"],
+                        "alert_type": "upcoming",
+                        "days_until_due": alert_day,
+                    }
+                )
                 if existing:
                     continue
 
@@ -408,11 +582,13 @@ async def _process_obligation_alerts(obl: Dict, org_id: str, today, db) -> int:
 
         # Check for overdue
         if days_until < 0:
-            existing = await db.obligation_alerts.find_one({
-                "organizationId": org_id,
-                "obligationId": obl["id"],
-                "alert_type": "overdue"
-            })
+            existing = await db.obligation_alerts.find_one(
+                {
+                    "organizationId": org_id,
+                    "obligationId": obl["id"],
+                    "alert_type": "overdue",
+                }
+            )
             if not existing:
                 await _send_obligation_alert(obl, "overdue", days_until, db)
                 alerts_sent += 1
@@ -420,7 +596,7 @@ async def _process_obligation_alerts(obl: Dict, org_id: str, today, db) -> int:
                 # Update obligation status
                 await db.extracted_obligations.update_one(
                     {"id": obl["id"], "organizationId": org_id},
-                    {"$set": {"status": ObligationStatus.OVERDUE}}
+                    {"$set": {"status": ObligationStatus.OVERDUE}},
                 )
 
     except Exception as e:
@@ -429,14 +605,16 @@ async def _process_obligation_alerts(obl: Dict, org_id: str, today, db) -> int:
     return alerts_sent
 
 
-async def _send_obligation_alert(obligation: Dict, alert_type: str, days_until: int, db):
+async def _send_obligation_alert(
+    obligation: Dict, alert_type: str, days_until: int, db
+):
     """Send notification for obligation alert."""
     # send_notification is imported here rather than at module scope so that
     # importing this module does not pull in services.audit_service.
     from services.audit_service import send_notification
 
     org_id = obligation["organizationId"]
-    
+
     # Get assigned user or admins
     recipients = []
     if obligation.get("assigned_to"):
@@ -444,13 +622,13 @@ async def _send_obligation_alert(obligation: Dict, alert_type: str, days_until: 
     else:
         admins = await db.users.find(
             {"organizationId": org_id, "role": {"$in": ["admin", "manager"]}},
-            {"_id": 0, "id": 1}
+            {"_id": 0, "id": 1},
         ).to_list(20)
         recipients = [a["id"] for a in admins]
-    
+
     if not recipients:
         return
-    
+
     # Determine severity
     if alert_type == "overdue":
         severity = "critical"
@@ -464,7 +642,7 @@ async def _send_obligation_alert(obligation: Dict, alert_type: str, days_until: 
     else:
         severity = "info"
         message = f"'{obligation.get('title')}' due in {days_until} days"
-    
+
     for user_id in recipients:
         # Create alert record
         alert = ObligationAlert(
@@ -480,7 +658,7 @@ async def _send_obligation_alert(obligation: Dict, alert_type: str, days_until: 
             sent_at=datetime.now(timezone.utc).isoformat(),
         )
         await db.obligation_alerts.insert_one(alert.model_dump())
-        
+
         # Send notification
         await send_notification(
             organization_id=org_id,
@@ -489,7 +667,7 @@ async def _send_obligation_alert(obligation: Dict, alert_type: str, days_until: 
             title=f"Obligation Alert: {obligation.get('title')}",
             message=message,
             resource_type="obligation",
-            resource_id=obligation["id"]
+            resource_id=obligation["id"],
         )
 
 
@@ -522,7 +700,7 @@ async def _cleanup_completed_obligations_async():
     try:
         # Archive obligations completed more than 1 year ago
         cutoff = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
-        
+
         from services.task_utils import organization_ids
 
         alert_cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
@@ -535,11 +713,20 @@ async def _cleanup_completed_obligations_async():
                     "status": {"$in": ["completed", "waived"]},
                     "completed_at": {"$lt": cutoff},
                 },
-                {"$set": {"archived": True, "archived_at": datetime.now(timezone.utc).isoformat()}},
+                {
+                    "$set": {
+                        "archived": True,
+                        "archived_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
             # Only ACKNOWLEDGED alerts older than 90 days are deleted.
             alert_result = await db.obligation_alerts.delete_many(
-                {"organizationId": org_id, "sent_at": {"$lt": alert_cutoff}, "acknowledged": True}
+                {
+                    "organizationId": org_id,
+                    "sent_at": {"$lt": alert_cutoff},
+                    "acknowledged": True,
+                }
             )
             archived += result.modified_count
             deleted += alert_result.deleted_count
@@ -564,7 +751,9 @@ def bulk_extract_obligations(self, organization_id: str):
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_bulk_extract_obligations_async(organization_id))
+        result = loop.run_until_complete(
+            _bulk_extract_obligations_async(organization_id)
+        )
         loop.close()
         return result
     except Exception as e:
@@ -585,7 +774,10 @@ async def _bulk_extract_obligations_async(organization_id: str):
         queued = 0
         async for contracts in iter_batches(
             db.contracts,
-            {"organizationId": organization_id, "status": {"$in": ["active", "expired"]}},
+            {
+                "organizationId": organization_id,
+                "status": {"$in": ["active", "expired"]},
+            },
             {"_id": 0, "id": 1},
         ):
             for contract in contracts:
@@ -594,7 +786,9 @@ async def _bulk_extract_obligations_async(organization_id: str):
                     {"contractId": contract["id"], "organizationId": organization_id}
                 )
                 if existing == 0:
-                    extract_obligations_from_contract.delay(contract["id"], False, organization_id)
+                    extract_obligations_from_contract.delay(
+                        contract["id"], False, organization_id
+                    )
                     queued += 1
 
         logger.info(f"Queued {queued} contracts for obligation extraction")

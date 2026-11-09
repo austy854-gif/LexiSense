@@ -7,6 +7,7 @@ Passing a password as a query parameter leaks it into access logs, proxy logs
 and browser history, so these tests assert both that the body is honoured and
 that the query string is ignored.
 """
+
 import pytest
 
 from tests.unit.conftest import (
@@ -52,7 +53,9 @@ class TestAcceptInviteSuccess:
             "email": invitation["email"],
         }
 
-    async def test_creates_the_user_with_hashed_password(self, client, db, org_id, users):
+    async def test_creates_the_user_with_hashed_password(
+        self, client, db, org_id, users
+    ):
         invitation = make_invitation(
             org_id, invited_by=users["admin"]["id"], token="tok-hash"
         )
@@ -199,7 +202,9 @@ class TestAcceptInviteBodyModel:
         assert verify_password(VALID_PASSWORD, created["passwordHash"])
         assert not verify_password("QueryPassword1!", created["passwordHash"])
 
-    async def test_token_in_query_string_is_not_accepted(self, client, db, org_id, users):
+    async def test_token_in_query_string_is_not_accepted(
+        self, client, db, org_id, users
+    ):
         invitation = make_invitation(
             org_id, invited_by=users["admin"]["id"], token="tok-qtoken"
         )
@@ -319,7 +324,9 @@ class TestAcceptInviteInvalidInvitations:
         assert response.json()["detail"] == "Invitation has expired"
         assert await db.users.find_one({"email": invitation["email"]}) is None
 
-    async def test_expired_invitation_is_marked_expired(self, client, db, org_id, users):
+    async def test_expired_invitation_is_marked_expired(
+        self, client, db, org_id, users
+    ):
         invitation = make_invitation(
             org_id,
             invited_by=users["admin"]["id"],

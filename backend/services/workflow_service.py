@@ -19,6 +19,7 @@ without the state machine ever seeing it -- no transition check, no role gate,
 no ``workflowHistory`` entry and no audit log. Routing both endpoints through
 this module makes the state machine the only way a status can change.
 """
+
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -166,6 +167,11 @@ async def apply_status_transition(
     )
     await db.contracts.update_one({"id": contract["id"]}, update)
     await record_transition_audit(
-        contract, current_status, new_status, current_user, action=action, comment=comment
+        contract,
+        current_status,
+        new_status,
+        current_user,
+        action=action,
+        comment=comment,
     )
     return update["$push"]["workflowHistory"]

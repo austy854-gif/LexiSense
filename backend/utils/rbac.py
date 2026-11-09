@@ -16,6 +16,7 @@ Roles (ordered least -> most privileged)::
     manager  may edit any contract in the organisation, read audit data
     admin    may manage team identity, billing and organisation settings
 """
+
 from __future__ import annotations
 
 import os
@@ -111,7 +112,9 @@ class SlidingWindowRateLimiter:
         cutoff = now - self.window_seconds
         if len(self._hits) < self.max_keys:
             return
-        for key in [k for k, bucket in self._hits.items() if not bucket or bucket[-1] <= cutoff]:
+        for key in [
+            k for k, bucket in self._hits.items() if not bucket or bucket[-1] <= cutoff
+        ]:
             self._hits.pop(key, None)
 
     def check(self, key: str, now: Optional[float] = None) -> Tuple[bool, float]:
@@ -169,7 +172,11 @@ def client_key(request) -> str:
     if not hops:
         return peer
     headers = request.headers
-    values = headers.getlist("x-forwarded-for") if hasattr(headers, "getlist") else [headers.get("x-forwarded-for")]
+    values = (
+        headers.getlist("x-forwarded-for")
+        if hasattr(headers, "getlist")
+        else [headers.get("x-forwarded-for")]
+    )
     parts = [p.strip() for v in values if v for p in v.split(",") if p.strip()]
     if len(parts) >= hops:
         return parts[-hops]
@@ -201,6 +208,7 @@ def auth_rate_limit(scope: str):
     ``RATE_LIMIT_REDIS_URL`` or ``REDIS_URL`` is set, the same key is also
     counted in Redis so the limit holds across workers.
     """
+
     async def _dependency(request: Request):
         key = f"{scope}:{client_key(request)}"
         allowed, retry_after = AUTH_RATE_LIMITER.check(key)
@@ -216,7 +224,9 @@ def auth_rate_limit(scope: str):
         try:
             allowed, retry_after = await shared.acheck(key)
         except RateLimiterUnavailable:
-            logger.warning("Shared auth rate limiter unavailable; using the in-process limit only")
+            logger.warning(
+                "Shared auth rate limiter unavailable; using the in-process limit only"
+            )
             return
         if not allowed:
             raise HTTPException(
@@ -236,7 +246,9 @@ def _shared_auth_limiter():
     global _shared_auth_limiter_cache
     if _shared_auth_limiter_cache is None:
         candidate = make_org_limiter(10, 60.0, "auth-ip")
-        _shared_auth_limiter_cache = candidate if isinstance(candidate, RedisRateLimiter) else False
+        _shared_auth_limiter_cache = (
+            candidate if isinstance(candidate, RedisRateLimiter) else False
+        )
     return _shared_auth_limiter_cache or None
 
 
@@ -335,7 +347,9 @@ class RedisRateLimiter:
             self._open_until = self._clock() + self.breaker_seconds
             logger.warning(
                 "Redis rate limiter unavailable; skipping Redis for %ss (%s): %s",
-                self.breaker_seconds, "fail closed" if self.fail_closed else "in-process fallback", exc,
+                self.breaker_seconds,
+                "fail closed" if self.fail_closed else "in-process fallback",
+                exc,
             )
             return self._degraded(key)
         if count > self.max_requests:
@@ -360,7 +374,9 @@ class _InMemoryAsyncLimiter:
         self._inner.reset()
 
 
-def make_org_limiter(max_requests: int, window_seconds: float, prefix: str, *, fail_closed: bool = False):
+def make_org_limiter(
+    max_requests: int, window_seconds: float, prefix: str, *, fail_closed: bool = False
+):
     """Redis-backed when RATE_LIMIT_REDIS_URL/REDIS_URL points at Redis, else in-memory.
 
     ``fail_closed`` only applies when Redis is configured: with no Redis URL
@@ -370,7 +386,9 @@ def make_org_limiter(max_requests: int, window_seconds: float, prefix: str, *, f
 
     url = get_env("RATE_LIMIT_REDIS_URL") or get_env("REDIS_URL")
     if url and url.startswith(("redis://", "rediss://")):
-        return RedisRateLimiter(url, max_requests, window_seconds, prefix=prefix, fail_closed=fail_closed)
+        return RedisRateLimiter(
+            url, max_requests, window_seconds, prefix=prefix, fail_closed=fail_closed
+        )
     return _InMemoryAsyncLimiter(max_requests, window_seconds)
 
 
@@ -383,7 +401,9 @@ def org_rate_limit(limiter, scope: str, user_dependency=None):
     from utils.auth import get_current_user  # local import: avoid a cycle
 
     # Resolve auth/role FIRST so unauthorised callers cannot burn the org budget.
-    async def _dependency(current_user: dict = Depends(user_dependency or get_current_user)):
+    async def _dependency(
+        current_user: dict = Depends(user_dependency or get_current_user),
+    ):
         org = current_user.get("organizationId") or "unknown"
         try:
             allowed, retry_after = await limiter.acheck(f"{scope}:{org}")

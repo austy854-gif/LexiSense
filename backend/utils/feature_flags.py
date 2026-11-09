@@ -5,6 +5,7 @@ Every flag defaults to OFF. A group is "enabled" only when its flag is set to
 1/true/yes/on. Keeping one source of truth means the worker can never run beat
 jobs for features the API has not switched on.
 """
+
 from __future__ import annotations
 
 import os

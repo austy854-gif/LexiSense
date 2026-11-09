@@ -15,6 +15,7 @@ Covers the two approved backend fixes:
    missing author (``changedByEmail`` = ``None``) forever. The fix reassigns
    those rows to the acting admin as part of the same operation.
 """
+
 from tests.unit.conftest import (
     API_PREFIX,
     auth_headers,
@@ -154,7 +155,9 @@ class TestUpdateMemberRoleBodyModel:
         stored = await db.users.find_one({"id": target["id"]})
         assert stored["role"] == "user"
 
-    async def test_cross_tenant_member_is_not_found(self, client, db, org_id, other_org_id):
+    async def test_cross_tenant_member_is_not_found(
+        self, client, db, org_id, other_org_id
+    ):
         admin = make_user(org_id, role="admin", user_id="user-admin")
         foreign = make_user(other_org_id, role="user", user_id="user-foreign")
         await _seed(db, admin, foreign)
@@ -229,7 +232,9 @@ class TestRemoveMemberReassignsVersionHistory:
         admin = make_user(org_id, role="admin", user_id="user-admin")
         victim = make_user(org_id, role="user", user_id="user-victim")
         keeper = make_user(org_id, role="user", user_id="user-keeper")
-        contract = make_contract(org_id, uploaded_by=keeper["id"], contract_id="contract-1")
+        contract = make_contract(
+            org_id, uploaded_by=keeper["id"], contract_id="contract-1"
+        )
         await _seed(db, admin, victim, keeper)
         await db.contracts.insert_one(dict(contract))
         theirs = await _seed_version(db, contract, changed_by=keeper["id"], version=1)

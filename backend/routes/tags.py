@@ -12,6 +12,7 @@ router = APIRouter(prefix="/tags", tags=["Tags"])
 
 db = None
 
+
 def init_db(database):
     global db
     db = database
@@ -103,6 +104,11 @@ async def update_category(
 
     await db.contracts.update_one(
         {"id": contract_id},
-        {"$set": {"category": category, "updatedAt": datetime.now(timezone.utc).isoformat()}},
+        {
+            "$set": {
+                "category": category,
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
     return {"category": category}

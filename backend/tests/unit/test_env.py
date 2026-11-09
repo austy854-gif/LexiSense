@@ -4,6 +4,7 @@ Regression for the production outage where Railway's DATABASE_URL carried a
 trailing newline: pymongo parsed ``w='majority\\n'`` (error 79
 UnknownReplWriteConcern), index creation failed and /api/v1/ready stayed 503.
 """
+
 import logging
 
 import pytest
@@ -110,17 +111,28 @@ def test_server_uses_clean_database_url(tmp_path):
         "'w': server.client.write_concern.document.get('w'), 'db': server.DB_NAME}))"
     )
     env = dict(os.environ)
-    env.update({
-        "DATABASE_URL": URI + "\n",
-        "JWT_SECRET": env.get("JWT_SECRET") or "test-secret-do-not-use-in-production",
-        "LOG_JSON": "false",
-    })
+    env.update(
+        {
+            "DATABASE_URL": URI + "\n",
+            "JWT_SECRET": env.get("JWT_SECRET")
+            or "test-secret-do-not-use-in-production",
+            "LOG_JSON": "false",
+        }
+    )
     env.pop("DB_NAME", None)
-    out = subprocess.run([sys.executable, "-c", probe], cwd=backend, env=env,
-                         capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=backend,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     result = json.loads(out.stdout.strip().splitlines()[-1])
     assert result == {"url": URI, "w": "majority", "db": "lexisense"}
-    assert "DATABASE_URL contained leading/trailing whitespace" in out.stdout + out.stderr
+    assert (
+        "DATABASE_URL contained leading/trailing whitespace" in out.stdout + out.stderr
+    )
 
 
 def test_database_url_warning_logged_once_per_process(monkeypatch, caplog):
@@ -133,7 +145,9 @@ def test_database_url_warning_logged_once_per_process(monkeypatch, caplog):
 
 
 @pytest.mark.parametrize("blank", ["", "   ", "\n", "\r\n", " \t\r\n "])
-def test_whitespace_only_database_url_falls_back_to_mongo_url(monkeypatch, caplog, blank):
+def test_whitespace_only_database_url_falls_back_to_mongo_url(
+    monkeypatch, caplog, blank
+):
     monkeypatch.setenv("DATABASE_URL", blank)
     monkeypatch.setenv("MONGO_URL", "mongodb://mongo.internal:27017/lexisense")
     with caplog.at_level(logging.WARNING, logger="utils.env"):
@@ -154,30 +168,48 @@ def _run_backend(probe, **overrides):
             env.pop(key, None)
         else:
             env[key] = value
-    return subprocess.run([sys.executable, "-c", probe], cwd=Path(__file__).resolve().parents[2],
-                          env=env, capture_output=True, text=True)
+    return subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 
 
-@pytest.mark.parametrize("environment", ["production\n", "production\r\n", "  PRODUCTION  ", "staging\n"])
+@pytest.mark.parametrize(
+    "environment", ["production\n", "production\r\n", "  PRODUCTION  ", "staging\n"]
+)
 def test_environment_with_whitespace_is_treated_as_production(environment):
     """A short JWT_SECRET must be refused when ENVIRONMENT is prod-like, even if
     the value carries a trailing newline (previously 'production\\n' slipped
     through as a non-production environment and only warned)."""
-    out = _run_backend("import utils.auth", ENVIRONMENT=environment, JWT_SECRET="too-short")
+    out = _run_backend(
+        "import utils.auth", ENVIRONMENT=environment, JWT_SECRET="too-short"
+    )
     assert out.returncode != 0
     assert "JWT_SECRET must be at least 32 characters in" in out.stderr
     assert "too-short" not in out.stderr  # the secret is never echoed
 
 
 def test_environment_development_short_secret_only_warns():
-    out = _run_backend("import utils.auth; print('imported')", ENVIRONMENT="development\n", JWT_SECRET="too-short")
+    out = _run_backend(
+        "import utils.auth; print('imported')",
+        ENVIRONMENT="development\n",
+        JWT_SECRET="too-short",
+    )
     assert out.returncode == 0, out.stderr
     assert "imported" in out.stdout
 
 
 def test_server_imports_with_whitespace_in_log_settings():
     probe = "import logging, server; print('level=' + logging.getLevelName(logging.getLogger().level))"
-    out = _run_backend(probe, LOG_LEVEL="INFO\n", LOG_JSON=" false\r\n", ENVIRONMENT="test\n",
-                       FRONTEND_BUILD_DIR=None)
+    out = _run_backend(
+        probe,
+        LOG_LEVEL="INFO\n",
+        LOG_JSON=" false\r\n",
+        ENVIRONMENT="test\n",
+        FRONTEND_BUILD_DIR=None,
+    )
     assert out.returncode == 0, out.stderr
     assert "level=INFO" in out.stdout
