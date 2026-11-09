@@ -10045,14 +10045,7 @@ react-resizable-panels@^4.15.2:
   resolved "https://registry.yarnpkg.com/react-resizable-panels/-/react-resizable-panels-4.15.2.tgz#cbd5ed063db8e0ebc7e232c96afb2b0a62be2623"
   integrity sha512-DbG1jkgGxkt8FVLL9/yr2Zgc2s3pF7iHDWccLEILLq9FT3VSYJqBha8yOALKeeMpV595MnvNBQvdMJLpi1spYA==
 
-react-router-dom@^7.18.5:
-  version "7.18.5"
-  resolved "https://registry.yarnpkg.com/react-router-dom/-/react-router-dom-7.18.5.tgz#25e19a13396de166785c1199227a64bcd6815a8d"
-  integrity sha512-9HcfDMU6JJ/fp6gJZYGwNE6RknVGS4kBjH1HkNw959mCJi70TVwdipQWv2FEol9uGpi+SZTFtVpJPtEQfayeOw==
-  dependencies:
-    react-router "7.18.5"
-
-react-router@7.18.5, react-router@8.5.1, react-router@^8.5.1:
+react-router@8.5.1, react-router@^8.5.1:
   version "8.5.1"
   resolved "https://registry.yarnpkg.com/react-router/-/react-router-8.5.1.tgz#930df69ce3444240a4a6285c29aeb89aa493814b"
   integrity sha512-5u1eQ46QjuXjNfEnLwzrnou1Bm5dquO3xjVYkkMYCudtkicD2AQHtx+fvXzPATtPJx8TW6DR1x1TDRqsfHyZBw==

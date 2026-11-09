@@ -1,6 +1,6 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter, useNavigate } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router';
 import { RouteHead } from './RouteHead';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
