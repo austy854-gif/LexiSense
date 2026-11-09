@@ -7,8 +7,10 @@ Delivery semantics
 * A scan *claims* a record atomically (``status -> "sending"`` with a fresh
   ``claimToken``) and only the holder of that token sends. ``sending`` records
   are not claimable again until their lease expires, so concurrent scans in
-  several workers/processes cannot double-send.
-* Every provider attempt is persisted (``$inc attempts``) *before* the
+  several workers/processes cannot double-send during a live lease. Reclaimed
+  sends retain their attempt number and provider idempotency key, deduplicating
+  overlapping delivery within Resend's 24-hour window.
+* Every new provider attempt is persisted (``$inc attempts``) *before* the
   provider call, so ``MAX_ATTEMPTS`` is enforced across scheduler runs and
   process restarts. There is no in-process retry loop and no sleeping.
 * Failed records get an exponential ``nextAttemptAt`` and are retried by a
@@ -18,6 +20,7 @@ Delivery semantics
 from __future__ import annotations
 
 import logging
+import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -131,6 +134,22 @@ def _claim_update(token: str) -> dict:
     }
 
 
+async def _claim(db, query: dict, token: str, now: datetime):
+    """Reclaim abandoned sends with the same attempt number and provider key."""
+    reclaimed = await db.expiration_alerts.find_one_and_update(
+        {**query, **_claimable(now)[2]},
+        {"$set": _claim_update(token)["$set"]},
+        return_document=ReturnDocument.AFTER,
+    )
+    if reclaimed:
+        return reclaimed
+    return await db.expiration_alerts.find_one_and_update(
+        {**query, "$or": _claimable(now)[:2]},
+        _claim_update(token),
+        return_document=ReturnDocument.AFTER,
+    )
+
+
 async def _deliver(
     db, claim: dict, recipient_email: str, contract: dict, days: int, counts: dict
 ) -> None:
@@ -144,6 +163,10 @@ async def _deliver(
             counterparty=contract.get("counterparty", "Not specified"),
             expiry_date=contract.get("expiryDate", "Unknown"),
             days_remaining=days,
+            idempotency_key="expiration/"
+            + hashlib.sha256(
+                f"{claim['idempotencyKey']}:{claim['attempts']}".encode()
+            ).hexdigest(),
         )
     except Exception:
         logger.exception("Expiration alert provider call raised")
@@ -206,7 +229,7 @@ async def _recipients(db, org_id: str) -> list:
 async def retry_failed_alerts(
     db, organization_id: Optional[str] = None, counts: Optional[dict] = None
 ) -> dict:
-    """Retry due ``failed`` records independently of the expiry-date selection."""
+    """Retry due failures and abandoned sends independently of expiry-date selection."""
     counts = (
         counts
         if counts is not None
@@ -214,9 +237,7 @@ async def retry_failed_alerts(
     )
     now = _now()
     query = {
-        "status": "failed",
-        "nextAttemptAt": {"$lte": now.isoformat()},
-        "attempts": {"$lt": MAX_ATTEMPTS},
+        "$or": _claimable(now)[1:],
     }
     if organization_id:
         query["organizationId"] = organization_id
@@ -262,11 +283,7 @@ async def retry_failed_alerts(
             counts["skipped"] += 1
             continue
         token = uuid.uuid4().hex
-        claim = await db.expiration_alerts.find_one_and_update(
-            {"_id": record["_id"], "$or": _claimable(now)},
-            _claim_update(token),
-            return_document=ReturnDocument.AFTER,
-        )
+        claim = await _claim(db, {"_id": record["_id"]}, token, now)
         if not claim or claim.get("claimToken") != token:
             continue
         counts["queued"] += 1
@@ -329,24 +346,30 @@ async def scan_expiration_alerts(
                     token = uuid.uuid4().hex
                     try:
                         claim = await db.expiration_alerts.find_one_and_update(
-                            {"idempotencyKey": key, "$or": _claimable(now)},
-                            {
-                                **_claim_update(token),
-                                "$setOnInsert": {
-                                    "id": str(uuid.uuid4()),
-                                    "idempotencyKey": key,
-                                    "organizationId": org_id,
-                                    "contractId": contract["id"],
-                                    "userId": recipient["id"],
-                                    "alertType": "expiration",
-                                    "daysBeforeExpiry": days,
-                                    "emailSent": False,
-                                    "createdAt": now.isoformat(),
-                                },
-                            },
-                            upsert=True,
+                            {"idempotencyKey": key, **_claimable(now)[2]},
+                            {"$set": _claim_update(token)["$set"]},
                             return_document=ReturnDocument.AFTER,
                         )
+                        if not claim:
+                            claim = await db.expiration_alerts.find_one_and_update(
+                                {"idempotencyKey": key, "$or": _claimable(now)[:2]},
+                                {
+                                    **_claim_update(token),
+                                    "$setOnInsert": {
+                                        "id": str(uuid.uuid4()),
+                                        "idempotencyKey": key,
+                                        "organizationId": org_id,
+                                        "contractId": contract["id"],
+                                        "userId": recipient["id"],
+                                        "alertType": "expiration",
+                                        "daysBeforeExpiry": days,
+                                        "emailSent": False,
+                                        "createdAt": now.isoformat(),
+                                    },
+                                },
+                                upsert=True,
+                                return_document=ReturnDocument.AFTER,
+                            )
                     except DuplicateKeyError:
                         # Record exists but is sent/skipped/being sent elsewhere.
                         continue

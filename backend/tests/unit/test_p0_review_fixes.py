@@ -233,7 +233,7 @@ class TestPurgeUploadedObject:
         from botocore.exceptions import EndpointConnectionError
 
         class _Down(_FakeS3):
-            def delete_object(self, **kw):
+            def list_object_versions(self, **kw):
                 """Raise a transport error to simulate an unreachable object store."""
                 raise EndpointConnectionError(endpoint_url="https://s3")
 
@@ -536,7 +536,7 @@ class TestAlertDelivery:
         sends["results"] = [{"status": "success"}]
         await alert_service.scan_expiration_alerts(db, org_id)
         rec = await db.expiration_alerts.find_one({})
-        assert sends["calls"] == 1 and rec["status"] == "sent" and rec["attempts"] == 2
+        assert sends["calls"] == 1 and rec["status"] == "sent" and rec["attempts"] == 1
 
     async def test_retry_pass_runs_outside_expiry_date_selection(
         self, db, org_id, sends
@@ -728,11 +728,17 @@ class TestRestoreTransitionCapability:
         )
         assert r.status_code == 200, r.text
 
-    def test_every_workflow_transition_has_a_capability(self):
-        """Require an authorization capability for every workflow state-machine edge."""
-        from services.workflow_service import WORKFLOW_TRANSITIONS
+    def test_restore_capabilities_match_workflow_actions(self):
+        """Restore grants only edges reachable through a workflow action."""
+        from routes.workflow import WORKFLOW_TRANSITIONS
 
-        pairs = {(a, b) for a, targets in WORKFLOW_TRANSITIONS.items() for b in targets}
+        action_targets = {"draft", "review", "approved", "active"}
+        pairs = {
+            (current, target)
+            for current, targets in WORKFLOW_TRANSITIONS.items()
+            for target in targets
+            if target in action_targets
+        }
         assert pairs == set(contracts_route.RESTORE_TRANSITION_CAPABILITY)
 
 
@@ -985,3 +991,64 @@ class TestStartupAlertGate:
         assert "ensure_alert_idempotency_index(db, _enable_alerts)" in src
         # The metadata-only check must not be used to enable alerts at startup.
         assert "alert_idempotency_index_ready" not in src
+
+
+async def test_reclaimed_retry_reuses_provider_attempt_key(db, org_id, monkeypatch):
+    admin, contract = await _seed_alert_org(db, org_id)
+    keys = []
+
+    async def send(**kwargs):
+        keys.append(kwargs["idempotency_key"])
+        return {"status": "success"}
+
+    monkeypatch.setattr(alert_service, "send_expiration_alert", send)
+    await alert_service.scan_expiration_alerts(db, org_id)
+    record = await db.expiration_alerts.find_one({})
+    # Provider accepted; worker crashed before committing the outcome.
+    await db.contracts.update_one(
+        {"id": contract["id"]}, {"$set": {"expiryDate": "2099-01-01"}}
+    )
+    await db.expiration_alerts.update_one(
+        {"_id": record["_id"]},
+        {
+            "$set": {
+                "status": "sending",
+                "claimedAt": _iso(minutes=-30),
+            }
+        },
+    )
+    await alert_service.retry_failed_alerts(db, org_id)
+    assert len(keys) == 2 and keys[0] == keys[1]
+    record = await db.expiration_alerts.find_one({})
+    assert record["attempts"] == 1 and record["status"] == "sent"
+    await db.expiration_alerts.update_one(
+        {"_id": record["_id"]},
+        {
+            "$set": {
+                "status": "failed",
+                "nextAttemptAt": _iso(minutes=-1),
+            }
+        },
+    )
+    await alert_service.retry_failed_alerts(db, org_id)
+    assert keys[2] != keys[1]
+
+
+async def test_expiration_alert_passes_provider_idempotency(monkeypatch):
+    from unittest.mock import Mock
+    from services import email_service
+
+    provider = Mock(return_value={"id": "message"})
+    monkeypatch.setattr(email_service, "RESEND_API_KEY", "synthetic")
+    monkeypatch.setattr(email_service.resend.Emails, "send", provider)
+    result = await email_service.send_expiration_alert(
+        "local@example.com",
+        "c1",
+        "Contract",
+        "Acme",
+        "2099-01-01",
+        7,
+        idempotency_key="expiration/test",
+    )
+    assert result["status"] == "success"
+    assert provider.call_args.args[1] == {"idempotency_key": "expiration/test"}

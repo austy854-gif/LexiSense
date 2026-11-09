@@ -168,14 +168,55 @@ async def delete_file_from_s3(storage_key: str) -> bool:
         logger.error("Cannot delete file: S3 client is not configured")
         return False
 
+    bucket = get_bucket_name()
+
+    def versions():
+        entries = []
+        params = {"Bucket": bucket, "Prefix": storage_key}
+        while True:
+            page = s3_client.list_object_versions(**params)
+            entries.extend(
+                item
+                for group in ("Versions", "DeleteMarkers")
+                for item in page.get(group, [])
+                if item.get("Key") == storage_key
+            )
+            if not page.get("IsTruncated"):
+                return entries
+            params["KeyMarker"] = page["NextKeyMarker"]
+            params["VersionIdMarker"] = page["NextVersionIdMarker"]
+
+    try:
+        retained = await asyncio.to_thread(versions)
+        for item in retained:
+            # "null" is also a retained version in suspended/unversioned buckets.
+            await asyncio.to_thread(
+                s3_client.delete_object,
+                Bucket=bucket,
+                Key=storage_key,
+                VersionId=item["VersionId"],
+            )
+        if await asyncio.to_thread(versions):
+            logger.error("Object versions remain after deletion")
+            return False
+        logger.info("Confirmed all object versions removed")
+        return True
+    except (BotoCoreError, ClientError, KeyError) as e:
+        logger.error("Failed to delete from S3: %s", type(e).__name__)
+        return False
+
+
+async def _delete_key_marker(storage_key: str) -> bool:
+    """Best-effort hiding for upload rollback; does not confirm version removal."""
+    client = get_s3_client()
+    if not client:
+        return False
     try:
         await asyncio.to_thread(
-            s3_client.delete_object, Bucket=get_bucket_name(), Key=storage_key
+            client.delete_object, Bucket=get_bucket_name(), Key=storage_key
         )
-        logger.info(f"Deleted file from S3: {storage_key}")
         return True
-    except (BotoCoreError, ClientError) as e:
-        logger.error("Failed to delete from S3: %s", type(e).__name__)
+    except (BotoCoreError, ClientError):
         return False
 
 
@@ -213,10 +254,10 @@ async def purge_uploaded_object(storage_key: str) -> bool:
             "if the bucket is versioned",
             type(e).__name__,
         )
-        await delete_file_from_s3(storage_key)
+        await _delete_key_marker(storage_key)
         return False
     if not entries:
-        return await delete_file_from_s3(storage_key)
+        return await _delete_key_marker(storage_key)
     ok = True
     for item in entries:
         try:
@@ -234,7 +275,7 @@ async def purge_uploaded_object(storage_key: str) -> bool:
     if not ok:
         # e.g. DeleteObjectVersion denied but DeleteObject allowed: a key delete
         # at least hides the object. Still report failure so it is cleaned up.
-        await delete_file_from_s3(storage_key)
+        await _delete_key_marker(storage_key)
         logger.error(
             "Object versions retained after rollback; needs manual purge: key=%s",
             storage_key,

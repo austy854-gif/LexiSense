@@ -34,7 +34,7 @@ async def test_storage_failure_preserves_contract_and_chat(
     if failure == "endpoint":
         # Exercise the real service translating a botocore failure into False.
         s3 = Mock()
-        s3.delete_object.side_effect = EndpointConnectionError(
+        s3.list_object_versions.side_effect = EndpointConnectionError(
             endpoint_url="https://s3"
         )
         monkeypatch.setattr(storage_service, "get_s3_client", lambda: s3)
@@ -71,7 +71,7 @@ async def test_successful_storage_delete_removes_contract_and_chat(
     if storage == "already_absent":
         # S3 DeleteObject is idempotent: a missing key returns success (204).
         s3 = Mock()
-        s3.delete_object.return_value = {"ResponseMetadata": {"HTTPStatusCode": 204}}
+        s3.list_object_versions.return_value = {}
         monkeypatch.setattr(storage_service, "get_s3_client", lambda: s3)
         monkeypatch.setattr(storage_service, "get_bucket_name", lambda: "test-bucket")
     else:
@@ -91,9 +91,8 @@ async def test_successful_storage_delete_removes_contract_and_chat(
     assert await db.chat_history.count_documents({"contractId": contract["id"]}) == 0
     audit.assert_awaited_once()
     if storage == "already_absent":
-        s3.delete_object.assert_called_once_with(
-            Bucket="test-bucket", Key=contract["storageKey"]
-        )
+        s3.delete_object.assert_not_called()
+        assert s3.list_object_versions.call_count == 2
     elif storage == "no_key":
         delete.assert_not_awaited()
     else:
@@ -112,3 +111,47 @@ async def test_missing_storage_configuration_preserves_contract(
     assert response.status_code == 502
     assert await db.contracts.find_one({"id": contract["id"]}) is not None
     assert await db.chat_history.count_documents({"contractId": contract["id"]}) == 1
+
+
+async def test_versioned_deletion_paginates_and_verifies(monkeypatch):
+    s3 = Mock()
+    s3.list_object_versions.side_effect = [
+        {
+            "Versions": [{"Key": "org/k", "VersionId": "v1"}],
+            "IsTruncated": True,
+            "NextKeyMarker": "org/k",
+            "NextVersionIdMarker": "v1",
+        },
+        {
+            "Versions": [
+                {"Key": "org/k", "VersionId": "null"},
+                {"Key": "org/k-other", "VersionId": "keep"},
+            ],
+            "DeleteMarkers": [{"Key": "org/k", "VersionId": "marker"}],
+        },
+        {},
+    ]
+    monkeypatch.setattr(storage_service, "get_s3_client", lambda: s3)
+    assert await storage_service.delete_file_from_s3("org/k") is True
+    assert [c.kwargs["VersionId"] for c in s3.delete_object.call_args_list] == [
+        "v1",
+        "null",
+        "marker",
+    ]
+
+
+@pytest.mark.parametrize("failure", ["retained", "denied", "listing"])
+async def test_versioned_deletion_fails_closed(monkeypatch, failure):
+    s3 = Mock()
+    listing = {"Versions": [{"Key": "org/k", "VersionId": "v1"}]}
+    s3.list_object_versions.return_value = listing
+    if failure == "denied":
+        s3.delete_object.side_effect = EndpointConnectionError(
+            endpoint_url="https://s3"
+        )
+    if failure == "listing":
+        s3.list_object_versions.side_effect = EndpointConnectionError(
+            endpoint_url="https://s3"
+        )
+    monkeypatch.setattr(storage_service, "get_s3_client", lambda: s3)
+    assert await storage_service.delete_file_from_s3("org/k") is False

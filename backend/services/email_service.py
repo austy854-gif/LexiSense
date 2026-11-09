@@ -238,7 +238,9 @@ def get_email_template(template_type: str, data: dict) -> tuple[str, str]:
     return subject, html
 
 
-async def send_email(to_email: str, template_type: str, data: dict) -> Optional[dict]:
+async def send_email(
+    to_email: str, template_type: str, data: dict, idempotency_key: Optional[str] = None
+) -> Optional[dict]:
     """Send an email using Resend API.
 
     Logging is deliberately metadata-only (template name, recipient *domain*,
@@ -272,7 +274,8 @@ async def send_email(to_email: str, template_type: str, data: dict) -> Optional[
             params["text"] = text_content
 
         # Run sync SDK in thread to keep FastAPI non-blocking
-        email = await asyncio.to_thread(resend.Emails.send, params)
+        options = {"idempotency_key": idempotency_key} if idempotency_key else None
+        email = await asyncio.to_thread(resend.Emails.send, params, options)
 
         logger.info(
             "Email sent (template=%s recipient_domain=%s message_id=%s)",
@@ -322,11 +325,13 @@ async def send_expiration_alert(
     counterparty: str,
     expiry_date: str,
     days_remaining: int,
+    idempotency_key: Optional[str] = None,
 ) -> Optional[dict]:
     """Send a contract expiration alert email."""
     return await send_email(
         to_email=to_email,
         template_type="expiration_alert",
+        idempotency_key=idempotency_key,
         data={
             "contract_id": contract_id,
             "contract_title": contract_title,

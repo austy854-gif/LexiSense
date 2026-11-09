@@ -442,7 +442,6 @@ RESTORE_TRANSITION_CAPABILITY = {
     ("review", "draft"): "reject",
     ("approved", "active"): "activate",
     ("approved", "review"): "submit_for_review",
-    ("active", "expired"): "activate",
 }
 
 
@@ -1076,19 +1075,27 @@ async def restore_contract_version(
     # state machine so a restore cannot bypass the workflow (e.g. draft->approved).
     current_status = contract.get("status", "draft")
     restored_status = version.get("status", current_status)
-    validate_transition(current_status, restored_status)
     # A restore that changes status is a workflow transition: the actor needs
     # the same capability the workflow endpoint would require for it.
-    transition_capability = RESTORE_TRANSITION_CAPABILITY.get(
-        (current_status, restored_status)
-    )
     if restored_status != current_status:
+        transition_capability = RESTORE_TRANSITION_CAPABILITY.get(
+            (current_status, restored_status),
+            # Check the destination's action even when this edge is illegal,
+            # matching workflow's permission-before-transition ordering.
+            {
+                "review": "submit_for_review",
+                "approved": "approve",
+                "draft": "reject",
+                "active": "activate",
+            }.get(restored_status),
+        )
         if not transition_capability:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid status transition",
             )
         require_capability(current_user, transition_capability)
+        validate_transition(current_status, restored_status)
 
     # Create a new version entry for the current state before restoring
     latest_version = await db.contract_versions.find_one(

@@ -356,3 +356,29 @@ class TestRestoreSuccessSemantics:
 
         stored = await db.contracts.find_one({"id": contract["id"]})
         assert stored["updatedAt"] >= contract["updatedAt"]
+
+
+@pytest.mark.parametrize("target", ["approved", "active"])
+async def test_restore_checks_capability_before_invalid_edge(
+    client, db, contract, owner, target
+):
+    await _seed(
+        db, contract, make_version(contract["id"], 1, owner["id"], status=target)
+    )
+    response = await _restore(client, contract["id"], 1, owner)
+    assert response.status_code == 403
+    assert (
+        await db.contract_versions.count_documents({"contractId": contract["id"]}) == 1
+    )
+
+
+async def test_restore_cannot_expire_active_contract(
+    client, db, contract, owner, users
+):
+    contract["status"] = "active"
+    await _seed(
+        db, contract, make_version(contract["id"], 1, owner["id"], status="expired")
+    )
+    response = await _restore(client, contract["id"], 1, users["admin"])
+    assert response.status_code == 400
+    assert (await db.contracts.find_one({"id": contract["id"]}))["status"] == "active"
