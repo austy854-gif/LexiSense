@@ -32,7 +32,7 @@ from utils.rbac import (
 from utils.policy import (
     require_capability,
     require_contract_write,
-    require_owner_or_capability,
+    require_org_capability,
 )
 from utils.env import get_env
 from services.ai_service import analyze_contract, get_chat_response
@@ -1182,7 +1182,7 @@ async def delete_contract(
             status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
         )
 
-    require_owner_or_capability(current_user, contract, "delete")
+    require_org_capability(current_user, contract, "delete")
 
     if contract.get("storageKey"):
         try:

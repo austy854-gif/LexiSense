@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 
 from utils.auth import get_current_user
-from utils.policy import require_owner_or_capability
+from utils.policy import require_org_capability
 from routes.billing import assert_org_writable
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ async def add_tags(
     )
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
-    require_owner_or_capability(current_user, contract, "tag_manage")
+    require_org_capability(current_user, contract, "tag_manage")
 
     cleaned = list(set(t.strip().lower() for t in tags if t.strip()))
     await db.contracts.update_one(
@@ -73,7 +73,7 @@ async def remove_tag(
     )
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
-    require_owner_or_capability(current_user, contract, "tag_manage")
+    require_org_capability(current_user, contract, "tag_manage")
 
     await db.contracts.update_one(
         {"id": contract_id},
@@ -100,7 +100,7 @@ async def update_category(
     )
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
-    require_owner_or_capability(current_user, contract, "tag_manage")
+    require_org_capability(current_user, contract, "tag_manage")
 
     await db.contracts.update_one(
         {"id": contract_id},

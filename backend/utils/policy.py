@@ -92,8 +92,8 @@ def require_capability(user: dict, capability: str) -> None:
         raise deny(capability)
 
 
-def require_owner_or_capability(user: dict, resource: dict, capability: str) -> None:
-    """Require a capability and organization ownership for a loaded resource."""
+def require_org_capability(user: dict, resource: dict, capability: str) -> None:
+    """Require a capability on a resource that belongs to the caller's organization."""
     if resource.get("organizationId") != user.get("organizationId"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
