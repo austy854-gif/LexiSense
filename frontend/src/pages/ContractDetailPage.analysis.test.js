@@ -18,6 +18,18 @@ jest.mock('../contexts/AuthContext', () => ({
 jest.mock('../components/Layout', () => ({ Layout: ({ children }) => <div>{children}</div> }));
 jest.mock('sonner', () => ({ toast: { success: jest.fn(), error: jest.fn() } }));
 jest.mock('@sentry/react', () => ({ captureException: jest.fn() }));
+// Lets one test make a child *inside* the Key Terms boundary throw.
+let mockShieldThrows = false;
+jest.mock('lucide-react', () => {
+  const actual = jest.requireActual('lucide-react');
+  return {
+    ...actual,
+    Shield: (props) => {
+      if (mockShieldThrows) throw new Error('key term icon exploded');
+      return <actual.Shield {...props} />;
+    },
+  };
+});
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 Element.prototype.scrollIntoView = jest.fn();
@@ -47,11 +59,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  mockShieldThrows = false;
   act(() => root.unmount());
   container.remove();
   consoleError.mockRestore();
 });
 
+/** Render the detail page for a contract with the given overrides. */
 async function renderWith(contract) {
   const { contractsAPI } = require('../api');
   contractsAPI.get.mockResolvedValue({ data: { ...baseContract, ...contract } });
@@ -66,6 +80,7 @@ async function renderWith(contract) {
   });
 }
 
+/** Activate a Radix tab by its visible label. */
 function openTab(label) {
   const trigger = [...container.querySelectorAll('[role="tab"]')].find((el) => el.textContent === label);
   expect(trigger).toBeDefined();
@@ -140,6 +155,25 @@ test('object-shaped summary, parties, risks and recommendations render safely', 
   expect(container.textContent).toContain('Negotiate');
   expect(container.textContent).toContain('3');
   expect(container.querySelector('[data-testid="section-error-fallback"]')).toBeNull();
+});
+
+test('a render error inside the Key Terms panel is contained to that panel', async () => {
+  mockShieldThrows = true;
+  await renderWith({ aiAnalysis: { summary: 'Still readable summary', keyTerms: ['Net 30'], recommendations: ['Do X'] } });
+  openTab('Key Terms');
+  const fallback = container.querySelector('[data-testid="section-error-fallback"]');
+  expect(fallback).not.toBeNull();
+  expect(container.textContent).not.toContain('key term icon exploded');
+  // Page header and the other tabs still work.
+  expect(container.querySelector('h1').textContent).toBe('Drifted analysis agreement');
+  expect(container.querySelectorAll('[role="tab"]').length).toBe(6);
+  openTab('Recommendations');
+  expect(container.textContent).toContain('Do X');
+  const Sentry = require('@sentry/react');
+  expect(Sentry.captureException).toHaveBeenCalledWith(
+    expect.any(Error),
+    expect.objectContaining({ tags: { boundary: 'analysis-terms' } }),
+  );
 });
 
 test('non-array analysis lists do not crash the page', async () => {

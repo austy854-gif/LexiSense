@@ -16,10 +16,12 @@ const MAX_TEXT_LENGTH = 2000;
 const LABEL_KEYS = ['label', 'term', 'name', 'title', 'key', 'clause', 'heading'];
 const VALUE_KEYS = ['value', 'definition', 'description', 'detail', 'details', 'text', 'content', 'summary', 'explanation'];
 
+/** Cap text at MAX_TEXT_LENGTH characters, ending with an ellipsis when cut. */
 function clip(text) {
   return text.length > MAX_TEXT_LENGTH ? `${text.slice(0, MAX_TEXT_LENGTH - 1)}…` : text;
 }
 
+/** First of `keys` present on `obj` with a non-empty value, as `{ key, value }`, or null. */
 function firstPresent(obj, keys) {
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(obj, key)) {
@@ -30,6 +32,7 @@ function firstPresent(obj, keys) {
   return null;
 }
 
+/** Recursive worker for toDisplayText; stops at MAX_DEPTH so cycles terminate. */
 function textOf(value, depth) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim();
@@ -46,6 +49,7 @@ function textOf(value, depth) {
   return pair.label || pair.text;
 }
 
+/** Split an object into display `{ label, text }` using the common LLM key names. */
 function labelValueOf(obj, depth) {
   const label = firstPresent(obj, LABEL_KEYS);
   const body = firstPresent(obj, VALUE_KEYS.filter((k) => !label || k !== label.key));
@@ -129,7 +133,8 @@ export function normalizeRisk(risk) {
       if (!text && !recommendation) return null;
       return {
         risk: text,
-        severity: SEVERITIES.has(rawSeverity) ? rawSeverity : rawSeverity || null,
+        // Only the levels RiskBadge styles; anything else shows as "Unknown".
+        severity: SEVERITIES.has(rawSeverity) ? rawSeverity : null,
         recommendation,
       };
     }

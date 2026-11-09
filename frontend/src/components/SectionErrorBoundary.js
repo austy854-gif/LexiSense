@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import * as Sentry from '@sentry/react';
 import { AlertTriangle } from 'lucide-react';
 
+/** Send a caught render error to Sentry, tagged with the boundary scope. */
 function reportError(error, info, scope) {
   try {
     Sentry.captureException(error, {
@@ -20,30 +21,36 @@ function reportError(error, info, scope) {
  * Changing `resetKey` (e.g. the contract id or route) clears the error.
  */
 export class SectionErrorBoundary extends Component {
+  /** Start with no error. */
   constructor(props) {
     super(props);
     this.state = { error: null };
     this.reset = this.reset.bind(this);
   }
 
+  /** Switch to the fallback when a child throws. */
   static getDerivedStateFromError(error) {
     return { error };
   }
 
+  /** Report the error; the fallback is already showing. */
   componentDidCatch(error, info) {
     reportError(error, info, this.props.scope || 'section');
   }
 
+  /** Clear the error when `resetKey` changes (new contract or route). */
   componentDidUpdate(prevProps) {
     if (this.state.error && prevProps.resetKey !== this.props.resetKey) {
       this.reset();
     }
   }
 
+  /** Clear the error and re-render the children. */
   reset() {
     this.setState({ error: null });
   }
 
+  /** Children, or the fallback after an error. */
   render() {
     if (!this.state.error) return this.props.children;
     if (typeof this.props.fallback === 'function') return this.props.fallback({ reset: this.reset });

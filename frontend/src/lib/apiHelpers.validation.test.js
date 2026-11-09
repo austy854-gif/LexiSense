@@ -11,6 +11,7 @@ import {
 // LX-ENG-TOAST-01: the backend's 422 envelope says "Request validation failed";
 // users must see field-level copy instead, and never raw pydantic text.
 
+/** A 422 axios error in the backend's validation envelope. */
 function validationError(fields) {
   return {
     message: 'Request failed with status code 422',
@@ -111,6 +112,25 @@ test('at most two messages are joined into the toast; first per field wins', () 
 test('non-validation errors keep their server message', () => {
   const info = getErrorInfo({ response: { status: 400, data: { detail: 'Invalid or expired reset link' } } });
   expect(info.message).toBe('Invalid or expired reset link');
+  expect(info.fieldMessages).toBeNull();
+});
+
+test('nested fields with the same last segment keep separate messages', () => {
+  const fields = [
+    { field: 'body.parties.0.name', type: 'missing' },
+    { field: 'body.parties.1.name', type: 'string_too_long', message: 'String should have at most 5 characters' },
+  ];
+  expect(validationFieldMessages(fields)).toEqual({
+    'parties.0.name': 'Name is required.',
+    'parties.1.name': 'Name must be at most 5 characters.',
+  });
+});
+
+test('validation_error code on a non-422 response keeps the server message', () => {
+  const info = getErrorInfo({
+    response: { status: 400, data: { error: { code: 'validation_error', message: 'Pick a plan first.' } } },
+  });
+  expect(info.message).toBe('Pick a plan first.');
   expect(info.fieldMessages).toBeNull();
 });
 

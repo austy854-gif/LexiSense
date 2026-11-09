@@ -85,4 +85,11 @@ describe('normalizeRisks', () => {
       { risk: 'Nested: title', severity: 'low', recommendation: '' },
     ]);
   });
+
+  test('unknown severities become null (RiskBadge shows "Unknown")', () => {
+    expect(normalizeRisks([{ risk: 'A', severity: 'critical' }, { risk: 'B', severity: { x: 1 } }])).toEqual([
+      { risk: 'A', severity: null, recommendation: '' },
+      { risk: 'B', severity: null, recommendation: '' },
+    ]);
+  });
 });

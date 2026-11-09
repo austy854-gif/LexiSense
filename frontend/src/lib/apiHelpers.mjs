@@ -17,6 +17,7 @@
 // Error envelope
 // ---------------------------------------------------------------------------
 
+/** The value when it is a non-blank string, otherwise null. */
 function asMessage(value) {
   return typeof value === 'string' && value.trim() ? value : null;
 }
@@ -71,9 +72,17 @@ const FIELD_LABELS = {
 
 const TOKEN_FIELDS = new Set(['token', 'reset_token', 'resetToken', 'invite_token', 'inviteToken']);
 
-function lastSegment(field) {
+const LOCATION_PREFIXES = new Set(['body', 'query', 'path', 'header', 'cookie']);
+
+/** Field path without FastAPI location prefixes, e.g. "body.items.0.name" → "items.0.name". */
+function normalizedPath(field) {
   if (typeof field !== 'string' || !field) return '';
-  const parts = field.split('.').filter((p) => p && !/^\d+$/.test(p) && p !== 'body' && p !== 'query' && p !== 'path');
+  return field.split('.').filter((p) => p && !LOCATION_PREFIXES.has(p)).join('.');
+}
+
+/** Last named (non-index) segment of a field path, e.g. "items.0.name" → "name". */
+function lastSegment(field) {
+  const parts = normalizedPath(field).split('.').filter((p) => p && !/^\d+$/.test(p));
   return parts.length ? parts[parts.length - 1] : '';
 }
 
@@ -87,6 +96,7 @@ export function fieldLabel(field) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/** Numeric bound from pydantic's "at least N" / "at most N" phrasing, or null. */
 function boundFrom(message, word) {
   // Pydantic phrases bounds as "at least 8 characters" / "at most 72 characters".
   if (typeof message !== 'string') return null;
@@ -127,13 +137,14 @@ export function friendlyFieldMessage(entry) {
 
 /**
  * Field-level messages for a validation error: `{ [field]: message }` keyed
- * by the last path segment (e.g. "password"), first message per field wins.
+ * by the field path without its location prefix (e.g. "password" or
+ * "items.0.name"), first message per field wins.
  */
 export function validationFieldMessages(fields) {
   const out = {};
   if (!Array.isArray(fields)) return out;
   for (const entry of fields) {
-    const key = lastSegment(entry && entry.field) || 'form';
+    const key = normalizedPath(entry && entry.field) || 'form';
     if (out[key]) continue;
     const msg = friendlyFieldMessage(entry);
     if (msg) out[key] = msg;
@@ -201,7 +212,7 @@ export function getErrorInfo(error) {
   // LX-ENG-TOAST-01: a 422 validation envelope carries the generic server text
   // "Request validation failed"; replace it with field-level copy.
   let fieldMessages = null;
-  if (code === 'validation_error' || (status === 422 && fields)) {
+  if (status === 422 && (code === 'validation_error' || fields)) {
     fieldMessages = validationFieldMessages(fields);
     message = friendlyValidationMessage(fields);
   } else if (status === 422 && Array.isArray(data && data.detail)) {

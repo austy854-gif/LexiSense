@@ -7,6 +7,7 @@ jest.mock('@sentry/react', () => ({ captureException: jest.fn() }));
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+/** Always throws while rendering. */
 function Boom() {
   throw new Error('render exploded: secret internals');
 }
@@ -49,6 +50,7 @@ test('a throwing child is contained to its section; siblings still render', () =
 
 test('changing resetKey clears the error', () => {
   let shouldThrow = true;
+  /** Throws until `shouldThrow` is cleared. */
   function Maybe() {
     if (shouldThrow) throw new Error('x');
     return <p data-testid="ok">ok</p>;

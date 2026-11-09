@@ -41,6 +41,7 @@ import {
   toDisplayText,
 } from '../lib/safeRender';
 
+/** Risk level pill; any value is coerced to text so AI drift can't crash it. */
 const RiskBadge = ({ level: rawLevel, size = 'default' }) => {
   const level = toDisplayText(rawLevel);
   const colors = {
