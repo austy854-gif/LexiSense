@@ -90,7 +90,8 @@ function lastSegment(field) {
 export function fieldLabel(field) {
   const key = lastSegment(field);
   if (!key) return '';
-  if (FIELD_LABELS[key]) return FIELD_LABELS[key];
+  // Own keys only: a field named e.g. "constructor" must not pick up Object.prototype.
+  if (Object.prototype.hasOwnProperty.call(FIELD_LABELS, key)) return FIELD_LABELS[key];
   const words = key.replace(/_/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim().toLowerCase();
   if (!words) return '';
   return words.charAt(0).toUpperCase() + words.slice(1);
@@ -145,7 +146,7 @@ export function validationFieldMessages(fields) {
   if (!Array.isArray(fields)) return out;
   for (const entry of fields) {
     const key = normalizedPath(entry && entry.field) || 'form';
-    if (out[key]) continue;
+    if (Object.prototype.hasOwnProperty.call(out, key)) continue;
     const msg = friendlyFieldMessage(entry);
     if (msg) out[key] = msg;
   }

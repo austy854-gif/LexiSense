@@ -151,6 +151,13 @@ test('object-shaped summary, parties, risks and recommendations render safely', 
   expect(container.textContent).toContain('Add a cap');
   expect(container.textContent).toContain('Plain risk');
 
+  // Unknown severity: "Unknown" badge and a neutral icon, never the green "low" one.
+  const plainRiskIcon = [...container.querySelectorAll('svg')].find((svg) =>
+    svg.closest('div.p-4')?.textContent.includes('Plain risk'),
+  );
+  expect(plainRiskIcon.getAttribute('class')).toContain('text-muted-foreground');
+  expect(plainRiskIcon.getAttribute('class')).not.toContain('text-green-500');
+
   openTab('Recommendations');
   expect(container.textContent).toContain('Negotiate');
   expect(container.textContent).toContain('3');

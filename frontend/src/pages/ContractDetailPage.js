@@ -509,7 +509,9 @@ export default function ContractDetailPage() {
                                     ? 'text-red-500'
                                     : risk.severity === 'medium'
                                     ? 'text-yellow-500'
-                                    : 'text-green-500'
+                                    : risk.severity === 'low'
+                                    ? 'text-green-500'
+                                    : 'text-muted-foreground'
                                 }`}
                               />
                               <div className="flex-1">

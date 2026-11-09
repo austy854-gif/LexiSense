@@ -134,6 +134,12 @@ test('validation_error code on a non-422 response keeps the server message', () 
   expect(info.fieldMessages).toBeNull();
 });
 
+test('fields named like Object.prototype members map without throwing', () => {
+  expect(() => getErrorInfo(validationError([{ field: 'body.items.0.constructor', type: 'missing' }]))).not.toThrow();
+  expect(friendlyFieldMessage({ field: 'items.0.constructor', type: 'missing' })).toBe('Constructor is required.');
+  expect(validationFieldMessages([{ field: 'toString', type: 'missing' }])).toEqual({ toString: 'To string is required.' });
+});
+
 test('fieldLabel humanises paths', () => {
   expect(fieldLabel('body.items.0.dueDate')).toBe('Due date');
   expect(fieldLabel('')).toBe('');
