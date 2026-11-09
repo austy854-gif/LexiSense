@@ -39,11 +39,123 @@ function asPlainTextMessage(value) {
   return text;
 }
 
+// ---------------------------------------------------------------------------
+// Validation errors (LX-ENG-TOAST-01)
+// ---------------------------------------------------------------------------
+
+/** Shown when a 422 carries no field we can describe. */
+export const VALIDATION_ERROR_MESSAGE = 'Some of the details you entered need another look. Check the form and try again.';
+/** A token that fails validation is, to the user, a broken or old link. */
+export const INVALID_LINK_MESSAGE = 'This link is invalid or has expired. Request a new one.';
+
+// Human labels for request fields the API validates. Unknown fields fall back
+// to a de-camelised version of the last path segment.
+const FIELD_LABELS = {
+  email: 'Email',
+  password: 'Password',
+  new_password: 'New password',
+  newPassword: 'New password',
+  current_password: 'Current password',
+  currentPassword: 'Current password',
+  name: 'Name',
+  full_name: 'Full name',
+  fullName: 'Full name',
+  organization: 'Organization',
+  organizationName: 'Organization name',
+  organization_name: 'Organization name',
+  role: 'Role',
+  title: 'Title',
+  file: 'File',
+  token: 'Link',
+};
+
+const TOKEN_FIELDS = new Set(['token', 'reset_token', 'resetToken', 'invite_token', 'inviteToken']);
+
+function lastSegment(field) {
+  if (typeof field !== 'string' || !field) return '';
+  const parts = field.split('.').filter((p) => p && !/^\d+$/.test(p) && p !== 'body' && p !== 'query' && p !== 'path');
+  return parts.length ? parts[parts.length - 1] : '';
+}
+
+/** Readable label for a validation `field` path such as "body.email" or "fullName". */
+export function fieldLabel(field) {
+  const key = lastSegment(field);
+  if (!key) return '';
+  if (FIELD_LABELS[key]) return FIELD_LABELS[key];
+  const words = key.replace(/_/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim().toLowerCase();
+  if (!words) return '';
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function boundFrom(message, word) {
+  // Pydantic phrases bounds as "at least 8 characters" / "at most 72 characters".
+  if (typeof message !== 'string') return null;
+  const m = message.match(new RegExp(`at ${word} (\\d{1,6})`));
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Friendly sentence for one `{field, message, type}` validation entry.
+ * Built from the field name and error type only; the server's raw text is
+ * never shown (it can name internal models or echo technical detail).
+ */
+export function friendlyFieldMessage(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const key = lastSegment(entry.field);
+  const type = typeof entry.type === 'string' ? entry.type : '';
+  if (TOKEN_FIELDS.has(key)) return INVALID_LINK_MESSAGE;
+  const label = fieldLabel(entry.field);
+  if (!label) return null;
+  const lower = label.toLowerCase();
+
+  if (type === 'missing' || type === 'value_error.missing') return `${label} is required.`;
+  if (key === 'email' || /email/.test(type)) return 'Enter a valid email address.';
+  if (type.startsWith('string_too_short') || type === 'too_short' || type.includes('min_length')) {
+    const min = boundFrom(entry.message, 'least');
+    if (min === 1) return `${label} is required.`;
+    return min ? `${label} must be at least ${min} characters.` : `${label} is too short.`;
+  }
+  if (type.startsWith('string_too_long') || type === 'too_long' || type.includes('max_length')) {
+    const max = boundFrom(entry.message, 'most');
+    return max ? `${label} must be at most ${max} characters.` : `${label} is too long.`;
+  }
+  if (type.startsWith('string_pattern') || type === 'enum' || type.startsWith('literal')) {
+    return `Choose a valid ${lower}.`;
+  }
+  return `Check the ${lower} and try again.`;
+}
+
+/**
+ * Field-level messages for a validation error: `{ [field]: message }` keyed
+ * by the last path segment (e.g. "password"), first message per field wins.
+ */
+export function validationFieldMessages(fields) {
+  const out = {};
+  if (!Array.isArray(fields)) return out;
+  for (const entry of fields) {
+    const key = lastSegment(entry && entry.field) || 'form';
+    if (out[key]) continue;
+    const msg = friendlyFieldMessage(entry);
+    if (msg) out[key] = msg;
+  }
+  return out;
+}
+
+/** One toast-sized sentence summarising a validation error's fields. */
+export function friendlyValidationMessage(fields) {
+  const messages = [...new Set(Object.values(validationFieldMessages(fields)))];
+  if (messages.length === 0) return VALIDATION_ERROR_MESSAGE;
+  // A broken link makes any other field moot: say only that.
+  if (messages.includes(INVALID_LINK_MESSAGE)) return INVALID_LINK_MESSAGE;
+  return messages.slice(0, 2).join(' ');
+}
+
 /**
  * Normalise any axios error into a stable, UI-friendly shape.
  *
  * @returns {{code: string|null, message: string, status: number|null,
- *            requestId: string|null, fields: Array|null}}
+ *            requestId: string|null, fields: Array|null,
+ *            fieldMessages: Object<string,string>|null}}
  */
 export function getErrorInfo(error) {
   const response = error && error.response;
@@ -86,7 +198,24 @@ export function getErrorInfo(error) {
   const details = envelope && envelope.details;
   const fields = details && Array.isArray(details.fields) ? details.fields : null;
 
-  return { code, message, status, requestId, fields };
+  // LX-ENG-TOAST-01: a 422 validation envelope carries the generic server text
+  // "Request validation failed"; replace it with field-level copy.
+  let fieldMessages = null;
+  if (code === 'validation_error' || (status === 422 && fields)) {
+    fieldMessages = validationFieldMessages(fields);
+    message = friendlyValidationMessage(fields);
+  } else if (status === 422 && Array.isArray(data && data.detail)) {
+    // Raw FastAPI shape (no envelope): `detail` is pydantic's error list.
+    const legacy = data.detail.map((e) => ({
+      field: Array.isArray(e && e.loc) ? e.loc.map(String).join('.') : '',
+      message: e && e.msg,
+      type: e && e.type,
+    }));
+    fieldMessages = validationFieldMessages(legacy);
+    message = friendlyValidationMessage(legacy);
+  }
+
+  return { code, message, status, requestId, fields, fieldMessages };
 }
 
 export function isForbidden(error) {

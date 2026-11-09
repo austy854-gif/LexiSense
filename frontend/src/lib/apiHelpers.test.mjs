@@ -66,6 +66,9 @@ test('getErrorInfo surfaces validation fields', () => {
   assert.equal(info.code, 'validation_error');
   assert.equal(info.fields.length, 1);
   assert.equal(info.fields[0].field, 'email');
+  // LX-ENG-TOAST-01: the generic server text is replaced with field copy.
+  assert.equal(info.message, 'Enter a valid email address.');
+  assert.deepEqual(info.fieldMessages, { email: 'Enter a valid email address.' });
 });
 
 test('getErrorInfo never throws on a shapeless error', () => {
