@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, versionsAPI, workflowAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
-import { canPerformWorkflowAction, getErrorInfo } from '../lib/apiHelpers.mjs';
+import { canPerformWorkflowAction, getErrorInfo, normalizeRole } from '../lib/apiHelpers.mjs';
 import { hasCapability, hasContractCapability } from '../lib/access.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -94,7 +94,9 @@ export default function ContractDetailPage() {
   /** Resolve a contract action against the current capability and uploader identity. */
   const canDo = (action) =>
     hasCapability(access, WORKFLOW_CAPABILITY[action]) &&
-    canPerformWorkflowAction(user?.role, action, contract?.status);
+    canPerformWorkflowAction(user?.role, action, contract?.status) &&
+    (action !== 'submit_for_review' || normalizeRole(user?.role) !== 'user' ||
+      (contract?.uploadedBy != null && contract.uploadedBy === user?.id));
   const restoreAllowed = hasContractCapability(access, 'canRestore', 'canRestoreOwn', contract, user);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');

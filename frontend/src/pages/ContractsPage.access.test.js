@@ -68,3 +68,23 @@ test('a user can upload but not delete', async () => {
   expect(has('upload-contract-btn')).toBe(true);
   expect(has('delete-c1')).toBe(false);
 });
+
+
+test.each(['Your free trial has ended.', "You have used all your trial uploads."])(
+  'explains unavailable uploads: %s', async (message) => {
+    const access = accessForRole('admin');
+    await renderWith({ ...access, message, capabilities: { ...access.capabilities, canUpload: false } });
+    expect(has('upload-contract-btn')).toBe(false);
+    expect(container.querySelector('[data-testid="upload-access-message"]').textContent).toBe(message);
+  },
+);
+
+test('does not show an unavailable-upload message when uploads are allowed', async () => {
+  await renderWith({ ...accessForRole('admin'), message: 'Informational message' });
+  expect(has('upload-access-message')).toBe(false);
+});
+
+test('does not show an unavailable-upload message before access is ready', async () => {
+  await renderWith({ ...LOADING_ACCESS, message: 'Pending message' });
+  expect(has('upload-access-message')).toBe(false);
+});

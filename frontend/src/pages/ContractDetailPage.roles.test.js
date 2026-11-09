@@ -32,12 +32,12 @@ Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || function 
 let container;
 let root;
 
-async function renderAs(role, status) {
+async function renderAs(role, status, uploadedBy = 'u1') {
   mockRole = role;
   contractsAPI.get.mockResolvedValue({
     data: {
       id: 'c1', title: 'MSA', counterparty: 'Acme', contractType: 'MSA', status,
-      uploadedBy: 'u1', aiAnalysisStatus: 'success', tags: [], createdAt: '2026-01-01T00:00:00Z',
+      uploadedBy, aiAnalysisStatus: 'success', tags: [], createdAt: '2026-01-01T00:00:00Z',
     },
   });
   container = document.createElement('div');
@@ -105,4 +105,16 @@ describe('fail closed while workspace access is not loaded', () => {
     expect(has('workflow-approve')).toBe(false);
     expect(has('workflow-reject')).toBe(false);
   });
+});
+
+
+test.each([
+  ['user', 'someone-else', false],
+  ['user', null, false],
+  ['user', 'u1', true],
+  ['manager', 'someone-else', true],
+  ['admin', 'someone-else', true],
+])('draft submission respects uploader ownership: %s/%s', async (role, uploader, visible) => {
+  await renderAs(role, 'draft', uploader);
+  expect(has('workflow-submit')).toBe(visible);
 });

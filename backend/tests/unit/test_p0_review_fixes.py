@@ -284,6 +284,8 @@ class TestCapabilities:
         body = response.json()
         assert body["readOnly"] is False
         assert body["capabilities"]["canUpload"] is (allowed and role != "viewer")
+        if not allowed:
+            assert "trial uploads" in body["message"]
         assert (await db.organization_billing.find_one({"id": "b1"}))[
             "trialContractsUsed"
         ] == used
