@@ -148,7 +148,14 @@ export function validationFieldMessages(fields) {
     const key = normalizedPath(entry && entry.field) || 'form';
     if (Object.prototype.hasOwnProperty.call(out, key)) continue;
     const msg = friendlyFieldMessage(entry);
-    if (msg) out[key] = msg;
+    if (msg) {
+      Object.defineProperty(out, key, {
+        value: msg,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
   }
   return out;
 }

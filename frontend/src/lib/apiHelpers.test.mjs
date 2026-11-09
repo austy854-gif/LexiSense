@@ -43,6 +43,30 @@ test('getErrorInfo reads the uniform error envelope', () => {
   assert.equal(info.requestId, 'req-123');
 });
 
+test('getErrorInfo preserves normalized __proto__ messages and keeps the first duplicate', () => {
+  const info = getErrorInfo({
+    response: {
+      status: 422,
+      data: {
+        error: {
+          code: 'validation_error',
+          details: {
+            fields: [
+              { field: 'body.__proto__', type: 'missing' },
+              { field: '__proto__', type: 'value_error' },
+            ],
+          },
+        },
+      },
+    },
+  });
+  assert.equal(Object.hasOwn(info.fieldMessages, '__proto__'), true);
+  assert.equal(info.fieldMessages.__proto__, 'Proto is required.');
+  assert.deepEqual(Object.keys(info.fieldMessages), ['__proto__']);
+  assert.equal(Object.getPrototypeOf(info.fieldMessages), Object.prototype);
+  assert.equal(info.message, 'Proto is required.');
+});
+
 test('getErrorInfo falls back to legacy `detail`', () => {
   const info = getErrorInfo({ response: { status: 404, data: { detail: 'Contract not found' } } });
   assert.equal(info.message, 'Contract not found');
