@@ -213,6 +213,7 @@ async def _process_resend_webhook_async(
 
     intake = None
     stored = None  # id of an intake whose attachments are stored and referenced
+    claim_token: Optional[str] = None  # token of the claim this run holds on it
     processed_attachments: List[Dict[str, Any]] = []
     # Every object stored for this email, recorded before any write that can
     # fail, so a rollback always covers it.
@@ -268,8 +269,9 @@ async def _process_resend_webhook_async(
             if not claimed.modified_count:
                 return {"status": "duplicate", "intake_id": existing["id"]}
             stored = existing["id"]
+            claim_token = claim["claim_token"]
             return await _process_stored_intake(
-                ContractIntake(**existing), db, claim["claim_token"]
+                ContractIntake(**existing), db, claim_token
             )
 
         # Create intake record
@@ -438,7 +440,8 @@ async def _process_resend_webhook_async(
             },
         )
         stored = intake.id
-        return await _process_stored_intake(intake, db, intake_doc["claim_token"])
+        claim_token = intake_doc["claim_token"]
+        return await _process_stored_intake(intake, db, claim_token)
 
     except IntakeRetryableError:
         raise
@@ -447,7 +450,7 @@ async def _process_resend_webhook_async(
         if stored:
             # Files are referenced by the intake; the periodic retry (or the
             # stale-claim recovery, if this write fails too) reprocesses them.
-            await _mark_intake_failed(db, stored, str(e), intake_doc["claim_token"])
+            await _mark_intake_failed(db, stored, str(e), claim_token)
             return {"status": "error", "message": str(e)}
         if intake is None:
             # Nothing persisted yet (e.g. a transient database error).

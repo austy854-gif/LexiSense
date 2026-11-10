@@ -660,3 +660,23 @@ async def test_retry_batch_is_not_starved_by_ineligible_or_old_records(
     result = await intake_tasks._retry_failed_intakes_async()
     assert result == {"status": "success", "retried": 1, "manual_review": 0}
     assert queued == ["old-stale"]
+
+
+async def test_failure_after_claiming_a_stored_intake_is_recorded(
+    task_db, storage, monkeypatch
+):
+    """An error after a stored failed intake is claimed (before any new intake
+    record exists) is recorded as a failure instead of raising."""
+    await intake_tasks._process_resend_webhook_async(copy.deepcopy(PAYLOAD))
+    await task_db.contract_intakes.update_one({}, {"$set": {"status": "failed"}})
+
+    def broken(**kwargs):
+        raise ValueError("bad stored record")
+
+    import models.agentic as agentic_models
+
+    monkeypatch.setattr(agentic_models, "ContractIntake", broken)
+    result = await intake_tasks._process_resend_webhook_async(copy.deepcopy(PAYLOAD))
+    assert result["status"] == "error"
+    doc = await _only_intake(task_db)
+    assert doc["status"] == "failed" and "bad stored record" in doc["error_message"]
