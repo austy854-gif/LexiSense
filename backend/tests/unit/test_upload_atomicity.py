@@ -322,7 +322,7 @@ async def test_confirmed_failure_passes_contract_id_to_org_scoped_delete(
 
 
 async def test_bulk_cancellation_during_insert_does_not_roll_back(
-    client, db, user, pipeline, monkeypatch
+    client, db, user, pipeline, monkeypatch, caplog
 ):
     """A cancellation while the insert is in flight leaves the outcome unknown,
     so the bulk path keeps the object and the slot."""
@@ -339,6 +339,7 @@ async def test_bulk_cancellation_during_insert_does_not_roll_back(
             current_user={**user, "sub": user["id"]},
         )
     assert len(pipeline["uploaded"]) == 1  # the insert was reached
+    assert "upload_unverified" in [getattr(r, "event", None) for r in caplog.records]
     assert pipeline["purged"] == [] and pipeline["released"] == []
 
 

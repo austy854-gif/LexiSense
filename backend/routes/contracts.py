@@ -538,11 +538,17 @@ async def _persist_contract(contract_doc: dict) -> Optional[bool]:
     With an unknown outcome the caller must keep the stored object and the
     quota slot: deleting them could orphan a committed contract.
     """
+    from asyncio import CancelledError
+
     from pymongo.errors import DuplicateKeyError
 
     try:
         await db.contracts.insert_one(contract_doc)
         return True
+    except CancelledError:
+        # The insert may still commit; record the unknown outcome first.
+        _log_unverified_upload(contract_doc)
+        raise
     except Exception as exc:
         logger.exception(
             "Contract insert raised for %s; verifying whether it committed",
@@ -560,6 +566,9 @@ async def _persist_contract(contract_doc: dict) -> Optional[bool]:
             },
             {"_id": 0, "id": 1},
         )
+    except CancelledError:
+        _log_unverified_upload(contract_doc)
+        raise
     except Exception:
         logger.exception("Lookup of contract %s failed", contract_doc.get("id"))
         found = None
