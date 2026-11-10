@@ -1007,9 +1007,11 @@ async def _retry_failed_intakes_async():
 
     try:
         now = datetime.now(timezone.utc)
-        # Failed intakes from the last 24 hours that have stored attachments
-        # (upload failures are retried by their own task), plus stale claims of
-        # any age. Filtering happens in the query, before the batch limit.
+        # Failed intakes that have stored attachments (upload failures are
+        # retried by their own task) and are from the last 24 hours, or were
+        # reclaimed from a stale claim (any age, so a failed reprocess of an
+        # aged intake is still retried or handed to manual review); plus stale
+        # claims of any age. Filtering happens in the query, before the limit.
         cutoff = (now - timedelta(hours=24)).isoformat()
         stale_before = (now - INTAKE_CLAIM_LEASE).isoformat()
 
@@ -1018,7 +1020,10 @@ async def _retry_failed_intakes_async():
                 "$or": [
                     {
                         "status": "failed",
-                        "createdAt": {"$gte": cutoff},
+                        "$or": [
+                            {"createdAt": {"$gte": cutoff}},
+                            {"stale_recovered": True},
+                        ],
                         "attachments_stored": {"$ne": False},
                         "attachments": {
                             "$elemMatch": {"storage_key": {"$nin": [None, ""]}}
@@ -1053,6 +1058,11 @@ async def _retry_failed_intakes_async():
                         "$set": {
                             "status": "received",
                             **claim,
+                            **(
+                                {"stale_recovered": True}
+                                if intake["status"] != "failed"
+                                else {}
+                            ),
                             "error_message": None,
                             "processing_started_at": None,
                             "processing_completed_at": None,

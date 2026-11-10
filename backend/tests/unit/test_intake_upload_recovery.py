@@ -680,3 +680,50 @@ async def test_failure_after_claiming_a_stored_intake_is_recorded(
     assert result["status"] == "error"
     doc = await _only_intake(task_db)
     assert doc["status"] == "failed" and "bad stored record" in doc["error_message"]
+
+
+async def test_reclaimed_aged_intake_stays_eligible_after_failing_again(
+    task_db, storage, monkeypatch
+):
+    """An aged stale claim that is reclaimed and then fails again is still
+    retried by later sweeps; an ordinary aged failure is not."""
+    queued = []
+    monkeypatch.setattr(
+        intake_tasks.reprocess_intake,
+        "delay",
+        lambda intake_id, claim_token=None: queued.append(intake_id),
+    )
+    base = {
+        "organizationId": ORG,
+        "channel": "email",
+        "source_email": "legal@acme.test",
+        "source_metadata": {"subject": "x"},
+        "createdAt": _iso(-60 * 72),
+        "attachments_stored": True,
+        "attachments": [{"filename": "a.txt", "storage_key": "k"}],
+    }
+    await task_db.contract_intakes.insert_many(
+        [
+            {
+                **base,
+                "id": "aged-stale",
+                "status": "processing",
+                "claimed_at": _iso(-60 * 48),
+            },
+            {
+                **base,
+                "id": "aged-failed",
+                "status": "failed",
+                "claimed_at": _iso(-60 * 48),
+            },
+        ]
+    )
+    first = await intake_tasks._retry_failed_intakes_async()
+    assert first["retried"] == 1 and queued == ["aged-stale"]
+
+    # The reprocess fails (or could not be queued): the intake is failed again.
+    await intake_tasks._mark_intake_failed(task_db, "aged-stale", "classifier down")
+    second = await intake_tasks._retry_failed_intakes_async()
+    assert second["retried"] == 1 and queued == ["aged-stale", "aged-stale"]
+    doc = await task_db.contract_intakes.find_one({"id": "aged-failed"})
+    assert doc["status"] == "failed" and not doc.get("processing_attempts")
