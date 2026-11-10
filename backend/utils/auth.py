@@ -38,14 +38,13 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 from jwt import PyJWTError as JWTError
-from passlib.context import CryptContext
+import bcrypt
 
 from utils.env import get_env
 from utils.rbac import normalize_role
 
 logger = logging.getLogger(__name__)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 #: Symmetric secret. Fail fast: a missing secret must never silently become "".
@@ -86,12 +85,34 @@ def init_identity_store(database) -> None:
     logger.info("Auth identity store wired to database")
 
 
+#: bcrypt only uses the first 72 bytes of a password. passlib truncated
+#: silently; bcrypt>=5 raises instead, so truncate here to keep every existing
+#: hash verifiable with the same input.
+_BCRYPT_MAX_BYTES = 72
+#: Work factor passlib used by default for bcrypt, kept for new hashes.
+_BCRYPT_ROUNDS = 12
+
+
+def _password_bytes(password: str) -> bytes:
+    return password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
+
+
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(
+        _password_bytes(password), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)
+    ).decode("ascii")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    if not hashed_password:
+        return False
+    try:
+        return bcrypt.checkpw(
+            _password_bytes(plain_password), hashed_password.encode("ascii")
+        )
+    except (ValueError, UnicodeEncodeError):
+        # Malformed or non-bcrypt hash: treat as a failed match.
+        return False
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
