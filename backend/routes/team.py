@@ -154,7 +154,9 @@ async def invite_member(
     # before any email is sent. Concurrent requests may both withdraw, which
     # fails closed rather than exceeding the cap.
     if limit is not None and await _seats_used(current_user["organizationId"]) > limit:
-        await db.invitations.delete_one({"id": invitation.id})
+        await db.invitations.delete_one(
+            {"id": invitation.id, "organizationId": current_user["organizationId"]}
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=_member_limit_detail(limit)
         )
@@ -266,7 +268,11 @@ def _invite_role(invitation: dict) -> str:
 async def _claim_invitation(invitation: dict) -> None:
     """Atomically move ``pending -> accepted`` (single-use guarantee)."""
     claim = await db.invitations.update_one(
-        {"id": invitation["id"], "status": "pending"},
+        {
+            "id": invitation["id"],
+            "organizationId": invitation["organizationId"],
+            "status": "pending",
+        },
         {
             "$set": {
                 "status": "accepted",
@@ -284,7 +290,11 @@ async def _claim_invitation(invitation: dict) -> None:
 
 async def _release_invitation(invitation: dict) -> None:
     await db.invitations.update_one(
-        {"id": invitation["id"], "status": "accepted"},
+        {
+            "id": invitation["id"],
+            "organizationId": invitation["organizationId"],
+            "status": "accepted",
+        },
         {"$set": {"status": "pending"}, "$unset": {"acceptedAt": ""}},
     )
 
@@ -490,7 +500,8 @@ async def accept_invitation(payload: AcceptInvitationRequest):
 
     if _invitation_is_expired(invitation):
         await db.invitations.update_one(
-            {"id": invitation["id"]}, {"$set": {"status": "expired"}}
+            {"id": invitation["id"], "organizationId": invitation["organizationId"]},
+            {"$set": {"status": "expired"}},
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invitation has expired"
@@ -523,7 +534,7 @@ async def accept_invitation(payload: AcceptInvitationRequest):
         # Release the claim so a transient write failure does not strand the
         # invitation in a state where it can never be accepted.
         await db.invitations.update_one(
-            {"id": invitation["id"]},
+            {"id": invitation["id"], "organizationId": invitation["organizationId"]},
             {"$set": {"status": "pending"}},
         )
         raise

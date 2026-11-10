@@ -49,13 +49,18 @@ async def add_tags(
 
     cleaned = list(set(t.strip().lower() for t in tags if t.strip()))
     await db.contracts.update_one(
-        {"id": contract_id},
+        {"id": contract_id, "organizationId": current_user["organizationId"]},
         {
             "$addToSet": {"tags": {"$each": cleaned}},
             "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()},
         },
     )
-    updated = await db.contracts.find_one({"id": contract_id}, {"_id": 0, "tags": 1})
+    updated = await db.contracts.find_one(
+        {"id": contract_id, "organizationId": current_user["organizationId"]},
+        {"_id": 0, "tags": 1},
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Contract not found")
     return {"tags": updated.get("tags", [])}
 
 
@@ -76,13 +81,18 @@ async def remove_tag(
     require_contract_write(current_user, contract, "contract_edit")
 
     await db.contracts.update_one(
-        {"id": contract_id},
+        {"id": contract_id, "organizationId": current_user["organizationId"]},
         {
             "$pull": {"tags": tag},
             "$set": {"updatedAt": datetime.now(timezone.utc).isoformat()},
         },
     )
-    updated = await db.contracts.find_one({"id": contract_id}, {"_id": 0, "tags": 1})
+    updated = await db.contracts.find_one(
+        {"id": contract_id, "organizationId": current_user["organizationId"]},
+        {"_id": 0, "tags": 1},
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Contract not found")
     return {"tags": updated.get("tags", [])}
 
 
@@ -103,7 +113,7 @@ async def update_category(
     require_contract_write(current_user, contract, "contract_edit")
 
     await db.contracts.update_one(
-        {"id": contract_id},
+        {"id": contract_id, "organizationId": current_user["organizationId"]},
         {
             "$set": {
                 "category": category,
