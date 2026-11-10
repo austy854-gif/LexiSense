@@ -98,7 +98,7 @@ requests==2.34.2
 requests-oauthlib==2.0.0
 resend==2.50.1
 rich==14.3.3
-rpds-py==0.30.0
+rpds-py==2026.9.1
 rsa==4.9.1
 s3transfer==0.19.3
 sentry-sdk==2.73.0
