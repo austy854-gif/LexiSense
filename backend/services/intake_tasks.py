@@ -8,6 +8,7 @@ import logging
 import base64
 import hmac
 import hashlib
+import json
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from celery import shared_task
@@ -78,6 +79,51 @@ def extract_text_from_docx(docx_content: bytes) -> str:
         return ""
 
 
+class IntakeAttachmentUploadError(RuntimeError):
+    """Storing an intake's attachments failed; the Celery task should retry.
+
+    Only the original webhook payload carries the attachment bytes, so a failed
+    upload is retried by re-running the same task (same payload), never by the
+    periodic retry, which only reprocesses intakes whose files are stored.
+    """
+
+
+def _intake_idempotency_key(organization_id: str, payload: Dict[str, Any]) -> str:
+    """Stable key for one inbound email so task retries and webhook redeliveries
+    reuse a single intake record."""
+    email_id = (payload.get("data") or {}).get("id")
+    if email_id:
+        basis = f"resend:{email_id}"
+    else:
+        basis = (
+            "payload:"
+            + hashlib.sha256(
+                json.dumps(payload, sort_keys=True, default=str).encode()
+            ).hexdigest()
+        )
+    return hashlib.sha256(f"{organization_id}:{basis}".encode()).hexdigest()
+
+
+async def _rollback_uploads(storage_keys: List[str]) -> List[str]:
+    """Purge objects stored for an intake whose upload batch failed.
+
+    Returns the keys that could not be purged so they stay recorded on the
+    intake (``orphaned_storage_keys``) instead of leaking silently.
+    """
+    from services.storage_service import purge_uploaded_object
+
+    retained = []
+    for key in storage_keys:
+        try:
+            purged = await purge_uploaded_object(key)
+        except Exception as exc:  # rollback must not mask the upload failure
+            logger.error("Intake upload rollback raised (%s)", type(exc).__name__)
+            purged = False
+        if not purged:
+            retained.append(key)
+    return retained
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def process_resend_webhook(self, payload: Dict[str, Any]):
     """Process incoming Resend webhook for contract intake."""
@@ -90,24 +136,40 @@ def process_resend_webhook(self, payload: Dict[str, Any]):
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_process_resend_webhook_async(payload))
-        loop.close()
+        try:
+            result = loop.run_until_complete(
+                _process_resend_webhook_async(
+                    payload, final_attempt=self.request.retries >= self.max_retries
+                )
+            )
+        finally:
+            loop.close()
         return result
     except Exception as e:
         logger.error(f"Resend webhook processing failed: {e}")
         raise self.retry(exc=e)
 
 
-async def _process_resend_webhook_async(payload: Dict[str, Any]):
-    """Async implementation of Resend webhook processing."""
+async def _process_resend_webhook_async(
+    payload: Dict[str, Any], final_attempt: bool = False
+):
+    """Async implementation of Resend webhook processing.
+
+    The intake record is persisted before any attachment is uploaded. If an
+    upload fails, objects already stored for this email are purged (any that
+    cannot be purged are recorded on the intake), the intake is marked
+    ``failed`` and :class:`IntakeAttachmentUploadError` is raised so the Celery
+    task retries with the original payload. On the final attempt the intake is
+    moved to ``manual_review`` instead of raising.
+    """
     from models.agentic import ContractIntake, IntakeChannel, IntakeStatus
-    from services.ai_service import classify_intake_contract
     from services.storage_service import upload_file_to_s3
 
     db = get_db()
     if db is None:
         return {"status": "error", "message": "Database not available"}
 
+    intake = None
     try:
         # The Svix signature is verified on the raw request body by the
         # /agentic/intake/webhook route before this task is queued; the
@@ -133,6 +195,25 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
         if not organization_id:
             return {"status": "error", "message": "Could not resolve organization"}
 
+        idempotency_key = _intake_idempotency_key(organization_id, payload)
+        existing = await db.contract_intakes.find_one(
+            {"organizationId": organization_id, "idempotency_key": idempotency_key},
+            {"_id": 0},
+        )
+        if existing and existing.get("status") != IntakeStatus.FAILED.value:
+            # Webhook redelivery or a task retry after the intake moved on.
+            return {"status": "duplicate", "intake_id": existing["id"]}
+        if existing and existing.get("attachments_stored"):
+            # Files are already stored; only the processing step failed.
+            # Claim it so a concurrent retry pass cannot process it twice.
+            claimed = await db.contract_intakes.update_one(
+                {"id": existing["id"], "status": IntakeStatus.FAILED.value},
+                {"$set": {"status": IntakeStatus.RECEIVED.value}},
+            )
+            if not claimed.modified_count:
+                return {"status": "duplicate", "intake_id": existing["id"]}
+            return await _process_stored_intake(ContractIntake(**existing), db)
+
         # Create intake record
         intake = ContractIntake(
             organizationId=organization_id,
@@ -146,6 +227,11 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
             },
             status=IntakeStatus.RECEIVED,
         )
+        if existing:
+            # A previous attempt failed while uploading: reuse its record.
+            intake.id = existing["id"]
+            intake.createdAt = existing.get("createdAt", intake.createdAt)
+            intake.received_at = existing.get("received_at", intake.received_at)
 
         # Billing gate BEFORE storing attachments or calling the AI classifier:
         # an emailed contract is an upload plus AI work, so orgs without AI
@@ -163,18 +249,29 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
             intake_doc = intake.model_dump()
             intake_doc.update(
                 {
+                    "idempotency_key": idempotency_key,
+                    "attachments_stored": False,
                     "error_message": "Not processed: the organization's plan does not include uploads or AI analysis right now.",
                     "processing_skip_reason": "no_ai_entitlement",
                     "playbook_analysis_status": SKIPPED_NO_ENTITLEMENT,
                     "processing_completed_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
-            await db.contract_intakes.insert_one(intake_doc)
+            await _save_intake(db, intake_doc, replace=bool(existing))
             return {
                 "status": SKIPPED_NO_ENTITLEMENT,
                 "intake_id": intake.id,
                 "reason": "no_ai_entitlement",
             }
+
+        # Persist the intake before uploading so an upload failure can never
+        # drop the email: the record exists (and is retried) either way.
+        intake_doc = intake.model_dump()
+        intake_doc.update(
+            {"idempotency_key": idempotency_key, "attachments_stored": False}
+        )
+        if not await _save_intake(db, intake_doc, replace=bool(existing)):
+            return {"status": "duplicate", "intake_id": intake.id}
 
         # Process attachments
         processed_attachments = []
@@ -205,13 +302,22 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
             ]:
                 extracted_text = extract_text_from_docx(file_content)
 
-            # Upload to S3
-            storage_key = await upload_file_to_s3(
-                file_content=file_content,
-                filename=filename,
-                organization_id=organization_id,
-                content_type=content_type,
-            )
+            # Upload to S3. Any failure rolls back this email's stored objects.
+            try:
+                storage_key = await upload_file_to_s3(
+                    file_content=file_content,
+                    filename=filename,
+                    organization_id=organization_id,
+                    content_type=content_type,
+                )
+            except Exception as exc:
+                return await _fail_attachment_upload(
+                    db,
+                    intake,
+                    [a["storage_key"] for a in processed_attachments],
+                    exc,
+                    final_attempt,
+                )
 
             processed_attachments.append(
                 {
@@ -227,10 +333,7 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
 
         intake.attachments = processed_attachments
 
-        # Save initial intake record
-        await db.contract_intakes.insert_one(intake.model_dump())
-
-        # If no attachments, mark as failed
+        # If no attachments, mark as failed (nothing stored, nothing to retry)
         if not processed_attachments:
             await db.contract_intakes.update_one(
                 {"id": intake.id},
@@ -249,6 +352,131 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
                 "message": "No valid attachments",
                 "intake_id": intake.id,
             }
+
+        # Attachments are stored and referenced by the persisted intake, so a
+        # later processing failure is recoverable by the periodic retry.
+        await db.contract_intakes.update_one(
+            {"id": intake.id},
+            {
+                "$set": {
+                    "attachments": processed_attachments,
+                    "attachments_stored": True,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        return await _process_stored_intake(intake, db)
+
+    except IntakeAttachmentUploadError:
+        raise
+    except Exception as e:
+        logger.error(f"Intake processing error: {e}")
+        if intake is not None:
+            await _mark_intake_failed(db, intake.id, str(e))
+        return {"status": "error", "message": str(e)}
+
+
+async def _save_intake(db, intake_doc: dict, replace: bool) -> bool:
+    """Insert a new intake, or reset the failed record being retried.
+
+    Returns False if a concurrent delivery already created the record.
+    """
+    from pymongo.errors import DuplicateKeyError
+
+    if replace:
+        doc = {k: v for k, v in intake_doc.items() if k not in ("id", "createdAt")}
+        doc["updatedAt"] = datetime.now(timezone.utc).isoformat()
+        await db.contract_intakes.update_one(
+            {"id": intake_doc["id"], "status": "failed"}, {"$set": doc}
+        )
+        return True
+    try:
+        await db.contract_intakes.insert_one(dict(intake_doc))
+    except DuplicateKeyError:
+        return False
+    return True
+
+
+async def _mark_intake_failed(db, intake_id: str, message: str) -> None:
+    """Record a processing failure on a persisted intake."""
+    from models.agentic import IntakeStatus
+
+    await db.contract_intakes.update_one(
+        {"id": intake_id},
+        {
+            "$set": {
+                "status": IntakeStatus.FAILED,
+                "error_message": message,
+                "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+
+
+async def _fail_attachment_upload(
+    db, intake, stored_keys: List[str], exc: Exception, final_attempt: bool
+):
+    """Roll back a failed upload batch and hand the intake to the task retry."""
+    from models.agentic import IntakeStatus
+
+    retained = await _rollback_uploads(stored_keys)
+    error_type = type(exc).__name__
+    now = datetime.now(timezone.utc).isoformat()
+    update = {
+        "$set": {
+            "status": (
+                IntakeStatus.MANUAL_REVIEW if final_attempt else IntakeStatus.FAILED
+            ),
+            "attachments": [],
+            "attachments_stored": False,
+            "error_message": (
+                f"Attachment upload failed ({error_type}); "
+                + (
+                    "retries exhausted, the email must be resent."
+                    if final_attempt
+                    else "retrying."
+                )
+            ),
+            "processing_completed_at": now,
+            "updatedAt": now,
+        },
+        "$inc": {"upload_attempts": 1},
+    }
+    if retained:
+        update["$addToSet"] = {"orphaned_storage_keys": {"$each": retained}}
+        logger.error(
+            "Intake upload rollback left %d object(s); recorded on intake %s",
+            len(retained),
+            intake.id,
+        )
+    await db.contract_intakes.update_one({"id": intake.id}, update)
+    if final_attempt:
+        logger.error(
+            "Intake %s attachment upload failed on the final attempt (%s)",
+            intake.id,
+            error_type,
+        )
+        return {
+            "status": "error",
+            "message": "Attachment upload failed",
+            "intake_id": intake.id,
+        }
+    raise IntakeAttachmentUploadError(
+        f"Attachment upload failed for intake {intake.id} ({error_type})"
+    ) from exc
+
+
+async def _process_stored_intake(intake, db):
+    """Classify, route and create the contract for an intake whose
+    attachments are already stored. Safe to rerun after a failure."""
+    from models.agentic import IntakeStatus
+    from services.ai_service import classify_intake_contract
+
+    try:
+        organization_id = intake.organizationId
+        from_email = intake.source_email
+        subject = intake.source_metadata.get("subject", "")
+        processed_attachments = intake.attachments
 
         # Update status to processing
         await db.contract_intakes.update_one(
@@ -326,7 +554,10 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
         )
 
         # Create contract record from intake (optional - could wait for human review)
-        contract_id = await _create_contract_from_intake(intake, classification, db)
+        # A rerun after a late failure must not create a second contract.
+        contract_id = intake.created_contract_id or await _create_contract_from_intake(
+            intake, classification, db
+        )
 
         if contract_id:
             await db.contract_intakes.update_one(
@@ -341,23 +572,10 @@ async def _process_resend_webhook_async(payload: Dict[str, Any]):
             "classified_type": classification.get("contract_type"),
             "confidence": classification.get("confidence"),
         }
-
     except Exception as e:
         logger.error(f"Intake processing error: {e}")
-        if "intake" in locals():
-            await db.contract_intakes.update_one(
-                {"id": intake.id},
-                {
-                    "$set": {
-                        "status": IntakeStatus.FAILED,
-                        "error_message": str(e),
-                        "processing_completed_at": datetime.now(
-                            timezone.utc
-                        ).isoformat(),
-                    }
-                },
-            )
-        return {"status": "error", "message": str(e)}
+        await _mark_intake_failed(db, intake.id, str(e))
+        return {"status": "error", "message": str(e), "intake_id": intake.id}
 
 
 async def _resolve_organization_from_sender(sender_email: str, db) -> Optional[str]:
@@ -555,16 +773,58 @@ def retry_failed_intakes(self):
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_retry_failed_intakes_async())
-        loop.close()
+        try:
+            result = loop.run_until_complete(_retry_failed_intakes_async())
+        finally:
+            loop.close()
         return result
     except Exception as e:
         logger.error(f"Intake retry failed: {e}")
         raise self.retry(exc=e)
 
 
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def reprocess_intake(self, intake_id: str):
+    """Reprocess a failed intake from its stored attachments."""
+    if get_db() is None:
+        logger.error("Database not initialized for intake reprocessing")
+        return {"status": "error", "message": "Database not initialized"}
+
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(_reprocess_intake_async(intake_id))
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.error(f"Intake reprocessing failed: {e}")
+        raise self.retry(exc=e)
+
+
+async def _reprocess_intake_async(intake_id: str):
+    """Run classification/routing again for an intake claimed by the retry pass."""
+    from models.agentic import ContractIntake
+
+    db = get_db()
+    if db is None:
+        return {"status": "error", "message": "Database not available"}
+    doc = await db.contract_intakes.find_one(
+        {"id": intake_id, "status": "received", "attachments_stored": {"$ne": False}},
+        {"_id": 0},
+    )
+    if not doc or not doc.get("attachments"):
+        return {"status": "skipped", "intake_id": intake_id}
+    return await _process_stored_intake(ContractIntake(**doc), db)
+
+
 async def _retry_failed_intakes_async():
-    """Async implementation of failed intake retry."""
+    """Async implementation of failed intake retry.
+
+    Only intakes whose attachments are stored are reprocessed here, from the
+    stored files. Intakes that failed while uploading have no stored bytes;
+    their original task retries with the webhook payload instead.
+    """
     db = get_db()
     if db is None:
         return {"status": "error", "message": "Database not available"}
@@ -574,14 +834,20 @@ async def _retry_failed_intakes_async():
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
 
         failed_intakes = await db.contract_intakes.find(
-            {"status": "failed", "createdAt": {"$gte": cutoff}}
+            {
+                "status": "failed",
+                "createdAt": {"$gte": cutoff},
+                "attachments_stored": {"$ne": False},
+                "attachments.0.storage_key": {"$exists": True},
+            },
+            {"_id": 0, "id": 1},
         ).to_list(50)
 
         retried = 0
         for intake in failed_intakes:
-            # Reset status and reprocess
-            await db.contract_intakes.update_one(
-                {"id": intake["id"]},
+            # Claim atomically so overlapping retry passes queue it once.
+            claimed = await db.contract_intakes.update_one(
+                {"id": intake["id"], "status": "failed"},
                 {
                     "$set": {
                         "status": "received",
@@ -591,18 +857,17 @@ async def _retry_failed_intakes_async():
                     }
                 },
             )
-
-            # Re-process
-            payload = {
-                "data": {
-                    "from": intake.get("source_email"),
-                    "subject": intake.get("source_metadata", {}).get("subject", ""),
-                    "attachments": intake.get("attachments", []),
-                    "id": intake.get("source_metadata", {}).get("resend_id"),
-                },
-                "created_at": intake.get("source_metadata", {}).get("received_at"),
-            }
-            process_resend_webhook.delay(payload)
+            if not claimed.modified_count:
+                continue
+            try:
+                reprocess_intake.delay(intake["id"])
+            except Exception as exc:
+                await _mark_intake_failed(
+                    db,
+                    intake["id"],
+                    f"Retry could not be queued ({type(exc).__name__})",
+                )
+                raise
             retried += 1
 
         logger.info(f"Queued {retried} failed intakes for retry")

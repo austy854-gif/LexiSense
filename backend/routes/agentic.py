@@ -132,6 +132,17 @@ async def _create_indexes():
                 logger.info(f"Created indexes for {collection_name}")
             except Exception as e:
                 logger.warning(f"Index creation warning for {collection_name}: {e}")
+    # One intake per inbound email: task retries and webhook redeliveries
+    # reuse the record instead of creating duplicates.
+    try:
+        await db.contract_intakes.create_index(
+            "idempotency_key",
+            unique=True,
+            partialFilterExpression={"idempotency_key": {"$type": "string"}},
+            name="uq_contract_intakes_idempotency",
+        )
+    except Exception as e:
+        logger.warning(f"Index creation warning for contract_intakes: {e}")
 
 
 # =============================================================================
