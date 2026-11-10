@@ -478,24 +478,77 @@ async def _rollback_failed_upload(
             logger.exception("Upload rollback: failed to release trial upload slot")
 
 
+def _insert_not_applied(exc: Exception) -> bool:
+    """True when an insert error proves the write was never applied.
+
+    The server rejected the write (an ``OperationFailure`` such as a validation
+    error), no server was ever selected, or the document could not be encoded.
+    A write-concern error is excluded: the write may have been applied. A
+    network error or timeout after sending is ambiguous.
+    """
+    from pymongo.errors import (
+        DocumentTooLarge,
+        InvalidDocument,
+        OperationFailure,
+        ServerSelectionTimeoutError,
+        WriteConcernError,
+    )
+
+    if isinstance(exc, WriteConcernError):
+        return False
+    return isinstance(
+        exc,
+        (
+            OperationFailure,
+            ServerSelectionTimeoutError,
+            InvalidDocument,
+            DocumentTooLarge,
+        ),
+    )
+
+
+def _log_unverified_upload(contract_doc: dict) -> None:
+    """Structured record of an upload whose outcome is unknown, to alert on and
+    reconcile from (the object and quota slot are kept)."""
+    logger.error(
+        "Could not confirm whether contract %s was saved; keeping storage object "
+        "%s and the quota slot for reconciliation",
+        contract_doc.get("id"),
+        contract_doc.get("storageKey"),
+        extra={
+            "event": "upload_unverified",
+            "contract_id": contract_doc.get("id"),
+            "organization_id": contract_doc.get("organizationId"),
+            "storage_key": contract_doc.get("storageKey"),
+        },
+    )
+
+
 async def _persist_contract(contract_doc: dict) -> Optional[bool]:
     """Insert an uploaded contract and report whether the write committed.
 
     Returns True when the record exists, False when it definitely does not, and
-    None when neither can be established. An insert error is not proof that
-    nothing was written (a retried write can commit and still raise), so the
-    record is looked up before the caller rolls anything back. With an unknown
-    outcome the caller must keep the stored object and the quota slot: deleting
-    them could orphan a committed contract or refund an upload that counted.
+    None when neither can be established. A server rejection proves nothing was
+    written. Any other error (a timeout, a dropped connection, a duplicate-key
+    error from a retried write) may hide a write that committed or is still in
+    flight, so the record is looked up, and finding nothing is still not proof.
+    With an unknown outcome the caller must keep the stored object and the
+    quota slot: deleting them could orphan a committed contract.
     """
+    from pymongo.errors import DuplicateKeyError
+
     try:
         await db.contracts.insert_one(contract_doc)
         return True
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "Contract insert raised for %s; verifying whether it committed",
             contract_doc.get("id"),
         )
+        error = exc
+    duplicate = isinstance(error, DuplicateKeyError)
+    if _insert_not_applied(error) and not duplicate:
+        return False
     try:
         found = await db.contracts.find_one(
             {
@@ -505,21 +558,16 @@ async def _persist_contract(contract_doc: dict) -> Optional[bool]:
             {"_id": 0, "id": 1},
         )
     except Exception:
-        # Structured fields so operators can alert on and reconcile these.
-        logger.exception(
-            "Could not verify contract %s after a failed insert; keeping storage "
-            "object %s and the quota slot for reconciliation",
-            contract_doc.get("id"),
-            contract_doc.get("storageKey"),
-            extra={
-                "event": "upload_unverified",
-                "contract_id": contract_doc.get("id"),
-                "organization_id": contract_doc.get("organizationId"),
-                "storage_key": contract_doc.get("storageKey"),
-            },
-        )
-        return None
-    return found is not None
+        logger.exception("Lookup of contract %s failed", contract_doc.get("id"))
+        found = None
+        duplicate = False
+    if found is not None:
+        return True
+    if duplicate:
+        # Rejected by a unique index and our record is absent: not written.
+        return False
+    _log_unverified_upload(contract_doc)
+    return None
 
 
 async def _after_upload_committed(current_user: dict, contract) -> None:

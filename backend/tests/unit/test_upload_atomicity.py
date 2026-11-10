@@ -5,6 +5,7 @@ upload. An insert whose outcome cannot be established keeps both the object
 and the slot."""
 
 import pytest
+from pymongo.errors import NetworkTimeout, WriteError
 
 from routes import contracts as contracts_route
 from tests.unit.conftest import API_PREFIX, auth_headers, make_user
@@ -72,16 +73,25 @@ def _patch_collection(monkeypatch, db, name, method, fake):
     monkeypatch.setattr(cls, method, wrapper)
 
 
-def _fail_inserts(monkeypatch, db, *, commit=False, fail_on=None):
-    """Make contract inserts raise; ``commit`` writes the record first (a retried
-    write that committed), ``fail_on`` limits failures to those filenames."""
+def _rejected():
+    return WriteError("Document failed validation", code=121)
+
+
+def _ambiguous():
+    return NetworkTimeout("timed out waiting for the insert reply")
+
+
+def _fail_inserts(monkeypatch, db, *, commit=False, fail_on=None, error=_rejected):
+    """Make contract inserts raise ``error()`` (by default a server rejection,
+    which proves nothing was written); ``commit`` writes the record first (a
+    retried write that committed), ``fail_on`` limits failures to those files."""
 
     async def fake(original, self, doc, *args, **kwargs):
         if fail_on is not None and doc.get("fileName") not in fail_on:
             return await original(self, doc, *args, **kwargs)
         if commit:
             await original(self, doc, *args, **kwargs)
-        raise RuntimeError("connection reset during insert")
+        raise error()
 
     _patch_collection(monkeypatch, db, "contracts", "insert_one", fake)
 
@@ -124,7 +134,7 @@ class TestSingleUpload:
         self, client, db, user, pipeline, monkeypatch
     ):
         """An insert that committed but raised is treated as saved."""
-        _fail_inserts(monkeypatch, db, commit=True)
+        _fail_inserts(monkeypatch, db, commit=True, error=_ambiguous)
         r = await _upload(client, user)
         assert r.status_code == 200, r.text
         assert await db.contracts.count_documents({"id": r.json()["id"]}) == 1
@@ -134,7 +144,7 @@ class TestSingleUpload:
         self, client, db, user, pipeline, monkeypatch
     ):
         """An unknown insert outcome keeps the stored object and the slot."""
-        _fail_inserts(monkeypatch, db)
+        _fail_inserts(monkeypatch, db, error=_ambiguous)
 
         async def down(original, self, *args, **kwargs):
             raise RuntimeError("primary unavailable")
@@ -178,6 +188,32 @@ class TestSingleUpload:
         assert await db.contracts.count_documents({"id": r.json()["id"]}) == 1
         assert pipeline["purged"] == [] and pipeline["released"] == []
 
+    async def test_ambiguous_error_with_no_record_is_unconfirmed(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        """A timeout may hide an insert still in flight: an empty lookup is not
+        proof, so the object and slot are kept and the case is flagged."""
+        _fail_inserts(monkeypatch, db, error=_ambiguous)
+        r = await _upload(client, user)
+        assert r.status_code == 500
+        assert r.json()["detail"] == contracts_route.UPLOAD_UNCONFIRMED_MESSAGE
+        assert pipeline["purged"] == [] and pipeline["released"] == []
+
+    async def test_duplicate_key_without_our_record_is_a_failure(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        """A unique-index rejection with our record absent means not written."""
+        from pymongo.errors import DuplicateKeyError
+
+        _fail_inserts(
+            monkeypatch, db, error=lambda: DuplicateKeyError("E11000", code=11000)
+        )
+        r = await _upload(client, user)
+        assert r.status_code == 500
+        assert "Nothing was saved" in r.json()["detail"]
+        assert pipeline["purged"] == pipeline["uploaded"]
+        assert pipeline["released"] == [user["organizationId"]]
+
 
 class TestBulkUpload:
     """Per-file rollback behaviour of ``POST /contracts/bulk``."""
@@ -201,7 +237,7 @@ class TestBulkUpload:
         self, client, db, user, pipeline, monkeypatch
     ):
         """An unknown outcome is reported per file and nothing is rolled back."""
-        _fail_inserts(monkeypatch, db)
+        _fail_inserts(monkeypatch, db, error=_ambiguous)
 
         async def down(original, self, *args, **kwargs):
             raise RuntimeError("primary unavailable")
