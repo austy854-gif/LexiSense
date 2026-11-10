@@ -14,6 +14,7 @@ DOC = b"This Agreement is made between A and B."
 
 @pytest.fixture
 def pipeline(monkeypatch):
+    """Stub storage, quota, extraction, analysis and audit; record side effects."""
     calls = {"released": [], "purged": [], "uploaded": []}
 
     async def _extract(content, mime):
@@ -52,6 +53,7 @@ def pipeline(monkeypatch):
 
 @pytest.fixture
 async def user(db, org_id):
+    """A persisted uploader in the test org."""
     u = make_user(org_id, role="user")
     await db.users.insert_one(dict(u))
     return u
@@ -85,6 +87,7 @@ def _fail_inserts(monkeypatch, db, *, commit=False, fail_on=None):
 
 
 async def _upload(client, user, name="msa.txt"):
+    """POST one file to the single-upload endpoint."""
     return await client.post(
         f"{API_PREFIX}/contracts",
         headers=auth_headers(user),
@@ -94,6 +97,7 @@ async def _upload(client, user, name="msa.txt"):
 
 
 async def _bulk(client, user, names):
+    """POST the named files to the bulk-upload endpoint."""
     return await client.post(
         f"{API_PREFIX}/contracts/bulk",
         headers=auth_headers(user),
@@ -102,9 +106,12 @@ async def _bulk(client, user, names):
 
 
 class TestSingleUpload:
+    """Rollback and follow-up behaviour of ``POST /contracts``."""
+
     async def test_storage_ok_insert_fails_purges_and_refunds_once(
         self, client, db, user, pipeline, monkeypatch
     ):
+        """Storage write succeeded, insert did not commit: purge and refund once."""
         _fail_inserts(monkeypatch, db)
         r = await _upload(client, user)
         assert r.status_code == 500
@@ -116,6 +123,7 @@ class TestSingleUpload:
     async def test_insert_that_committed_despite_error_is_kept(
         self, client, db, user, pipeline, monkeypatch
     ):
+        """An insert that committed but raised is treated as saved."""
         _fail_inserts(monkeypatch, db, commit=True)
         r = await _upload(client, user)
         assert r.status_code == 200, r.text
@@ -125,6 +133,7 @@ class TestSingleUpload:
     async def test_unverifiable_insert_keeps_object_and_slot(
         self, client, db, user, pipeline, monkeypatch
     ):
+        """An unknown insert outcome keeps the stored object and the slot."""
         _fail_inserts(monkeypatch, db)
 
         async def down(original, self, *args, **kwargs):
@@ -139,6 +148,8 @@ class TestSingleUpload:
     async def test_audit_failure_does_not_fail_or_roll_back(
         self, client, db, user, pipeline, monkeypatch, caplog
     ):
+        """An audit failure after the insert is logged only."""
+
         async def audit_down(**kwargs):
             raise RuntimeError("audit store down")
 
@@ -152,6 +163,8 @@ class TestSingleUpload:
     async def test_post_insert_error_does_not_fail_or_roll_back(
         self, client, db, user, pipeline, monkeypatch
     ):
+        """A post-insert lookup error does not undo the saved upload."""
+
         async def lookup_down(original, self, flt=None, *args, **kwargs):
             projection = args[0] if args else kwargs.get("projection")
             if projection == {"_id": 0, "email": 1}:
@@ -167,9 +180,12 @@ class TestSingleUpload:
 
 
 class TestBulkUpload:
+    """Per-file rollback behaviour of ``POST /contracts/bulk``."""
+
     async def test_partial_failure_rolls_back_only_the_failed_file(
         self, client, db, user, pipeline, monkeypatch
     ):
+        """Only the file whose insert failed is purged and refunded."""
         _fail_inserts(monkeypatch, db, fail_on={"b.txt"})
         r = await _bulk(client, user, ["a.txt", "b.txt", "c.txt"])
         assert r.status_code == 200, r.text
@@ -184,6 +200,7 @@ class TestBulkUpload:
     async def test_unverifiable_insert_is_reported_without_rollback(
         self, client, db, user, pipeline, monkeypatch
     ):
+        """An unknown outcome is reported per file and nothing is rolled back."""
         _fail_inserts(monkeypatch, db)
 
         async def down(original, self, *args, **kwargs):
@@ -202,6 +219,8 @@ class TestBulkUpload:
     async def test_audit_failure_keeps_every_saved_file(
         self, client, db, user, pipeline, monkeypatch
     ):
+        """Audit failures never fail a saved bulk file."""
+
         async def audit_down(**kwargs):
             raise RuntimeError("audit store down")
 
@@ -209,3 +228,23 @@ class TestBulkUpload:
         r = await _bulk(client, user, ["a.txt", "b.txt"])
         assert r.json()["successful"] == 2
         assert pipeline["purged"] == [] and pipeline["released"] == []
+
+
+async def test_confirmed_failure_also_deletes_a_late_committing_record(
+    client, db, user, pipeline, monkeypatch
+):
+    """The rollback passes the contract id, so its org-scoped delete removes a
+    write that the server applies after the insert call already failed."""
+    deleted = []
+    _fail_inserts(monkeypatch, db)
+
+    async def spy_delete(original, self, flt, *args, **kwargs):
+        deleted.append(flt)
+        return await original(self, flt, *args, **kwargs)
+
+    _patch_collection(monkeypatch, db, "contracts", "delete_one", spy_delete)
+    r = await _upload(client, user)
+    assert r.status_code == 500
+    assert len(deleted) == 1
+    assert deleted[0]["organizationId"] == user["organizationId"]
+    assert deleted[0]["id"]

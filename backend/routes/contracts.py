@@ -505,11 +505,18 @@ async def _persist_contract(contract_doc: dict) -> Optional[bool]:
             {"_id": 0, "id": 1},
         )
     except Exception:
+        # Structured fields so operators can alert on and reconcile these.
         logger.exception(
             "Could not verify contract %s after a failed insert; keeping storage "
             "object %s and the quota slot for reconciliation",
             contract_doc.get("id"),
             contract_doc.get("storageKey"),
+            extra={
+                "event": "upload_unverified",
+                "contract_id": contract_doc.get("id"),
+                "organization_id": contract_doc.get("organizationId"),
+                "storage_key": contract_doc.get("storageKey"),
+            },
         )
         return None
     return found is not None
@@ -562,6 +569,7 @@ async def upload_contract(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=trial_message)
 
     storage_key = None
+    contract_id: Optional[str] = None
     committed: Optional[bool] = False
     try:
         storage_key = await upload_file_to_s3(
@@ -621,6 +629,7 @@ async def upload_contract(
         )
 
         contract_doc = contract.model_dump()
+        contract_id = contract.id
         # Attach AI error onto the stored document so the UI can render a
         # recoverable state instead of silently missing analysis.
         if ai_error:
@@ -645,7 +654,10 @@ async def upload_contract(
         )
     if not committed:
         # The insert never committed: purge the object and refund the slot once.
-        await _rollback_failed_upload(current_user["organizationId"], storage_key, None)
+        # The org-scoped delete also removes a write that commits late.
+        await _rollback_failed_upload(
+            current_user["organizationId"], storage_key, contract_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Upload failed. Nothing was saved. Please retry.",
@@ -744,6 +756,7 @@ async def bulk_upload_contracts(
 
             committed: Optional[bool] = False
             storage_key = None
+            contract_id: Optional[str] = None
             try:
                 storage_key = await upload_file_to_s3(
                     file_content,
@@ -809,6 +822,7 @@ async def bulk_upload_contracts(
                 )
 
                 contract_doc = contract.model_dump()
+                contract_id = contract.id
                 if ai_error:
                     contract_doc["aiAnalysisError"] = ai_error
                     contract_doc["aiAnalysisStatus"] = "failed"
@@ -821,7 +835,7 @@ async def bulk_upload_contracts(
                 # outcome keeps both so a committed contract is never orphaned.
                 if committed is False:
                     await _rollback_failed_upload(
-                        current_user["organizationId"], storage_key, None
+                        current_user["organizationId"], storage_key, contract_id
                     )
             if committed is None:
                 results["failed"].append(
