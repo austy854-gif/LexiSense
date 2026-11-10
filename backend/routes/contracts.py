@@ -483,18 +483,19 @@ def _insert_not_applied(exc: Exception) -> bool:
 
     The server rejected the write (an ``OperationFailure`` such as a validation
     error), no server was ever selected, or the document could not be encoded.
-    A write-concern error is excluded: the write may have been applied. A
-    network error or timeout after sending is ambiguous.
+    A write-concern error and an execution timeout are excluded: the write may
+    have been applied. A network error or timeout after sending is ambiguous.
     """
     from pymongo.errors import (
         DocumentTooLarge,
+        ExecutionTimeout,
         InvalidDocument,
         OperationFailure,
         ServerSelectionTimeoutError,
         WriteConcernError,
     )
 
-    if isinstance(exc, WriteConcernError):
+    if isinstance(exc, (WriteConcernError, ExecutionTimeout)):
         return False
     return isinstance(
         exc,

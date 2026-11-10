@@ -213,6 +213,22 @@ class TestSingleUpload:
         assert r.json()["detail"] == contracts_route.UPLOAD_UNCONFIRMED_MESSAGE
         assert pipeline["purged"] == [] and pipeline["released"] == []
 
+    async def test_execution_timeout_with_no_record_is_unconfirmed(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        """An execution timeout (timeoutMS) can follow server-side execution."""
+        from pymongo.errors import ExecutionTimeout
+
+        _fail_inserts(
+            monkeypatch,
+            db,
+            error=lambda: ExecutionTimeout("operation exceeded time limit", code=50),
+        )
+        r = await _upload(client, user)
+        assert r.status_code == 500
+        assert r.json()["detail"] == contracts_route.UPLOAD_UNCONFIRMED_MESSAGE
+        assert pipeline["purged"] == [] and pipeline["released"] == []
+
     async def test_duplicate_key_without_our_record_is_a_failure(
         self, client, db, user, pipeline, monkeypatch
     ):
@@ -322,6 +338,7 @@ async def test_bulk_cancellation_during_insert_does_not_roll_back(
             contractType="General",
             current_user={**user, "sub": user["id"]},
         )
+    assert len(pipeline["uploaded"]) == 1  # the insert was reached
     assert pipeline["purged"] == [] and pipeline["released"] == []
 
 
