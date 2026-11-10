@@ -93,6 +93,7 @@ def storage(monkeypatch):
     monkeypatch.setattr(storage_service, "purge_uploaded_object", purge)
     monkeypatch.setattr(intake_tasks, "_resolve_organization_from_sender", resolve)
     monkeypatch.setattr(ai_service, "classify_intake_contract", classify)
+    state["real_create_contract"] = intake_tasks._create_contract_from_intake
     monkeypatch.setattr(intake_tasks, "_create_contract_from_intake", create_contract)
     state["contracts"] = contracts
     return state
@@ -250,9 +251,28 @@ async def test_periodic_retry_reprocesses_stored_intake_only(
     assert doc["status"] == "routed" and doc["created_contract_id"] == "c-1"
 
 
-async def test_reprocess_does_not_create_a_second_contract(task_db, storage):
+async def test_late_failure_after_contract_insert_does_not_duplicate_contract(
+    task_db, storage, monkeypatch
+):
+    """Queueing follow-up work fails after the contract is inserted; the retry
+    reuses the reserved contract instead of creating a second one."""
     from models.agentic import ContractIntake, IntakeChannel
+    from services import risk_tasks
 
+    monkeypatch.setattr(
+        intake_tasks,
+        "_create_contract_from_intake",
+        storage["real_create_contract"],
+    )
+    queued = []
+    broker = {"down": True}
+
+    def assess(contract_id, **kwargs):
+        if broker["down"]:
+            raise RuntimeError("broker unavailable")
+        queued.append(contract_id)
+
+    monkeypatch.setattr(risk_tasks.assess_contract_risk, "delay", assess)
     intake = ContractIntake(
         organizationId=ORG,
         channel=IntakeChannel.EMAIL,
@@ -260,9 +280,39 @@ async def test_reprocess_does_not_create_a_second_contract(task_db, storage):
         attachments=[
             {"filename": "a.txt", "mime_type": "text/plain", "storage_key": "k"}
         ],
-        created_contract_id="c-existing",
     )
-    await task_db.contract_intakes.insert_one(intake.model_dump())
-    out = await intake_tasks._process_stored_intake(intake, task_db)
-    assert out["contract_id"] == "c-existing"
-    assert storage["contracts"] == []
+    await task_db.contract_intakes.insert_one(
+        {**intake.model_dump(), "attachments_stored": True}
+    )
+
+    failed = await intake_tasks._process_stored_intake(intake, task_db)
+    assert failed["status"] == "error"
+    doc = await task_db.contract_intakes.find_one({"id": intake.id})
+    assert doc["status"] == "failed" and doc["created_contract_id"]
+    assert await task_db.contracts.count_documents({}) == 1
+
+    broker["down"] = False
+    fresh = ContractIntake(
+        **(await task_db.contract_intakes.find_one({"id": intake.id}, {"_id": 0}))
+    )
+    ok = await intake_tasks._process_stored_intake(fresh, task_db)
+    assert ok["status"] == "success", ok
+    assert ok["contract_id"] == doc["created_contract_id"]
+    assert await task_db.contracts.count_documents({}) == 1
+    assert queued == [doc["created_contract_id"]]
+
+
+async def test_concurrent_retry_cannot_claim_an_already_claimed_intake(
+    task_db, storage
+):
+    """Two retries of the same failed intake: only the first claim proceeds."""
+    storage["fail_on"] = {"b.txt"}
+    with pytest.raises(intake_tasks.IntakeAttachmentUploadError):
+        await intake_tasks._process_resend_webhook_async(copy.deepcopy(PAYLOAD))
+    doc = await _only_intake(task_db)
+    reset = {"id": doc["id"], "status": "received", "attachments": []}
+
+    assert await intake_tasks._save_intake(task_db, dict(reset), replace=True)
+    # The record is no longer "failed", so a second concurrent claim loses
+    # and must not upload or overwrite the winner's attachments.
+    assert not await intake_tasks._save_intake(task_db, dict(reset), replace=True)

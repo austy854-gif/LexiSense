@@ -257,7 +257,8 @@ async def _process_resend_webhook_async(
                     "processing_completed_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
-            await _save_intake(db, intake_doc, replace=bool(existing))
+            if not await _save_intake(db, intake_doc, replace=bool(existing)):
+                return {"status": "duplicate", "intake_id": intake.id}
             return {
                 "status": SKIPPED_NO_ENTITLEMENT,
                 "intake_id": intake.id,
@@ -379,17 +380,19 @@ async def _process_resend_webhook_async(
 async def _save_intake(db, intake_doc: dict, replace: bool) -> bool:
     """Insert a new intake, or reset the failed record being retried.
 
-    Returns False if a concurrent delivery already created the record.
+    Returns False if a concurrent delivery already created or claimed the
+    record; the caller must then stop without uploading anything.
     """
     from pymongo.errors import DuplicateKeyError
 
     if replace:
         doc = {k: v for k, v in intake_doc.items() if k not in ("id", "createdAt")}
         doc["updatedAt"] = datetime.now(timezone.utc).isoformat()
-        await db.contract_intakes.update_one(
+        # Conditional on "failed": exactly one concurrent retry can claim it.
+        result = await db.contract_intakes.update_one(
             {"id": intake_doc["id"], "status": "failed"}, {"$set": doc}
         )
-        return True
+        return result.modified_count == 1
     try:
         await db.contract_intakes.insert_one(dict(intake_doc))
     except DuplicateKeyError:
@@ -554,10 +557,8 @@ async def _process_stored_intake(intake, db):
         )
 
         # Create contract record from intake (optional - could wait for human review)
-        # A rerun after a late failure must not create a second contract.
-        contract_id = intake.created_contract_id or await _create_contract_from_intake(
-            intake, classification, db
-        )
+        # Idempotent: a rerun after a late failure reuses the reserved contract.
+        contract_id = await _create_contract_from_intake(intake, classification, db)
 
         if contract_id:
             await db.contract_intakes.update_one(
@@ -677,44 +678,64 @@ async def _create_contract_from_intake(
 
     attachment = intake.attachments[0]
 
-    # Initialize workflow history with initial draft state
-    initial_workflow_history = [
-        {
-            "fromStatus": None,
-            "toStatus": "draft",
-            "action": "created_from_intake",
-            "userId": intake.assigned_to
+    # A previous attempt may have reserved (and possibly inserted) a contract
+    # before failing later on; reuse it instead of creating a second one.
+    reserved_id = intake.created_contract_id
+    if not reserved_id:
+        current = await db.contract_intakes.find_one(
+            {"id": intake.id}, {"_id": 0, "created_contract_id": 1}
+        )
+        reserved_id = (current or {}).get("created_contract_id")
+    if reserved_id and await db.contracts.find_one(
+        {"id": reserved_id, "organizationId": intake.organizationId}, {"_id": 1}
+    ):
+        contract_id = reserved_id
+    else:
+        # Initialize workflow history with initial draft state
+        initial_workflow_history = [
+            {
+                "fromStatus": None,
+                "toStatus": "draft",
+                "action": "created_from_intake",
+                "userId": intake.assigned_to
+                or intake.source_metadata.get("resend_id", "system"),
+                "userEmail": intake.source_email,
+                "comment": "Contract created from email intake",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+
+        contract = Contract(
+            **({"id": reserved_id} if reserved_id else {}),
+            organizationId=intake.organizationId,
+            uploadedBy=intake.assigned_to
             or intake.source_metadata.get("resend_id", "system"),
-            "userEmail": intake.source_email,
-            "comment": "Contract created from email intake",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-    ]
+            title=f"Intake: {attachment.get('filename', 'Contract')}",
+            counterparty=classification.get("counterparty"),
+            contractType=classification.get("contract_type", "General"),
+            status="draft",
+            fileName=attachment.get("filename"),
+            fileSize=attachment.get("size"),
+            mimeType=attachment.get("mime_type"),
+            storageKey=attachment.get("storage_key"),
+            tags=["intake", "email"],
+            workflowHistory=initial_workflow_history,
+            createdAt=datetime.now(timezone.utc).isoformat(),
+            updatedAt=datetime.now(timezone.utc).isoformat(),
+        )
 
-    contract = Contract(
-        organizationId=intake.organizationId,
-        uploadedBy=intake.assigned_to
-        or intake.source_metadata.get("resend_id", "system"),
-        title=f"Intake: {attachment.get('filename', 'Contract')}",
-        counterparty=classification.get("counterparty"),
-        contractType=classification.get("contract_type", "General"),
-        status="draft",
-        fileName=attachment.get("filename"),
-        fileSize=attachment.get("size"),
-        mimeType=attachment.get("mime_type"),
-        storageKey=attachment.get("storage_key"),
-        tags=["intake", "email"],
-        workflowHistory=initial_workflow_history,
-        createdAt=datetime.now(timezone.utc).isoformat(),
-        updatedAt=datetime.now(timezone.utc).isoformat(),
-    )
-
-    await db.contracts.insert_one(contract.model_dump())
+        # Reserve the id on the intake before inserting, so a failure anywhere
+        # after this point is retried against the same contract.
+        await db.contract_intakes.update_one(
+            {"id": intake.id}, {"$set": {"created_contract_id": contract.id}}
+        )
+        await db.contracts.insert_one(contract.model_dump())
+        contract_id = contract.id
 
     # Trigger risk assessment
     from services.risk_tasks import assess_contract_risk
 
-    assess_contract_risk.delay(contract.id, force_refresh=True)
+    assess_contract_risk.delay(contract_id, force_refresh=True)
 
     # Trigger obligation extraction if active
     if classification.get("contract_type") in [
@@ -726,7 +747,7 @@ async def _create_contract_from_intake(
     ]:
         from services.obligation_tasks import extract_obligations_from_contract
 
-        extract_obligations_from_contract.delay(contract.id, force_refresh=True)
+        extract_obligations_from_contract.delay(contract_id, force_refresh=True)
 
     # Trigger playbook analysis if playbook assigned -- only for orgs entitled
     # to AI; otherwise record that it was skipped (no crash, no AI call).
@@ -734,7 +755,7 @@ async def _create_contract_from_intake(
         from routes.billing import SKIPPED_NO_ENTITLEMENT, background_ai_entitlement
 
         entitled = await background_ai_entitlement(
-            intake.organizationId, db, f"intake playbook analysis of {contract.id}"
+            intake.organizationId, db, f"intake playbook analysis of {contract_id}"
         )
         if entitled is None:
             await db.contract_intakes.update_one(
@@ -751,14 +772,14 @@ async def _create_contract_from_intake(
             from services.playbook_tasks import analyze_contract_with_playbook
 
             analyze_contract_with_playbook.delay(
-                contract.id, intake.playbook_id, auto_apply=False
+                contract_id, intake.playbook_id, auto_apply=False
             )
             await db.contract_intakes.update_one(
                 {"id": intake.id, "organizationId": intake.organizationId},
                 {"$set": {"playbook_analysis_status": "queued"}},
             )
 
-    return contract.id
+    return contract_id
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
