@@ -199,6 +199,20 @@ class TestSingleUpload:
         assert r.json()["detail"] == contracts_route.UPLOAD_UNCONFIRMED_MESSAGE
         assert pipeline["purged"] == [] and pipeline["released"] == []
 
+    async def test_write_concern_error_with_no_record_is_unconfirmed(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        """A write-concern error may follow an applied write: not a rejection."""
+        from pymongo.errors import WriteConcernError
+
+        _fail_inserts(
+            monkeypatch, db, error=lambda: WriteConcernError("wtimeout", code=64)
+        )
+        r = await _upload(client, user)
+        assert r.status_code == 500
+        assert r.json()["detail"] == contracts_route.UPLOAD_UNCONFIRMED_MESSAGE
+        assert pipeline["purged"] == [] and pipeline["released"] == []
+
     async def test_duplicate_key_without_our_record_is_a_failure(
         self, client, db, user, pipeline, monkeypatch
     ):
@@ -302,7 +316,7 @@ async def test_bulk_cancellation_during_insert_does_not_roll_back(
         raise asyncio.CancelledError()
 
     _patch_collection(monkeypatch, db, "contracts", "insert_one", cancelled)
-    with pytest.raises(BaseException):
+    with pytest.raises(asyncio.CancelledError):
         await contracts_route.bulk_upload_contracts(
             files=[_FakeUpload("a.txt")],
             contractType="General",

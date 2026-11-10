@@ -529,9 +529,11 @@ async def _persist_contract(contract_doc: dict) -> Optional[bool]:
 
     Returns True when the record exists, False when it definitely does not, and
     None when neither can be established. A server rejection proves nothing was
-    written. Any other error (a timeout, a dropped connection, a duplicate-key
-    error from a retried write) may hide a write that committed or is still in
-    flight, so the record is looked up, and finding nothing is still not proof.
+    written. A duplicate-key error is looked up (a retried write may have
+    committed our record); if the record is absent the server rejected it, so
+    the result is False. Any other error (a timeout, a dropped connection) may
+    hide a write that committed or is still in flight, so the record is looked
+    up and finding nothing is still not proof.
     With an unknown outcome the caller must keep the stored object and the
     quota slot: deleting them could orphan a committed contract.
     """
