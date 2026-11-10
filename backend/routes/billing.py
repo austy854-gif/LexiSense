@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException, status, Depends, Request
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import logging
+import uuid
+from dataclasses import dataclass
 import stripe
 
 from models.billing import (
@@ -575,9 +577,203 @@ async def create_billing_portal(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+#: Unique index that makes each Stripe event id claimable exactly once.
+STRIPE_EVENTS_INDEX = "uq_stripe_events_event_id"
+#: A "processing" claim older than this has no live worker and may be reclaimed.
+STRIPE_EVENT_LEASE = timedelta(minutes=10)
+_stripe_event_index_ready: set = set()
+
+EVENT_CLAIMED = "claimed"
+EVENT_DONE = "done"
+EVENT_BUSY = "busy"
+
+
+async def ensure_stripe_event_index(database) -> None:
+    """Create (or confirm) the unique Stripe event-id index.
+
+    Raises if the index cannot be confirmed; the webhook must not process
+    events without it. Success is cached per database handle, so a failure is
+    retried on the next delivery.
+    """
+    if id(database) in _stripe_event_index_ready:
+        return
+    await database.stripe_events.create_index(
+        "eventId", unique=True, name=STRIPE_EVENTS_INDEX
+    )
+    _stripe_event_index_ready.add(id(database))
+
+
+async def _claim_stripe_event(
+    event_id: str, event_type: str, created: Optional[int]
+) -> tuple[str, Optional[str]]:
+    """Atomically claim a Stripe event for processing.
+
+    Returns ``(EVENT_CLAIMED, token)`` when this delivery owns the event,
+    ``(EVENT_DONE, None)`` when it was already processed, and
+    ``(EVENT_BUSY, None)`` when another delivery holds a live claim. A failed
+    event, or a ``processing`` claim whose lease expired (the worker crashed),
+    can be reclaimed.
+    """
+    now = datetime.now(timezone.utc)
+    token = uuid.uuid4().hex
+    claim = {
+        "status": "processing",
+        "claimToken": token,
+        "claimedAt": now.isoformat(),
+    }
+    try:
+        await db.stripe_events.insert_one(
+            {
+                "eventId": event_id,
+                "type": event_type,
+                "created": created,
+                "receivedAt": now.isoformat(),
+                "attempts": 1,
+                **claim,
+            }
+        )
+        return EVENT_CLAIMED, token
+    except DuplicateKeyError:
+        pass
+
+    stale_before = (now - STRIPE_EVENT_LEASE).isoformat()
+    reclaimed = await db.stripe_events.update_one(
+        {
+            "eventId": event_id,
+            "$or": [
+                {"status": "failed"},
+                {"status": "processing", "claimedAt": {"$lte": stale_before}},
+            ],
+        },
+        {"$set": claim, "$inc": {"attempts": 1}},
+    )
+    if reclaimed.modified_count:
+        return EVENT_CLAIMED, token
+    doc = await db.stripe_events.find_one(
+        {"eventId": event_id}, {"_id": 0, "status": 1}
+    )
+    if doc and doc.get("status") == EVENT_DONE:
+        return EVENT_DONE, None
+    return EVENT_BUSY, None
+
+
+async def _settle_stripe_event(event_id: str, token: str, fields: dict) -> bool:
+    """Record the outcome of a claimed event; only the claim holder may write.
+
+    Returns False if the outcome could not be recorded. The claim then expires
+    and the next delivery reprocesses the event, which is safe because each
+    billing write refuses an event already applied to the record.
+    """
+    try:
+        result = await db.stripe_events.update_one(
+            {"eventId": event_id, "claimToken": token},
+            {"$set": {**fields, "settledAt": datetime.now(timezone.utc).isoformat()}},
+        )
+    except Exception:
+        logger.exception("Could not record outcome of Stripe event %s", event_id)
+        return False
+    if not result.matched_count:
+        logger.error("Lost the claim on Stripe event %s before settling", event_id)
+        return False
+    return True
+
+
+def _event_order_filter(org_filter: dict, event_created: Optional[int]) -> dict:
+    """Restrict a billing write to records no newer than this event.
+
+    ``lastStripeEventCreated`` holds the ``created`` time of the newest event
+    applied to the org, so an older event delivered late cannot overwrite newer
+    subscription state. Without an event time the write is unconditional (the
+    webhook rejects events without one; only direct calls omit it).
+
+    Residual window: Stripe's ``created`` has one-second resolution and events
+    carry no finer monotonic sequence, so two distinct events created in the
+    same second are applied in arrival order. A strict ``<`` would instead drop
+    legitimate same-second events, so ``<=`` is the accepted trade-off.
+    """
+    if event_created is None:
+        return org_filter
+    return {
+        **org_filter,
+        "$or": [
+            {"lastStripeEventCreated": None},
+            {"lastStripeEventCreated": {"$lte": event_created}},
+        ],
+    }
+
+
+@dataclass(frozen=True)
+class StripeEventRef:
+    """The identity and creation time of the webhook event being applied."""
+
+    id: str
+    created: int
+
+
+#: Recently applied event ids kept on each billing record (replay guard).
+APPLIED_EVENT_IDS_KEPT = 50
+
+
+async def _apply_billing_event(
+    org_id: str, update: dict, ref: Optional[StripeEventRef], what: str
+) -> bool:
+    """Apply ``update`` to the org's billing record unless a newer event won or
+    this event was already applied.
+
+    The applied-event check makes a reapplication (a redelivery after an
+    unconfirmed settlement) a no-op in the same atomic write, so the billing
+    record never sees one event twice.
+    """
+    if ref is None:
+        await db.organization_billing.update_one({"organizationId": org_id}, update)
+        return True
+    update.setdefault("$set", {})["lastStripeEventCreated"] = ref.created
+    update["$push"] = {
+        "appliedStripeEventIds": {
+            "$each": [ref.id],
+            "$slice": -APPLIED_EVENT_IDS_KEPT,
+        }
+    }
+    flt = _event_order_filter({"organizationId": org_id}, ref.created)
+    flt["appliedStripeEventIds"] = {"$ne": ref.id}
+    result = await db.organization_billing.update_one(flt, update)
+    if not result.matched_count:
+        logger.warning(
+            "Ignoring Stripe %s for org %s (event %s, created %s): already "
+            "applied, a newer event was applied, or there is no billing record",
+            what,
+            org_id,
+            ref.id,
+            ref.created,
+        )
+        return False
+    return True
+
+
+async def _dispatch_stripe_event(event_type: str, data, ref: "StripeEventRef") -> None:
+    if event_type == "checkout.session.completed":
+        await handle_checkout_completed(data, ref)
+    elif event_type == "customer.subscription.created":
+        await handle_subscription_created(data, ref)
+    elif event_type == "customer.subscription.updated":
+        await handle_subscription_updated(data, ref)
+    elif event_type == "customer.subscription.deleted":
+        await handle_subscription_deleted(data, ref)
+    elif event_type == "invoice.payment_failed":
+        await handle_payment_failed(data, ref)
+    elif event_type == "invoice.paid":
+        await handle_invoice_paid(data, ref)
+
+
 @router.post("/webhook")
 async def stripe_webhook(request: Request):
-    """Handle Stripe webhook events"""
+    """Handle Stripe webhook events exactly once, in order.
+
+    Each event id is claimed atomically in ``stripe_events``: a redelivery of a
+    processed event returns 200 without reprocessing, a concurrent duplicate
+    gets 409 (Stripe retries it), and a failed or crashed attempt is retried
+    by Stripe's next delivery.
+    """
     if not stripe_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -601,29 +797,66 @@ async def stripe_webhook(request: Request):
         logger.error(f"Invalid signature: {e}")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    # Handle the event
-    event_type = event["type"]
-    data = event["data"]["object"]
+    try:
+        event_id = event["id"]
+        event_type = event["type"]
+        data = event["data"]["object"]
+    except (KeyError, TypeError):
+        logger.error("Stripe webhook payload is missing id, type or data")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    if not event_id:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    event_created = event.get("created")
+    if isinstance(event_created, bool) or not isinstance(event_created, int):
+        # Ordering depends on an authoritative event time; never apply without it.
+        logger.error("Stripe event %s has no valid created time", event_id)
+        raise HTTPException(status_code=400, detail="Invalid payload")
 
-    logger.info(f"Received Stripe webhook: {event_type}")
+    logger.info(f"Received Stripe webhook: {event_type} ({event_id})")
 
-    if event_type == "checkout.session.completed":
-        await handle_checkout_completed(data)
-    elif event_type == "customer.subscription.created":
-        await handle_subscription_created(data)
-    elif event_type == "customer.subscription.updated":
-        await handle_subscription_updated(data)
-    elif event_type == "customer.subscription.deleted":
-        await handle_subscription_deleted(data)
-    elif event_type == "invoice.payment_failed":
-        await handle_payment_failed(data)
-    elif event_type == "invoice.paid":
-        await handle_invoice_paid(data)
+    try:
+        await ensure_stripe_event_index(db)
+        outcome, token = await _claim_stripe_event(event_id, event_type, event_created)
+    except Exception:
+        logger.exception("Stripe event ledger unavailable; not processing %s", event_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook temporarily unavailable",
+        )
+    if outcome == EVENT_DONE:
+        return {"received": True, "duplicate": True}
+    if outcome == EVENT_BUSY:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Event is already being processed",
+        )
 
+    try:
+        await _dispatch_stripe_event(
+            event_type, data, StripeEventRef(id=event_id, created=event_created)
+        )
+    except Exception as exc:
+        logger.exception("Stripe webhook %s (%s) failed", event_type, event_id)
+        await _settle_stripe_event(
+            event_id, token, {"status": "failed", "error": type(exc).__name__}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Webhook processing failed",
+        )
+    if not await _settle_stripe_event(
+        event_id, token, {"status": EVENT_DONE, "error": None}
+    ):
+        # Not acknowledged: Stripe redelivers, and the replay guard makes the
+        # reprocessing a no-op for billing writes already applied.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Webhook processing failed",
+        )
     return {"received": True}
 
 
-async def handle_checkout_completed(session):
+async def handle_checkout_completed(session, ref: Optional["StripeEventRef"] = None):
     """Handle successful checkout session"""
     org_id = session.get("metadata", {}).get("organizationId")
     if not org_id:
@@ -634,19 +867,23 @@ async def handle_checkout_completed(session):
 
     if subscription_id:
         subscription = stripe.Subscription.retrieve(subscription_id)
-        await update_billing_from_subscription(org_id, subscription, customer_id)
+        await update_billing_from_subscription(org_id, subscription, customer_id, ref)
 
 
-async def handle_subscription_created(subscription):
+async def handle_subscription_created(
+    subscription, ref: Optional["StripeEventRef"] = None
+):
     """Handle subscription creation"""
     org_id = subscription.get("metadata", {}).get("organizationId")
     if not org_id:
         return
     customer_id = subscription.get("customer")
-    await update_billing_from_subscription(org_id, subscription, customer_id)
+    await update_billing_from_subscription(org_id, subscription, customer_id, ref)
 
 
-async def handle_subscription_updated(subscription):
+async def handle_subscription_updated(
+    subscription, ref: Optional["StripeEventRef"] = None
+):
     """Handle subscription updates"""
     org_id = subscription.get("metadata", {}).get("organizationId")
     if not org_id:
@@ -661,10 +898,12 @@ async def handle_subscription_updated(subscription):
     if not org_id:
         return
     customer_id = subscription.get("customer")
-    await update_billing_from_subscription(org_id, subscription, customer_id)
+    await update_billing_from_subscription(org_id, subscription, customer_id, ref)
 
 
-async def handle_subscription_deleted(subscription):
+async def handle_subscription_deleted(
+    subscription, ref: Optional["StripeEventRef"] = None
+):
     """Handle subscription cancellation"""
     org_id = subscription.get("metadata", {}).get("organizationId")
     if not org_id:
@@ -690,8 +929,8 @@ async def handle_subscription_deleted(subscription):
         )
         return
 
-    await db.organization_billing.update_one(
-        {"organizationId": org_id},
+    await _apply_billing_event(
+        org_id,
         {
             "$set": {
                 "subscriptionTier": SubscriptionTier.CANCELLED,
@@ -702,6 +941,8 @@ async def handle_subscription_deleted(subscription):
             },
             "$unset": {"pastDueSince": ""},
         },
+        ref,
+        "subscription deletion",
     )
 
 
@@ -722,7 +963,7 @@ def _is_foreign_subscription(
     return bool(subscription_id and current and subscription_id != current)
 
 
-async def handle_payment_failed(invoice):
+async def handle_payment_failed(invoice, ref: Optional["StripeEventRef"] = None):
     """Handle failed payment"""
     customer_id = invoice.get("customer")
     billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
@@ -738,8 +979,8 @@ async def handle_payment_failed(invoice):
         return
 
     now = datetime.now(timezone.utc).isoformat()
-    await db.organization_billing.update_one(
-        {"organizationId": billing["organizationId"]},
+    await _apply_billing_event(
+        billing["organizationId"],
         {
             "$set": {
                 "billingStatus": BillingStatus.PAST_DUE,
@@ -748,10 +989,12 @@ async def handle_payment_failed(invoice):
                 "updatedAt": now,
             }
         },
+        ref,
+        "payment failure",
     )
 
 
-async def handle_invoice_paid(invoice):
+async def handle_invoice_paid(invoice, ref: Optional["StripeEventRef"] = None):
     """Handle successful invoice payment"""
     customer_id = invoice.get("customer")
     billing = await db.organization_billing.find_one({"stripeCustomerId": customer_id})
@@ -762,22 +1005,40 @@ async def handle_invoice_paid(invoice):
     ):
         return
 
-    # If was past_due, restore to active
-    if billing.get("billingStatus") == BillingStatus.PAST_DUE:
-        await db.organization_billing.update_one(
-            {"organizationId": billing["organizationId"]},
-            {
-                "$set": {
-                    "billingStatus": BillingStatus.ACTIVE,
-                    "updatedAt": datetime.now(timezone.utc).isoformat(),
-                },
-                "$unset": {"pastDueSince": ""},
+    if billing.get("billingStatus") != BillingStatus.PAST_DUE:
+        # Nothing to restore, but record the event so an older payment failure
+        # delivered later cannot move the paid account to past due.
+        if ref is not None:
+            await _apply_billing_event(
+                billing["organizationId"], {"$set": {}}, ref, "invoice payment"
+            )
+        return
+    # Was past due: restore to active.
+    await _apply_billing_event(
+        billing["organizationId"],
+        {
+            "$set": {
+                "billingStatus": BillingStatus.ACTIVE,
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
             },
-        )
+            "$unset": {"pastDueSince": ""},
+        },
+        ref,
+        "invoice payment",
+    )
 
 
-async def update_billing_from_subscription(org_id: str, subscription, customer_id: str):
-    """Update billing record from Stripe subscription object"""
+async def update_billing_from_subscription(
+    org_id: str,
+    subscription,
+    customer_id: str,
+    ref: Optional["StripeEventRef"] = None,
+):
+    """Update billing record from Stripe subscription object.
+
+    With ``ref`` the write is skipped if a newer event, or this same event, was
+    already applied.
+    """
     status_map = {
         "active": BillingStatus.ACTIVE,
         "trialing": BillingStatus.TRIALING,
@@ -873,7 +1134,9 @@ async def update_billing_from_subscription(org_id: str, subscription, customer_i
         fields["pastDueSince"] = existing.get("pastDueSince") or now
     else:
         update["$unset"] = {"pastDueSince": ""}
-    await db.organization_billing.update_one({"organizationId": org_id}, update)
+    await _apply_billing_event(
+        org_id, update, ref, f"subscription {stripe_status} update"
+    )
 
 
 def _plan_card(plan: plan_config.PlanConfig) -> dict:
