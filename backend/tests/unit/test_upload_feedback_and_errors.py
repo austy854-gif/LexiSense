@@ -6,6 +6,7 @@ Covers:
 * bulk per-file failures from unexpected exceptions return friendly copy;
 * trial-ended copy does not state a trial length.
 """
+
 from utils.billing_access import ACCESS_TRIAL_EXPIRED, blocked_message
 import logging
 from datetime import datetime, timedelta, timezone
@@ -65,13 +66,17 @@ async def _upload(client, user, name="msa.txt"):
     return await client.post(
         f"{API_PREFIX}/contracts",
         headers=auth_headers(user),
-        files={"file": (name, b"This Agreement is made between A and B.", "text/plain")},
+        files={
+            "file": (name, b"This Agreement is made between A and B.", "text/plain")
+        },
         data={"title": "MSA", "contractType": "General"},
     )
 
 
 class TestSingleUpload:
-    async def test_success_reports_success(self, client, db, uploader, patched_pipeline, monkeypatch):
+    async def test_success_reports_success(
+        self, client, db, uploader, patched_pipeline, monkeypatch
+    ):
         _set_analysis(monkeypatch, {"summary": "ok", "riskLevel": "low", "dates": {}})
         r = await _upload(client, uploader)
         assert r.status_code == 200, r.text
@@ -79,7 +84,9 @@ class TestSingleUpload:
         assert body["aiAnalysisStatus"] == "success"
         assert body["aiAnalysisError"] is None
 
-    async def test_exception_is_logged_not_shown(self, client, db, uploader, patched_pipeline, monkeypatch, caplog):
+    async def test_exception_is_logged_not_shown(
+        self, client, db, uploader, patched_pipeline, monkeypatch, caplog
+    ):
         _set_analysis(monkeypatch, RuntimeError(SECRET))
         with caplog.at_level(logging.ERROR, logger=contracts_route.logger.name):
             r = await _upload(client, uploader)
@@ -93,18 +100,32 @@ class TestSingleUpload:
         assert stored["aiAnalysisStatus"] == "failed"
         assert stored["aiAnalysisError"] == contracts_route.ANALYSIS_FAILED_MESSAGE
         # The detail still reaches the server log, with a traceback.
-        assert any(SECRET in (rec.exc_text or "") or SECRET in rec.getMessage() for rec in caplog.records)
+        assert any(
+            SECRET in (rec.exc_text or "") or SECRET in rec.getMessage()
+            for rec in caplog.records
+        )
         assert any(rec.exc_info for rec in caplog.records)
 
-    async def test_provider_unavailable_is_friendly(self, client, db, uploader, patched_pipeline, monkeypatch):
+    async def test_provider_unavailable_is_friendly(
+        self, client, db, uploader, patched_pipeline, monkeypatch
+    ):
         _set_analysis(monkeypatch, None)
         body = (await _upload(client, uploader)).json()
         assert body["aiAnalysisStatus"] == "failed"
         assert body["aiAnalysisError"] == contracts_route.ANALYSIS_UNAVAILABLE_MESSAGE
         assert "detail page" not in body["aiAnalysisError"]
 
-    async def test_parse_error_from_provider_is_friendly(self, client, db, uploader, patched_pipeline, monkeypatch):
-        _set_analysis(monkeypatch, {"summary": "x", "riskLevel": "unknown", "error": "Could not parse structured analysis"})
+    async def test_parse_error_from_provider_is_friendly(
+        self, client, db, uploader, patched_pipeline, monkeypatch
+    ):
+        _set_analysis(
+            monkeypatch,
+            {
+                "summary": "x",
+                "riskLevel": "unknown",
+                "error": "Could not parse structured analysis",
+            },
+        )
         body = (await _upload(client, uploader)).json()
         assert body["aiAnalysisStatus"] == "failed"
         assert body["aiAnalysisError"] == contracts_route.ANALYSIS_FAILED_MESSAGE
@@ -112,7 +133,9 @@ class TestSingleUpload:
 
 class TestBulkUpload:
     async def _bulk(self, client, user, n=2):
-        files = [("files", (f"c{i}.txt", b"Agreement text", "text/plain")) for i in range(n)]
+        files = [
+            ("files", (f"c{i}.txt", b"Agreement text", "text/plain")) for i in range(n)
+        ]
         return await client.post(
             f"{API_PREFIX}/contracts/bulk",
             headers=auth_headers(user),
@@ -120,7 +143,9 @@ class TestBulkUpload:
             data={"contractType": "General"},
         )
 
-    async def test_analysis_exception_is_friendly(self, client, db, uploader, patched_pipeline, monkeypatch):
+    async def test_analysis_exception_is_friendly(
+        self, client, db, uploader, patched_pipeline, monkeypatch
+    ):
         _set_analysis(monkeypatch, RuntimeError(SECRET))
         r = await self._bulk(client, uploader)
         assert r.status_code == 200, r.text
@@ -143,7 +168,9 @@ class TestBulkUpload:
         body = r.json()
         assert body["successful"] == 0 and body["failed"] == 2
         assert SECRET not in r.text
-        assert {f["error"] for f in body["results"]["failed"]} == {contracts_route.BULK_FILE_FAILED_MESSAGE}
+        assert {f["error"] for f in body["results"]["failed"]} == {
+            contracts_route.BULK_FILE_FAILED_MESSAGE
+        }
         # Quota reserved for each file was refunded.
         assert len(patched_pipeline["released"]) == 2
         assert any(rec.exc_info for rec in caplog.records)
@@ -154,18 +181,25 @@ class TestLegacyStoredErrors:
         "stored,expected",
         [
             (f"AI analysis failed: {SECRET}", "ANALYSIS_FAILED_MESSAGE"),
-            ("AI analysis unavailable. Please retry from the contract detail page.", "ANALYSIS_UNAVAILABLE_MESSAGE"),
+            (
+                "AI analysis unavailable. Please retry from the contract detail page.",
+                "ANALYSIS_UNAVAILABLE_MESSAGE",
+            ),
             ("AI analysis unavailable.", "ANALYSIS_UNAVAILABLE_MESSAGE"),
             ("Could not parse structured analysis", "ANALYSIS_FAILED_MESSAGE"),
         ],
     )
     def test_legacy_values_are_replaced(self, stored, expected):
-        assert contracts_route._public_analysis_error(stored) == getattr(contracts_route, expected)
+        assert contracts_route._public_analysis_error(stored) == getattr(
+            contracts_route, expected
+        )
 
     def test_none_passes_through(self):
         assert contracts_route._public_analysis_error(None) is None
 
-    async def test_get_contract_hides_legacy_raw_error(self, client, db, org_id, uploader):
+    async def test_get_contract_hides_legacy_raw_error(
+        self, client, db, org_id, uploader
+    ):
         from tests.unit.conftest import make_contract
 
         doc = make_contract(org_id, uploader["id"])
@@ -173,12 +207,16 @@ class TestLegacyStoredErrors:
         doc["aiAnalysisError"] = f"AI analysis failed: {SECRET}"
         await db.contracts.insert_one(doc)
         await db.users.insert_one(dict(uploader))
-        r = await client.get(f"{API_PREFIX}/contracts/{doc['id']}", headers=auth_headers(uploader))
+        r = await client.get(
+            f"{API_PREFIX}/contracts/{doc['id']}", headers=auth_headers(uploader)
+        )
         assert r.status_code == 200, r.text
         assert SECRET not in r.text
         assert r.json()["aiAnalysisError"] == contracts_route.ANALYSIS_FAILED_MESSAGE
 
-        listed = await client.get(f"{API_PREFIX}/contracts", headers=auth_headers(uploader))
+        listed = await client.get(
+            f"{API_PREFIX}/contracts", headers=auth_headers(uploader)
+        )
         assert listed.status_code == 200, listed.text
         assert SECRET not in listed.text
 
@@ -195,7 +233,9 @@ class TestTrialCopy:
                 "organizationId": org_id,
                 "subscriptionTier": "trial",
                 "billingStatus": "trialing",
-                "trialEndDate": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                "trialEndDate": (
+                    datetime.now(timezone.utc) - timedelta(days=1)
+                ).isoformat(),
                 "trialContractsUsed": 0,
                 "trialContractsLimit": 3,
             }

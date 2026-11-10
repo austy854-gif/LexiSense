@@ -1,5 +1,6 @@
 """Intake webhook: own secret (with deprecated fallback) + Svix verification;
 one shared S3 bucket helper for storage and the /health probe."""
+
 import base64
 import json
 import logging
@@ -23,7 +24,9 @@ INTAKE_SECRET = "whsec_" + base64.b64encode(b"intake-secret-key-for-tests").deco
 LEGACY_SECRET = "whsec_" + base64.b64encode(b"legacy-status-secret-for-tests").decode()
 OTHER_SECRET = "whsec_" + base64.b64encode(b"some-other-secret").decode()
 URL = f"{API_PREFIX}/agentic/intake/webhook"
-BODY = json.dumps({"type": "email.received", "data": {"from": "a@b.c", "subject": "Contract"}}).encode()
+BODY = json.dumps(
+    {"type": "email.received", "data": {"from": "a@b.c", "subject": "Contract"}}
+).encode()
 
 
 @pytest.fixture(autouse=True)
@@ -48,19 +51,28 @@ def queued(monkeypatch):
 
 
 @pytest.fixture
-async def http():
+async def http(db, monkeypatch):
+    # The webhook confirms the intake idempotency index before queueing.
+    monkeypatch.setattr(agentic_route, "db", db)
     app = FastAPI()
     api = APIRouter(prefix=API_PREFIX)
     api.include_router(agentic_route.build_router({"intake"}))
     app.include_router(api)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as c:
         yield c
 
 
 def _headers(secret, body=BODY, ts=None, msg_id="msg_1", sig_override=None):
     ts = str(int(ts if ts is not None else time.time()))
     sig = sig_override or svix.sign(secret, msg_id, ts, body)
-    return {"svix-id": msg_id, "svix-timestamp": ts, "svix-signature": sig, "content-type": "application/json"}
+    return {
+        "svix-id": msg_id,
+        "svix-timestamp": ts,
+        "svix-signature": sig,
+        "content-type": "application/json",
+    }
 
 
 # --- secret resolution --------------------------------------------------------
@@ -79,7 +91,10 @@ def test_fallback_warns_once_without_secret(monkeypatch, caplog):
             assert webhook_secrets.get_intake_webhook_secret() == LEGACY_SECRET
     warnings = [r for r in caplog.records if "deprecated" in r.getMessage()]
     assert len(warnings) == 1
-    assert LEGACY_SECRET not in caplog.text and LEGACY_SECRET.split("_", 1)[1] not in caplog.text
+    assert (
+        LEGACY_SECRET not in caplog.text
+        and LEGACY_SECRET.split("_", 1)[1] not in caplog.text
+    )
 
 
 def test_no_secret_is_none():
@@ -100,7 +115,9 @@ async def test_valid_signature_with_intake_secret(http, queued, monkeypatch):
     assert queued == [(json.loads(BODY),)]
 
 
-async def test_status_secret_not_accepted_when_intake_secret_set(http, queued, monkeypatch):
+async def test_status_secret_not_accepted_when_intake_secret_set(
+    http, queued, monkeypatch
+):
     monkeypatch.setenv("RESEND_INTAKE_WEBHOOK_SECRET", INTAKE_SECRET)
     monkeypatch.setenv("RESEND_WEBHOOK_SECRET", LEGACY_SECRET)
     r = await http.post(URL, content=BODY, headers=_headers(LEGACY_SECRET))
@@ -113,7 +130,10 @@ async def test_fallback_secret_accepted(http, queued, monkeypatch):
     assert r.status_code == 200 and len(queued) == 1
 
 
-@pytest.mark.parametrize("case", ["tampered", "wrong_secret", "stale", "future", "v2_only", "missing_headers"])
+@pytest.mark.parametrize(
+    "case",
+    ["tampered", "wrong_secret", "stale", "future", "v2_only", "missing_headers"],
+)
 async def test_bad_signatures_rejected(http, queued, monkeypatch, case):
     monkeypatch.setenv("RESEND_INTAKE_WEBHOOK_SECRET", INTAKE_SECRET)
     body, headers = BODY, _headers(INTAKE_SECRET)
@@ -144,17 +164,27 @@ async def test_multiple_signatures_one_valid(http, queued, monkeypatch):
 
 def test_secret_must_be_valid_base64():
     with pytest.raises(svix.WebhookVerificationError):
-        svix.verify("whsec_not*base64!", {"svix-id": "m", "svix-timestamp": str(int(time.time())),
-                                          "svix-signature": "v1,AAAA"}, b"{}")
+        svix.verify(
+            "whsec_not*base64!",
+            {
+                "svix-id": "m",
+                "svix-timestamp": str(int(time.time())),
+                "svix-signature": "v1,AAAA",
+            },
+            b"{}",
+        )
 
 
 # --- S3 bucket helper + /health probe ---------------------------------------------
-@pytest.mark.parametrize("env,expected", [
-    ({"AWS_S3_BUCKET": "primary"}, "primary"),
-    ({"S3_BUCKET_NAME": "legacy"}, "legacy"),
-    ({"AWS_S3_BUCKET": "primary", "S3_BUCKET_NAME": "legacy"}, "primary"),
-    ({}, None),
-])
+@pytest.mark.parametrize(
+    "env,expected",
+    [
+        ({"AWS_S3_BUCKET": "primary"}, "primary"),
+        ({"S3_BUCKET_NAME": "legacy"}, "legacy"),
+        ({"AWS_S3_BUCKET": "primary", "S3_BUCKET_NAME": "legacy"}, "primary"),
+        ({}, None),
+    ],
+)
 def test_get_bucket_name(monkeypatch, env, expected):
     from services import storage_service
 
@@ -181,12 +211,22 @@ print(json.dumps({"result": asyncio.run(server._probe_storage()), "bucket": seen
 
 
 def _probe(**bucket_env):
-    env = {k: v for k, v in os.environ.items() if k not in ("AWS_S3_BUCKET", "S3_BUCKET_NAME")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AWS_S3_BUCKET", "S3_BUCKET_NAME")
+    }
     env.setdefault("JWT_SECRET", "test-secret-do-not-use-in-production")
     env.setdefault("MONGO_URL", "mongodb://localhost:27017")
     env.update(bucket_env)
-    out = subprocess.run([sys.executable, "-c", PROBE], cwd=BACKEND, env=env,
-                         capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        [sys.executable, "-c", PROBE],
+        cwd=BACKEND,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
@@ -199,5 +239,21 @@ def test_health_probe_uses_either_bucket_var(var):
 
 def test_health_probe_reports_unconfigured_bucket():
     out = _probe()
-    assert out["result"] == {"status": "degraded", "details": "S3 bucket not configured"}
+    assert out["result"] == {
+        "status": "degraded",
+        "details": "S3 bucket not configured",
+    }
     assert out["bucket"] is None
+
+
+async def test_webhook_rejects_until_intake_index_is_ready(http, queued, monkeypatch):
+    """No intake is accepted without the unique per-email index."""
+    from services import intake_tasks
+
+    async def index_down(database):
+        raise RuntimeError("createIndexes failed")
+
+    monkeypatch.setenv("RESEND_INTAKE_WEBHOOK_SECRET", INTAKE_SECRET)
+    monkeypatch.setattr(intake_tasks, "ensure_intake_idempotency_index", index_down)
+    r = await http.post(URL, content=BODY, headers=_headers(INTAKE_SECRET))
+    assert r.status_code == 503 and queued == []

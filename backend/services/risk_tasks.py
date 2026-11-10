@@ -2,6 +2,7 @@
 Celery tasks for Automated Risk Scoring Engine.
 Handles risk assessment generation, refresh, and trending.
 """
+
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -116,7 +117,7 @@ def calculate_risk_factors(contract_text: str) -> List[Dict[str, Any]]:
     """Calculate risk factors from contract text using keyword matching."""
     text_lower = contract_text.lower()
     factors = []
-    
+
     for category, keywords in RISK_KEYWORDS.items():
         for keyword, base_score in keywords.items():
             if keyword in text_lower:
@@ -125,23 +126,25 @@ def calculate_risk_factors(contract_text: str) -> List[Dict[str, Any]]:
                 # Boost score based on frequency (capped)
                 frequency_boost = min(count * 5, 20)
                 score = min(base_score + frequency_boost, 100)
-                
+
                 # Find evidence snippet
                 idx = text_lower.find(keyword)
                 start = max(0, idx - 100)
                 end = min(len(contract_text), idx + len(keyword) + 100)
                 evidence = contract_text[start:end].strip()
-                
-                factors.append({
-                    "category": category,
-                    "factor": keyword.replace("_", " ").title(),
-                    "description": f"Contract contains '{keyword}' clause/term",
-                    "score": score,
-                    "weight": RISK_CATEGORY_WEIGHTS.get(category, 1.0),
-                    "evidence": evidence,
-                    "metadata": {"keyword": keyword, "count": count}
-                })
-    
+
+                factors.append(
+                    {
+                        "category": category,
+                        "factor": keyword.replace("_", " ").title(),
+                        "description": f"Contract contains '{keyword}' clause/term",
+                        "score": score,
+                        "weight": RISK_CATEGORY_WEIGHTS.get(category, 1.0),
+                        "evidence": evidence,
+                        "metadata": {"keyword": keyword, "count": count},
+                    }
+                )
+
     return factors
 
 
@@ -149,35 +152,35 @@ def compute_overall_score(factors: List[Dict[str, Any]]) -> int:
     """Compute weighted overall risk score from factors."""
     if not factors:
         return 10  # Base minimal risk
-    
+
     category_scores = {}
     category_weights = {}
-    
+
     for factor in factors:
         cat = factor["category"]
         score = factor["score"]
         weight = factor["weight"]
-        
+
         if cat not in category_scores:
             category_scores[cat] = []
             category_weights[cat] = weight
-        
+
         category_scores[cat].append(score)
-    
+
     # Weighted average per category, then weighted across categories
     weighted_sum = 0
     total_weight = 0
-    
+
     for cat, scores in category_scores.items():
         if scores:
             avg_score = sum(scores) / len(scores)
             cat_weight = RISK_CATEGORY_WEIGHTS.get(cat, 0.1)
             weighted_sum += avg_score * cat_weight
             total_weight += cat_weight
-    
+
     if total_weight == 0:
         return 10
-    
+
     return int(round(weighted_sum / total_weight))
 
 
@@ -190,24 +193,26 @@ def compute_breakdown(factors: List[Dict[str, Any]]) -> Dict[str, Any]:
         "regulatory": 0,
         "reputational": 0,
         "strategic": 0,
-        "weighted_scores": {}
+        "weighted_scores": {},
     }
-    
+
     category_scores = {}
-    
+
     for factor in factors:
         cat = factor["category"]
         score = factor["score"]
         if cat not in category_scores:
             category_scores[cat] = []
         category_scores[cat].append(score)
-    
+
     for cat, scores in category_scores.items():
         if scores:
             avg = int(round(sum(scores) / len(scores)))
             breakdown[cat] = avg
-            breakdown["weighted_scores"][cat] = round(avg * RISK_CATEGORY_WEIGHTS.get(cat, 0.1), 2)
-    
+            breakdown["weighted_scores"][cat] = round(
+                avg * RISK_CATEGORY_WEIGHTS.get(cat, 0.1), 2
+            )
+
     return breakdown
 
 
@@ -228,13 +233,15 @@ def generate_recommendations(factors: List[Dict[str, Any]]) -> tuple:
     """Generate top risks and mitigation priorities."""
     # Sort factors by score descending
     sorted_factors = sorted(factors, key=lambda x: x["score"], reverse=True)
-    
+
     top_risks = []
     mitigations = []
-    
+
     for factor in sorted_factors[:5]:
-        top_risks.append(f"{factor['category'].title()}: {factor['factor']} (score: {factor['score']})")
-        
+        top_risks.append(
+            f"{factor['category'].title()}: {factor['factor']} (score: {factor['score']})"
+        )
+
         cat = factor["category"]
         if cat == "financial":
             mitigations.append("Negotiate liability caps and payment terms")
@@ -248,7 +255,7 @@ def generate_recommendations(factors: List[Dict[str, Any]]) -> tuple:
             mitigations.append("Limit publicity and brand usage rights")
         elif cat == "strategic":
             mitigations.append("Restrict assignment and change of control provisions")
-    
+
     # Deduplicate mitigations
     seen = set()
     unique_mitigations = []
@@ -256,12 +263,17 @@ def generate_recommendations(factors: List[Dict[str, Any]]) -> tuple:
         if m not in seen:
             seen.add(m)
             unique_mitigations.append(m)
-    
+
     return top_risks, unique_mitigations
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
-def assess_contract_risk(self, contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None):
+def assess_contract_risk(
+    self,
+    contract_id: str,
+    force_refresh: bool = False,
+    organization_id: Optional[str] = None,
+):
     """Assess risk for a single contract."""
     if get_db() is None:
         logger.error("Database not initialized for risk assessment")
@@ -272,7 +284,9 @@ def assess_contract_risk(self, contract_id: str, force_refresh: bool = False, or
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_assess_contract_risk_async(contract_id, force_refresh, organization_id))
+        result = loop.run_until_complete(
+            _assess_contract_risk_async(contract_id, force_refresh, organization_id)
+        )
         loop.close()
         return result
     except Exception as e:
@@ -280,7 +294,9 @@ def assess_contract_risk(self, contract_id: str, force_refresh: bool = False, or
         raise self.retry(exc=e)
 
 
-async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None):
+async def _assess_contract_risk_async(
+    contract_id: str, force_refresh: bool = False, organization_id: Optional[str] = None
+):
     """Async implementation of risk assessment. Every query is tenant-scoped."""
     from models.agentic import RiskAssessment, RiskFactor, RiskScoreBreakdown
 
@@ -292,7 +308,9 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
         return {"status": "error", "message": "organization_id is required"}
 
     try:
-        contract = await db.contracts.find_one({"id": contract_id, "organizationId": organization_id}, {"_id": 0})
+        contract = await db.contracts.find_one(
+            {"id": contract_id, "organizationId": organization_id}, {"_id": 0}
+        )
         if not contract:
             return {"status": "error", "message": "Contract not found"}
 
@@ -300,13 +318,19 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
         if not force_refresh:
             existing = await db.risk_assessments.find_one(
                 {"contractId": contract_id, "organizationId": organization_id},
-                sort=[("assessed_at", -1)]
+                sort=[("assessed_at", -1)],
             )
             if existing:
                 # Check if less than 24 hours old
-                assessed_at = datetime.fromisoformat(existing["assessed_at"].replace("Z", "+00:00"))
+                assessed_at = datetime.fromisoformat(
+                    existing["assessed_at"].replace("Z", "+00:00")
+                )
                 if (datetime.now(timezone.utc) - assessed_at).total_seconds() < 86400:
-                    return {"status": "skipped", "message": "Recent assessment exists", "assessment_id": existing["id"]}
+                    return {
+                        "status": "skipped",
+                        "message": "Recent assessment exists",
+                        "assessment_id": existing["id"],
+                    }
 
         # Get contract text
         contract_text = contract.get("originalText", "")
@@ -315,31 +339,35 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
             storage_key = contract.get("storageKey")
             if storage_key:
                 from services.storage_service import generate_presigned_url
+
                 # In production, would fetch and extract text
                 contract_text = f"[Contract: {contract.get('title', 'Unknown')}]"
 
         if not contract_text:
-            return {"status": "error", "message": "No contract text available for analysis"}
+            return {
+                "status": "error",
+                "message": "No contract text available for analysis",
+            }
 
         # Calculate risk factors
         factors_data = calculate_risk_factors(contract_text)
         factors = [RiskFactor(**f) for f in factors_data]
-        
+
         # Compute scores
         overall_score = compute_overall_score(factors_data)
         breakdown_data = compute_breakdown(factors_data)
         breakdown = RiskScoreBreakdown(**breakdown_data)
         risk_level = determine_risk_level(overall_score)
         top_risks, mitigations = generate_recommendations(factors_data)
-        
+
         # Get previous score for trending
         previous = await db.risk_assessments.find_one(
             {"contractId": contract_id, "organizationId": organization_id},
             sort=[("assessed_at", -1)],
-            skip=1
+            skip=1,
         )
         previous_score = previous.get("overall_score") if previous else None
-        
+
         if previous_score:
             if overall_score < previous_score - 5:
                 trend = "improving"
@@ -366,20 +394,27 @@ async def _assess_contract_risk_async(contract_id: str, force_refresh: bool = Fa
         )
 
         await db.risk_assessments.insert_one(assessment.model_dump())
-        
+
         # Update contract with risk level
         await db.contracts.update_one(
             {"id": contract_id, "organizationId": organization_id},
-            {"$set": {"riskLevel": risk_level, "updatedAt": datetime.now(timezone.utc).isoformat()}}
+            {
+                "$set": {
+                    "riskLevel": risk_level,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            },
         )
 
-        logger.info(f"Risk assessment completed for {contract_id}: {risk_level} ({overall_score})")
+        logger.info(
+            f"Risk assessment completed for {contract_id}: {risk_level} ({overall_score})"
+        )
         return {
             "status": "success",
             "assessment_id": assessment.id,
             "overall_score": overall_score,
             "risk_level": risk_level,
-            "factors_count": len(factors)
+            "factors_count": len(factors),
         }
 
     except Exception as e:
@@ -428,7 +463,12 @@ async def _refresh_stale_risk_assessments_async():
                 pipeline = [
                     {"$match": match},
                     {"$sort": {"contractId": 1, "assessed_at": -1}},
-                    {"$group": {"_id": "$contractId", "latest": {"$first": "$assessed_at"}}},
+                    {
+                        "$group": {
+                            "_id": "$contractId",
+                            "latest": {"$first": "$assessed_at"},
+                        }
+                    },
                     {"$sort": {"_id": 1}},
                     {"$limit": BATCH_SIZE},
                 ]
@@ -439,7 +479,11 @@ async def _refresh_stale_risk_assessments_async():
                     if item["latest"] >= cutoff:
                         continue
                     contract = await db.contracts.find_one(
-                        {"id": item["_id"], "organizationId": org_id, "status": {"$ne": "expired"}},
+                        {
+                            "id": item["_id"],
+                            "organizationId": org_id,
+                            "status": {"$ne": "expired"},
+                        },
                         {"_id": 0, "id": 1},
                     )
                     if contract:
@@ -469,7 +513,9 @@ def bulk_assess_organization_contracts(self, organization_id: str):
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_bulk_assess_organization_contracts_async(organization_id))
+        result = loop.run_until_complete(
+            _bulk_assess_organization_contracts_async(organization_id)
+        )
         loop.close()
         return result
     except Exception as e:

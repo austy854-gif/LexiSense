@@ -5,7 +5,11 @@ import re
 from typing import Optional, Dict, Any, List, Tuple
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
-from utils.contract_fields import coerce_contract_value, coerce_iso_date, coerce_risk_level
+from utils.contract_fields import (
+    coerce_contract_value,
+    coerce_iso_date,
+    coerce_risk_level,
+)
 from utils.env import get_env
 
 logger = logging.getLogger(__name__)
@@ -38,9 +42,7 @@ If you're unsure about something, say so. Always base your answers on the contra
 Be concise but thorough in your responses.
 The user message may contain excerpts rather than the full document. If the answer might depend on text you were not shown, say that explicitly."""
 
-COVERAGE_NOTE = (
-    "Only part of this contract was analyzed. Review the full document before relying on dates, value, or risk."
-)
+COVERAGE_NOTE = "Only part of this contract was analyzed. Review the full document before relying on dates, value, or risk."
 
 _CHUNK_CHARS = 8000
 _CHUNK_OVERLAP = 400
@@ -151,7 +153,11 @@ def merge_analyses(parts: List[dict]) -> Dict[str, Any]:
         if isinstance(summary, str) and summary.strip():
             summaries.append(summary.strip())
         for party in part.get("parties") or []:
-            if isinstance(party, str) and party.strip() and party.strip() not in parties:
+            if (
+                isinstance(party, str)
+                and party.strip()
+                and party.strip() not in parties
+            ):
                 parties.append(party.strip())
         for term in part.get("keyTerms") or []:
             if isinstance(term, str) and term.strip() and term.strip() not in terms:
@@ -165,13 +171,23 @@ def merge_analyses(parts: List[dict]) -> Dict[str, Any]:
                 continue
             seen_risks.add(key)
             severity = coerce_risk_level(risk.get("severity")) or "medium"
-            risks.append({
-                "risk": label.strip() if isinstance(label, str) else key,
-                "severity": severity,
-                "recommendation": risk.get("recommendation") if isinstance(risk.get("recommendation"), str) else "",
-            })
+            risks.append(
+                {
+                    "risk": label.strip() if isinstance(label, str) else key,
+                    "severity": severity,
+                    "recommendation": (
+                        risk.get("recommendation")
+                        if isinstance(risk.get("recommendation"), str)
+                        else ""
+                    ),
+                }
+            )
         for rec in part.get("recommendations") or []:
-            if isinstance(rec, str) and rec.strip() and rec.strip() not in recommendations:
+            if (
+                isinstance(rec, str)
+                and rec.strip()
+                and rec.strip() not in recommendations
+            ):
                 recommendations.append(rec.strip())
         raw_dates = part.get("dates") if isinstance(part.get("dates"), dict) else {}
         for key in dates:
@@ -198,7 +214,9 @@ def merge_analyses(parts: List[dict]) -> Dict[str, Any]:
     }
 
 
-def select_chat_context(text: str, question: str, budget: int = _CHAT_BUDGET) -> Tuple[str, bool]:
+def select_chat_context(
+    text: str, question: str, budget: int = _CHAT_BUDGET
+) -> Tuple[str, bool]:
     """Excerpts for Q&A: the start, the end, and the windows that match the question."""
     text = text or ""
     if len(text) <= budget:
@@ -210,7 +228,7 @@ def select_chat_context(text: str, question: str, budget: int = _CHAT_BUDGET) ->
     size = 1500
     windows = []
     for index in range(0, len(middle), size):
-        piece = middle[index:index + size]
+        piece = middle[index : index + size]
         lowered = piece.lower()
         score = sum(lowered.count(word) for word in words)
         windows.append((score, index, piece))
@@ -239,7 +257,9 @@ async def _analyze_chunk(chunk: str) -> Optional[Dict[str, Any]]:
         session_id=f"contract-analysis-{id(chunk)}",
         system_message=CONTRACT_ANALYSIS_PROMPT,
     ).with_model("openai", "gpt-5.2")
-    response = await chat.send_message(UserMessage(text=f"Analyze this contract:\n\n{chunk}"))
+    response = await chat.send_message(
+        UserMessage(text=f"Analyze this contract:\n\n{chunk}")
+    )
     parsed = _parse_model_json(response or "")
     if parsed is None:
         logger.error("Failed to parse AI response as JSON")
@@ -278,11 +298,15 @@ async def analyze_contract(contract_text: str) -> Optional[Dict[str, Any]]:
 
     usable = [part for part in parts if not part.get("error")]
     if not usable:
-        failed = parts[0] if parts else {
-            "summary": "Analysis failed",
-            "riskLevel": "unknown",
-            "error": "Could not parse structured analysis",
-        }
+        failed = (
+            parts[0]
+            if parts
+            else {
+                "summary": "Analysis failed",
+                "riskLevel": "unknown",
+                "error": "Could not parse structured analysis",
+            }
+        )
         failed = dict(failed)
         failed["coverage"] = coverage
         return failed
@@ -318,7 +342,10 @@ async def get_chat_response(contract_text: str, question: str, session_id: str) 
         )
         answer = response or "I couldn't generate a response. Please try again."
         if partial:
-            answer = answer.rstrip() + "\n\nThis answer used excerpts, not the entire contract."
+            answer = (
+                answer.rstrip()
+                + "\n\nThis answer used excerpts, not the entire contract."
+            )
         return answer
 
     except Exception as exc:
@@ -357,20 +384,20 @@ async def classify_intake_contract(
     subject: str,
     filename: str,
     mime_type: str,
-    extracted_text: str = ""
+    extracted_text: str = "",
 ) -> Dict[str, Any]:
     """Classify an incoming contract from email intake metadata."""
     if not EMERGENT_LLM_KEY:
         logger.warning("EMERGENT_LLM_KEY not configured, using fallback classification")
         return _fallback_classification(sender_email, subject, filename)
-    
+
     try:
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"intake-classification-{hash(sender_email + subject + filename)}",
-            system_message=INTAKE_CLASSIFICATION_PROMPT
+            system_message=INTAKE_CLASSIFICATION_PROMPT,
         ).with_model("openai", "gpt-5.2")
-        
+
         # Build context from available metadata
         context_parts = [
             f"Sender: {sender_email}",
@@ -378,17 +405,19 @@ async def classify_intake_contract(
             f"Filename: {filename}",
             f"MIME Type: {mime_type}",
         ]
-        
+
         if extracted_text:
             # Include first 3000 chars of extracted text
-            context_parts.append(f"Extracted Text (first 3000 chars):\n{extracted_text[:3000]}")
-        
+            context_parts.append(
+                f"Extracted Text (first 3000 chars):\n{extracted_text[:3000]}"
+            )
+
         user_message = UserMessage(
             text="Classify this incoming contract:\n\n" + "\n".join(context_parts)
         )
-        
+
         response = await chat.send_message(user_message)
-        
+
         try:
             clean_response = response.strip()
             if clean_response.startswith("```json"):
@@ -397,39 +426,55 @@ async def classify_intake_contract(
                 clean_response = clean_response[3:]
             if clean_response.endswith("```"):
                 clean_response = clean_response[:-3]
-            
+
             classification = json.loads(clean_response.strip())
-            
+
             # Validate required fields
-            required_fields = ["contract_type", "counterparty", "confidence", "reasoning"]
+            required_fields = [
+                "contract_type",
+                "counterparty",
+                "confidence",
+                "reasoning",
+            ]
             for field in required_fields:
                 if field not in classification:
                     classification[field] = None
-            
+
             # Ensure confidence is float
             classification["confidence"] = float(classification.get("confidence", 0.0))
-            
+
             return classification
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse classification JSON: {e}")
             return _fallback_classification(sender_email, subject, filename)
-            
+
     except Exception as e:
         logger.error(f"Intake classification failed: {e}")
         return _fallback_classification(sender_email, subject, filename)
 
 
-def _fallback_classification(sender_email: str, subject: str, filename: str) -> Dict[str, Any]:
+def _fallback_classification(
+    sender_email: str, subject: str, filename: str
+) -> Dict[str, Any]:
     """Fallback rule-based classification when AI is unavailable."""
     text = f"{subject} {filename}".lower()
-    
+
     contract_type = "General"
     if any(kw in text for kw in ["nda", "non-disclosure", "confidentiality"]):
         contract_type = "NDA"
     elif any(kw in text for kw in ["employment", "offer letter", "hire", "employee"]):
         contract_type = "Employment"
-    elif any(kw in text for kw in ["service agreement", "msa", "sow", "consulting", "professional services"]):
+    elif any(
+        kw in text
+        for kw in [
+            "service agreement",
+            "msa",
+            "sow",
+            "consulting",
+            "professional services",
+        ]
+    ):
         contract_type = "Service Agreement"
     elif any(kw in text for kw in ["lease", "rental", "rent"]):
         contract_type = "Lease"
@@ -439,7 +484,7 @@ def _fallback_classification(sender_email: str, subject: str, filename: str) -> 
         contract_type = "Licensing"
     elif any(kw in text for kw in ["purchase", "acquisition", "buy", "order"]):
         contract_type = "Purchase Agreement"
-    
+
     # Extract counterparty from sender domain
     counterparty = None
     if "@" in sender_email:
@@ -448,15 +493,16 @@ def _fallback_classification(sender_email: str, subject: str, filename: str) -> 
         parts = domain.split(".")
         if len(parts) >= 2:
             counterparty = parts[-2].title()
-    
+
     # Also check filename for company names
     if not counterparty and filename:
         # Simple extraction - look for capitalized words
         import re
-        words = re.findall(r'\b[A-Z][a-z]+\b', filename)
+
+        words = re.findall(r"\b[A-Z][a-z]+\b", filename)
         if words:
             counterparty = " ".join(words[:2])
-    
+
     risk_indicators = []
     if "urgent" in text or "asap" in text or "immediate" in text:
         risk_indicators.append("urgency_language")
@@ -464,14 +510,18 @@ def _fallback_classification(sender_email: str, subject: str, filename: str) -> 
         risk_indicators.append("exclusive_terms")
     if any(kw in text for kw in ["million", "billion", "$"]):
         risk_indicators.append("high_value")
-    if any(kw in text for kw in ["gdpr", "hipaa", "pci", "sox", "regulatory", "compliance"]):
+    if any(
+        kw in text for kw in ["gdpr", "hipaa", "pci", "sox", "regulatory", "compliance"]
+    ):
         risk_indicators.append("regulatory")
-    
+
     return {
         "contract_type": contract_type,
         "counterparty": counterparty,
         "confidence": 0.4,
         "reasoning": "Fallback rule-based classification from metadata",
         "risk_indicators": risk_indicators,
-        "suggested_playbook": f"{contract_type} Playbook" if contract_type != "General" else None
+        "suggested_playbook": (
+            f"{contract_type} Playbook" if contract_type != "General" else None
+        ),
     }

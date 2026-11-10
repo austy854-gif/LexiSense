@@ -3,7 +3,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { contractsAPI, versionsAPI, workflowAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
-import { canPerformWorkflowAction, canWriteContracts, getErrorInfo } from '../lib/apiHelpers.mjs';
+import { canPerformWorkflowAction, getErrorInfo, normalizeRole } from '../lib/apiHelpers.mjs';
+import { hasCapability, hasContractCapability } from '../lib/access.mjs';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -33,8 +34,17 @@ import {
   Download,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { SectionErrorBoundary } from '../components/SectionErrorBoundary';
+import {
+  normalizeKeyTerms,
+  normalizeRisks,
+  normalizeTextList,
+  toDisplayText,
+} from '../lib/safeRender';
 
-const RiskBadge = ({ level, size = 'default' }) => {
+/** Risk level pill; any value is coerced to text so AI drift can't crash it. */
+const RiskBadge = ({ level: rawLevel, size = 'default' }) => {
+  const level = toDisplayText(rawLevel);
   const colors = {
     high: 'bg-red-500/10 text-red-500 border-red-500/20',
     medium: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
@@ -74,16 +84,29 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+const WORKFLOW_CAPABILITY = {
+  submit_for_review: 'canSubmitForReview',
+  approve: 'canApprove',
+  reject: 'canReject',
+  activate: 'canActivate',
+};
+
+/** Render a contract with organization, role, ownership, and access-aware action controls. */
 export default function ContractDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const canWrite = canWriteContracts(user?.role);
-  // Workflow buttons follow the server's role check (routes/workflow.py):
-  // submit = admin/manager/user; approve, reject, activate = admin/manager.
-  const canDo = (action) => canPerformWorkflowAction(user?.role, action, contract?.status);
+  const { user, access } = useAuth();
   const [contract, setContract] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Workflow buttons need the server capability AND a legal transition from
+  // the current status (canPerformWorkflowAction mirrors routes/workflow.py).
+  /** Resolve a contract action against the current capability and uploader identity. */
+  const canDo = (action) =>
+    hasCapability(access, WORKFLOW_CAPABILITY[action]) &&
+    canPerformWorkflowAction(user?.role, action, contract?.status) &&
+    (action !== 'submit_for_review' || normalizeRole(user?.role) !== 'user' ||
+      (contract?.uploadedBy != null && contract.uploadedBy === user?.id));
+  const restoreAllowed = hasContractCapability(access, 'canRestore', 'canRestoreOwn', contract, user);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
@@ -268,9 +291,16 @@ export default function ContractDetailPage() {
     );
   }
 
-  const analysis = contract.aiAnalysis || {};
+  // AI output can drift from the expected shape; normalise before rendering
+  // so an object where a string was expected can't crash the page (LX-ENG-KT-01).
+  const analysis = contract.aiAnalysis && typeof contract.aiAnalysis === 'object' ? contract.aiAnalysis : {};
   const analysisFailed = contract.aiAnalysisStatus === 'failed';
-  const analysisPending = Boolean(contract.aiAnalysisStatus) && !analysisFailed && !analysis.summary;
+  const summaryText = toDisplayText(analysis.summary);
+  const parties = normalizeTextList(analysis.parties);
+  const risks = normalizeRisks(analysis.risks);
+  const keyTerms = normalizeKeyTerms(analysis.keyTerms);
+  const recommendations = normalizeTextList(analysis.recommendations);
+  const analysisPending = Boolean(contract.aiAnalysisStatus) && !analysisFailed && !summaryText;
 
   return (
     <Layout>
@@ -289,9 +319,9 @@ export default function ContractDetailPage() {
             <p className="text-muted-foreground mt-1">
               {contract.contractType} • Uploaded by {contract.uploaderEmail || 'Unknown'}
             </p>
-            {contract.aiAnalysis?.coverage?.partial && (
+            {analysis.coverage?.partial && (
               <p className="mt-2 text-sm text-amber-600 dark:text-amber-400" data-testid="analysis-coverage">
-                {contract.aiAnalysis.coverageNote ||
+                {toDisplayText(analysis.coverageNote) ||
                   'Only part of this contract was analyzed. Read the document before relying on dates or risk.'}
               </p>
             )}
@@ -382,7 +412,7 @@ export default function ContractDetailPage() {
                     <Building className="h-4 w-4" />
                     Counterparty
                   </div>
-                  <p className="font-medium mt-1">{contract.counterparty || 'Not specified'}</p>
+                  <p className="font-medium mt-1">{toDisplayText(contract.counterparty) || 'Not specified'}</p>
                 </CardContent>
               </Card>
               <Card>
@@ -391,7 +421,7 @@ export default function ContractDetailPage() {
                     <DollarSign className="h-4 w-4" />
                     Value
                   </div>
-                  <p className="font-medium mt-1">{contract.value || 'Not specified'}</p>
+                  <p className="font-medium mt-1">{toDisplayText(contract.value) || 'Not specified'}</p>
                 </CardContent>
               </Card>
               <Card>
@@ -401,7 +431,7 @@ export default function ContractDetailPage() {
                     Effective
                   </div>
                   <p className="font-medium mt-1">
-                    {contract.effectiveDate || 'Not specified'}
+                    {toDisplayText(contract.effectiveDate) || 'Not specified'}
                   </p>
                 </CardContent>
               </Card>
@@ -412,7 +442,7 @@ export default function ContractDetailPage() {
                     Expiry
                   </div>
                   <p className="font-medium mt-1">
-                    {contract.expiryDate || 'Not specified'}
+                    {toDisplayText(contract.expiryDate) || 'Not specified'}
                   </p>
                 </CardContent>
               </Card>
@@ -433,25 +463,26 @@ export default function ContractDetailPage() {
                 </CardHeader>
                 <CardContent className="pt-6">
                   <TabsContent value="summary" className="mt-0">
+                    <SectionErrorBoundary scope="analysis-summary" resetKey={contract.id}>
                     {analysisFailed ? (
                       <div className="flex items-start gap-3 p-4 rounded-lg border border-destructive/30 bg-destructive/5">
                         <AlertTriangle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
                         <div>
                           <p className="font-medium text-destructive">AI analysis failed</p>
                           <p className="text-sm text-muted-foreground mt-1">
-                            {contract.aiAnalysisError ||
+                            {toDisplayText(contract.aiAnalysisError) ||
                               "The analysis didn't run this time. Re-upload the contract to try again."}
                           </p>
                         </div>
                       </div>
-                    ) : analysis.summary ? (
+                    ) : summaryText ? (
                       <div className="prose prose-sm dark:prose-invert max-w-none">
-                        <p>{analysis.summary}</p>
-                        {analysis.parties && analysis.parties.length > 0 && (
+                        <p>{summaryText}</p>
+                        {parties.length > 0 && (
                           <div className="mt-4">
                             <h4 className="font-medium mb-2">Parties Involved:</h4>
                             <ul className="list-disc pl-4">
-                              {analysis.parties.map((party, i) => (
+                              {parties.map((party, i) => (
                                 <li key={i}>{party}</li>
                               ))}
                             </ul>
@@ -463,6 +494,7 @@ export default function ContractDetailPage() {
                     ) : (
                       <p className="text-muted-foreground">No summary available</p>
                     )}
+                    </SectionErrorBoundary>
                   </TabsContent>
 
                   <TabsContent value="document" className="mt-0">
@@ -476,9 +508,10 @@ export default function ContractDetailPage() {
                   </TabsContent>
 
                   <TabsContent value="risks" className="mt-0">
-                    {analysis.risks && analysis.risks.length > 0 ? (
+                    <SectionErrorBoundary scope="analysis-risks" resetKey={contract.id}>
+                    {risks.length > 0 ? (
                       <div className="space-y-4">
-                        {analysis.risks.map((risk, i) => (
+                        {risks.map((risk, i) => (
                           <div
                             key={i}
                             className="p-4 rounded-lg border border-border bg-card"
@@ -490,7 +523,9 @@ export default function ContractDetailPage() {
                                     ? 'text-red-500'
                                     : risk.severity === 'medium'
                                     ? 'text-yellow-500'
-                                    : 'text-green-500'
+                                    : risk.severity === 'low'
+                                    ? 'text-green-500'
+                                    : 'text-muted-foreground'
                                 }`}
                               />
                               <div className="flex-1">
@@ -512,27 +547,34 @@ export default function ContractDetailPage() {
                     ) : (
                       <p className="text-muted-foreground">No risks identified</p>
                     )}
+                    </SectionErrorBoundary>
                   </TabsContent>
 
                   <TabsContent value="terms" className="mt-0">
-                    {analysis.keyTerms && analysis.keyTerms.length > 0 ? (
+                    <SectionErrorBoundary scope="analysis-terms" resetKey={contract.id}>
+                    {keyTerms.length > 0 ? (
                       <ul className="space-y-2">
-                        {analysis.keyTerms.map((term, i) => (
-                          <li key={i} className="flex items-start gap-2">
+                        {keyTerms.map((term, i) => (
+                          <li key={i} className="flex items-start gap-2" data-testid="key-term">
                             <Shield className="h-4 w-4 text-primary mt-1" />
-                            <span>{term}</span>
+                            <span>
+                              {term.label ? <span className="font-medium">{term.label}: </span> : null}
+                              {term.text}
+                            </span>
                           </li>
                         ))}
                       </ul>
                     ) : (
                       <p className="text-muted-foreground">No key terms extracted</p>
                     )}
+                    </SectionErrorBoundary>
                   </TabsContent>
 
                   <TabsContent value="recommendations" className="mt-0">
-                    {analysis.recommendations && analysis.recommendations.length > 0 ? (
+                    <SectionErrorBoundary scope="analysis-recommendations" resetKey={contract.id}>
+                    {recommendations.length > 0 ? (
                       <ul className="space-y-2">
-                        {analysis.recommendations.map((rec, i) => (
+                        {recommendations.map((rec, i) => (
                           <li key={i} className="flex items-start gap-2">
                             <Lightbulb className="h-4 w-4 text-yellow-500 mt-1" />
                             <span>{rec}</span>
@@ -542,6 +584,7 @@ export default function ContractDetailPage() {
                     ) : (
                       <p className="text-muted-foreground">No recommendations available</p>
                     )}
+                    </SectionErrorBoundary>
                   </TabsContent>
 
                   <TabsContent value="history" className="mt-0">
@@ -583,8 +626,8 @@ export default function ContractDetailPage() {
                                 )}
                               </div>
                             </div>
-                            {canWrite && (
-                            <Button
+                            {restoreAllowed && (
+                              <Button
                               variant="outline"
                               size="sm"
                               onClick={() => handleRestoreVersion(version.version)}

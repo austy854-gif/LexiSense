@@ -1,4 +1,5 @@
 """Readiness Redis probe, Celery broker polling options, worker launch flags."""
+
 import asyncio
 import json
 import os
@@ -17,12 +18,24 @@ WORKER_FLAGS = ("--without-gossip", "--without-mingle", "--without-heartbeat")
 
 # --- Celery conf ------------------------------------------------------------
 def test_broker_transport_options_polling_interval_and_preserved():
-    probe = ("import json; from services.celery_app import celery_app as c; "
-             "print(json.dumps(c.conf.broker_transport_options))")
-    env = {k: v for k, v in os.environ.items() if k not in ("REDIS_URL", "CELERY_BROKER_URL")}
+    probe = (
+        "import json; from services.celery_app import celery_app as c; "
+        "print(json.dumps(c.conf.broker_transport_options))"
+    )
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("REDIS_URL", "CELERY_BROKER_URL")
+    }
     env.setdefault("JWT_SECRET", "test-secret-do-not-use-in-production")
-    out = subprocess.run([sys.executable, "-c", probe], cwd=BACKEND, env=env,
-                         capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=BACKEND,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     opts = json.loads(out.stdout.strip().splitlines()[-1])
     assert opts["polling_interval"] == 10
     assert "socket_timeout" in opts and "socket_connect_timeout" in opts
@@ -31,12 +44,20 @@ def test_broker_transport_options_polling_interval_and_preserved():
 # --- Worker launch commands -------------------------------------------------
 def _worker_commands():
     cmds = []
-    for path in [*REPO.glob("docker-compose*.yml"), *REPO.glob("Procfile"), *REPO.glob("railway.*"),
-                 *REPO.glob("**/Dockerfile"), *REPO.glob("*.sh"), *BACKEND.glob("scripts/*")]:
+    for path in [
+        *REPO.glob("docker-compose*.yml"),
+        *REPO.glob("Procfile"),
+        *REPO.glob("railway.*"),
+        *REPO.glob("**/Dockerfile"),
+        *REPO.glob("*.sh"),
+        *BACKEND.glob("scripts/*"),
+    ]:
         if "node_modules" in path.parts or not path.is_file():
             continue
         for line in path.read_text(errors="ignore").splitlines():
-            if re.search(r"celery\s+(-A|--app)\s+\S+\s+worker\b", line) and not line.lstrip().startswith("#"):
+            if re.search(
+                r"celery\s+(-A|--app)\s+\S+\s+worker\b", line
+            ) and not line.lstrip().startswith("#"):
                 cmds.append((path.name, line))
     return cmds
 
@@ -64,8 +85,11 @@ def _import_server():
     """
     if "server" in sys.modules:
         return sys.modules["server"]
-    before = {name: dict(vars(mod)) for name, mod in list(sys.modules.items())
-              if mod is not None and name.startswith(("routes.", "services.", "utils."))}
+    before = {
+        name: dict(vars(mod))
+        for name, mod in list(sys.modules.items())
+        if mod is not None and name.startswith(("routes.", "services.", "utils."))
+    }
     import server
 
     for name, snapshot in before.items():
@@ -90,7 +114,9 @@ def ready_app(monkeypatch):
 
 
 async def _get_ready(server):
-    async with AsyncClient(transport=ASGITransport(app=server.app), base_url="http://t") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=server.app), base_url="http://t"
+    ) as c:
         return await c.get("/api/v1/ready")
 
 
@@ -213,8 +239,12 @@ async def test_ready_redis_ping_ok(ready_app, monkeypatch):
 
 
 @pytest.mark.parametrize("behaviour", ["fail", "hang"])
-async def test_ready_redis_ping_failure_is_503(ready_app, monkeypatch, caplog, behaviour):
-    monkeypatch.setenv("CELERY_BROKER_URL", "rediss://default:secret@example.upstash.io:6379")
+async def test_ready_redis_ping_failure_is_503(
+    ready_app, monkeypatch, caplog, behaviour
+):
+    monkeypatch.setenv(
+        "CELERY_BROKER_URL", "rediss://default:secret@example.upstash.io:6379"
+    )
     monkeypatch.setattr(ready_app, "REDIS_PROBE_TIMEOUT_SECONDS", 0.1)
     _patch_redis(monkeypatch, behaviour)
     r = await _get_ready(ready_app)

@@ -175,6 +175,7 @@ export const auditAPI = {
 // Billing API
 export const billingAPI = {
   getSubscription: () => api.get('/billing/subscription'),
+  getCapabilities: () => api.get('/billing/capabilities'),
   // Checkout by plan + interval; the server maps it to one of its six Stripe prices.
   createCheckout: ({ planId, interval = 'monthly' }, successUrl, cancelUrl) =>
     api.post('/billing/checkout', { planId, interval, successUrl, cancelUrl }),

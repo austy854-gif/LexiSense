@@ -4,7 +4,7 @@ import logging
 import re
 from typing import Optional
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from utils.env import get_env
 
@@ -29,16 +29,20 @@ S3_BUCKET_NAME = get_bucket_name()
 
 
 def get_s3_client():
-    """Get an S3 client instance."""
+    """Get the configured durable object-store client, or ``None``.
+
+    There is deliberately no mock/ephemeral storage path. Upload callers must
+    fail closed when this returns ``None``.
+    """
     if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY or not get_bucket_name():
-        logger.warning("AWS credentials not fully configured - using mock storage (NOT FOR PRODUCTION)")
+        logger.error("Durable storage is not configured; refusing file operations")
         return None
 
     return boto3.client(
-        's3',
+        "s3",
         aws_access_key_id=AWS_ACCESS_KEY_ID,
         aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-        region_name=AWS_REGION
+        region_name=AWS_REGION,
     )
 
 
@@ -67,8 +71,9 @@ async def upload_file_to_s3(
 
     s3_client = get_s3_client()
     if not s3_client:
-        logger.info(f"Mock upload: {storage_key}")
-        return storage_key
+        raise ValueError(
+            "Durable file storage is unavailable. Upload was not accepted."
+        )
 
     try:
         # boto3 is synchronous; run it in a worker thread so the event loop
@@ -80,11 +85,45 @@ async def upload_file_to_s3(
             Body=file_content,
             ContentType=content_type,
         )
-        logger.info(f"Uploaded file to S3: {storage_key}")
+        # A successful PUT is not sufficient: immediately prove the object is
+        # readable before the API creates/returns a contract.
+        metadata = await asyncio.to_thread(
+            s3_client.head_object, Bucket=get_bucket_name(), Key=storage_key
+        )
+        if int(metadata.get("ContentLength", -1)) != len(file_content):
+            raise ValueError("Stored file failed retrieval verification")
+        response = await asyncio.to_thread(
+            s3_client.get_object, Bucket=get_bucket_name(), Key=storage_key
+        )
+        body = response["Body"]
+        try:
+            retrieved = await asyncio.to_thread(body.read)
+        finally:
+            close = getattr(body, "close", None)
+            if close:
+                close()
+        if retrieved != file_content:
+            raise ValueError("Stored file failed retrieval verification")
+        logger.info("Uploaded and retrieval-verified durable object")
         return storage_key
-    except ClientError as e:
-        logger.error("Failed to upload to S3: %s", type(e).__name__)
-        raise ValueError("Failed to upload file") from e
+    except (BotoCoreError, ClientError, ValueError) as e:
+        logger.error(
+            "Durable upload/retrieval verification failed: %s", type(e).__name__
+        )
+        # The caller never receives storage_key on this path, so this is the
+        # only chance to remove the bytes. Purge every version (a plain key
+        # delete on a versioned bucket only adds a delete marker).
+        try:
+            purged = await purge_uploaded_object(storage_key)
+        except Exception:
+            purged = False
+        if not purged:
+            logger.error("Failed upload could not be fully purged from storage")
+        if isinstance(e, ValueError) and str(e).startswith("Durable"):
+            raise
+        raise ValueError(
+            "Durable storage verification failed. Upload was not accepted."
+        ) from e
 
 
 async def generate_presigned_url(
@@ -123,19 +162,125 @@ async def generate_presigned_url(
 
 
 async def delete_file_from_s3(storage_key: str) -> bool:
-    """Delete a file from S3."""
+    """Confirm an idempotent S3 key deletion; missing storage configuration fails closed."""
     s3_client = get_s3_client()
     if not s3_client:
-        logger.info(f"Mock delete: {storage_key}")
-        return True
+        logger.error("Cannot delete file: S3 client is not configured")
+        return False
+
+    bucket = get_bucket_name()
+
+    def versions():
+        entries = []
+        params = {"Bucket": bucket, "Prefix": storage_key}
+        while True:
+            page = s3_client.list_object_versions(**params)
+            entries.extend(
+                item
+                for group in ("Versions", "DeleteMarkers")
+                for item in page.get(group, [])
+                if item.get("Key") == storage_key
+            )
+            if not page.get("IsTruncated"):
+                return entries
+            params["KeyMarker"] = page["NextKeyMarker"]
+            params["VersionIdMarker"] = page["NextVersionIdMarker"]
 
     try:
-        await asyncio.to_thread(s3_client.delete_object, Bucket=get_bucket_name(), Key=storage_key)
-        logger.info(f"Deleted file from S3: {storage_key}")
+        retained = await asyncio.to_thread(versions)
+        for item in retained:
+            # "null" is also a retained version in suspended/unversioned buckets.
+            await asyncio.to_thread(
+                s3_client.delete_object,
+                Bucket=bucket,
+                Key=storage_key,
+                VersionId=item["VersionId"],
+            )
+        if await asyncio.to_thread(versions):
+            logger.error("Object versions remain after deletion")
+            return False
+        logger.info("Confirmed all object versions removed")
         return True
-    except ClientError as e:
-        logger.error(f"Failed to delete from S3: {e}")
+    except (BotoCoreError, ClientError, KeyError) as e:
+        logger.error("Failed to delete from S3: %s", type(e).__name__)
         return False
+
+
+async def _delete_key_marker(storage_key: str) -> bool:
+    """Best-effort hiding for upload rollback; does not confirm version removal."""
+    client = get_s3_client()
+    if not client:
+        return False
+    try:
+        await asyncio.to_thread(
+            client.delete_object, Bucket=get_bucket_name(), Key=storage_key
+        )
+        return True
+    except (BotoCoreError, ClientError):
+        return False
+
+
+async def purge_uploaded_object(storage_key: str) -> bool:
+    """Permanently remove an object written by a failed upload.
+
+    On a versioned bucket a plain ``delete_object`` only adds a delete marker
+    and leaves the uploaded bytes behind, so every version (and marker) of the
+    key is deleted explicitly. Upload keys are unique per upload, so all
+    versions under the exact key belong to this upload. Falls back to a plain
+    key delete on an unversioned bucket. If versions cannot be listed (for
+    example missing ``s3:ListBucketVersions``) the key delete is still
+    attempted but the purge reports failure, because on a versioned bucket
+    that only adds a delete marker and the uploaded bytes may remain.
+    """
+    s3_client = get_s3_client()
+    if not s3_client:
+        logger.info(f"Mock purge: {storage_key}")
+        return True
+    bucket = get_bucket_name()
+    try:
+        listing = await asyncio.to_thread(
+            s3_client.list_object_versions, Bucket=bucket, Prefix=storage_key
+        )
+        entries = [
+            item
+            for group in ("Versions", "DeleteMarkers")
+            for item in (listing.get(group) or [])
+            if item.get("Key") == storage_key
+            and item.get("VersionId") not in (None, "null")
+        ]
+    except (BotoCoreError, ClientError) as e:
+        logger.error(
+            "Could not list object versions for rollback (%s); object may be retained "
+            "if the bucket is versioned",
+            type(e).__name__,
+        )
+        await _delete_key_marker(storage_key)
+        return False
+    if not entries:
+        return await _delete_key_marker(storage_key)
+    ok = True
+    for item in entries:
+        try:
+            await asyncio.to_thread(
+                s3_client.delete_object,
+                Bucket=bucket,
+                Key=storage_key,
+                VersionId=item["VersionId"],
+            )
+        except (BotoCoreError, ClientError) as e:
+            logger.error(
+                "Failed to delete object version during rollback: %s", type(e).__name__
+            )
+            ok = False
+    if not ok:
+        # e.g. DeleteObjectVersion denied but DeleteObject allowed: a key delete
+        # at least hides the object. Still report failure so it is cleaned up.
+        await _delete_key_marker(storage_key)
+        logger.error(
+            "Object versions retained after rollback; needs manual purge: key=%s",
+            storage_key,
+        )
+    return ok
 
 
 async def ensure_bucket_exists():
@@ -148,16 +293,18 @@ async def ensure_bucket_exists():
         await asyncio.to_thread(s3_client.head_bucket, Bucket=get_bucket_name())
         return True
     except ClientError as e:
-        error_code = e.response.get('Error', {}).get('Code')
-        if error_code == '404':
+        error_code = e.response.get("Error", {}).get("Code")
+        if error_code == "404":
             try:
-                if AWS_REGION == 'us-east-1':
-                    await asyncio.to_thread(s3_client.create_bucket, Bucket=get_bucket_name())
+                if AWS_REGION == "us-east-1":
+                    await asyncio.to_thread(
+                        s3_client.create_bucket, Bucket=get_bucket_name()
+                    )
                 else:
                     await asyncio.to_thread(
                         s3_client.create_bucket,
                         Bucket=get_bucket_name(),
-                        CreateBucketConfiguration={'LocationConstraint': AWS_REGION},
+                        CreateBucketConfiguration={"LocationConstraint": AWS_REGION},
                     )
                 logger.info(f"Created S3 bucket: {get_bucket_name()}")
                 return True

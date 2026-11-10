@@ -5,6 +5,7 @@ signature      = base64(HMAC-SHA256(base64decode(secret without "whsec_"), signe
 The ``svix-signature`` header holds space-separated ``v1,<sig>`` entries.
 Implemented locally to avoid a new dependency; mirrors the official library.
 """
+
 from __future__ import annotations
 
 import base64
@@ -22,7 +23,7 @@ class WebhookVerificationError(Exception):
 
 def _key(secret: str) -> bytes:
     if secret.startswith("whsec_"):
-        secret = secret[len("whsec_"):]
+        secret = secret[len("whsec_") :]
     try:
         return base64.b64decode(secret, validate=True)
     except Exception as exc:
@@ -31,10 +32,17 @@ def _key(secret: str) -> bytes:
 
 def sign(secret: str, msg_id: str, timestamp: str, body: bytes) -> str:
     content = f"{msg_id}.{timestamp}.".encode() + body
-    return "v1," + base64.b64encode(hmac.new(_key(secret), content, hashlib.sha256).digest()).decode()
+    return (
+        "v1,"
+        + base64.b64encode(
+            hmac.new(_key(secret), content, hashlib.sha256).digest()
+        ).decode()
+    )
 
 
-def verify(secret: str, headers: Mapping[str, str], body: bytes, now: Optional[float] = None) -> None:
+def verify(
+    secret: str, headers: Mapping[str, str], body: bytes, now: Optional[float] = None
+) -> None:
     """Raise :class:`WebhookVerificationError` unless the request is authentic and fresh."""
     msg_id = headers.get("svix-id") or headers.get("webhook-id")
     timestamp = headers.get("svix-timestamp") or headers.get("webhook-timestamp")

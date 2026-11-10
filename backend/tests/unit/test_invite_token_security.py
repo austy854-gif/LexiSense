@@ -5,6 +5,7 @@
 * Invitations store ``sha256(token)`` in ``tokenHash``; accept looks up by
   hash, and legacy plaintext records still work and are migrated.
 """
+
 import hashlib
 import json
 import logging
@@ -85,14 +86,18 @@ def app_url(monkeypatch):
 # email_service logging
 # ---------------------------------------------------------------------------
 class TestEmailLogRedaction:
-    async def test_missing_key_logs_warning_with_metadata_only(self, monkeypatch, caplog, app_url):
+    async def test_missing_key_logs_warning_with_metadata_only(
+        self, monkeypatch, caplog, app_url
+    ):
         monkeypatch.setattr(email_service, "RESEND_API_KEY", None)
         caplog.set_level(logging.DEBUG)
 
         result = await _invite(org_name="Secret Merger Co")
 
         assert result["status"] == "logged"
-        _assert_no_secrets(caplog, RAW_TOKEN, RECIPIENT, "new.person", "Secret Merger Co", "Ada Admin")
+        _assert_no_secrets(
+            caplog, RAW_TOKEN, RECIPIENT, "new.person", "Secret Merger Co", "Ada Admin"
+        )
         warnings = [r for r in caplog.records if r.name == email_service.logger.name]
         assert len(warnings) == 1 and warnings[0].levelno == logging.WARNING
         message = warnings[0].getMessage()
@@ -121,7 +126,9 @@ class TestEmailLogRedaction:
         assert "recipient_domain=client-corp.example" in message
         assert "template=invitation" in message
 
-    async def test_provider_error_does_not_echo_payload(self, monkeypatch, caplog, app_url):
+    async def test_provider_error_does_not_echo_payload(
+        self, monkeypatch, caplog, app_url
+    ):
         monkeypatch.setattr(email_service, "RESEND_API_KEY", "re_test_key")
 
         def failing_send(params, *args):
@@ -134,18 +141,24 @@ class TestEmailLogRedaction:
         result = await _invite()
 
         assert result["status"] == "error"
-        assert RAW_TOKEN not in json.dumps(result) and RECIPIENT not in json.dumps(result)
+        assert RAW_TOKEN not in json.dumps(result) and RECIPIENT not in json.dumps(
+            result
+        )
         _assert_no_secrets(caplog, RAW_TOKEN, RECIPIENT)
         errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert errors and "error_type=RuntimeError" in errors[0].getMessage()
         assert "recipient_domain=client-corp.example" in errors[0].getMessage()
 
-    async def test_raw_email_missing_key_does_not_log_subject_or_address(self, monkeypatch, caplog):
+    async def test_raw_email_missing_key_does_not_log_subject_or_address(
+        self, monkeypatch, caplog
+    ):
         monkeypatch.setattr(email_service, "RESEND_API_KEY", None)
         caplog.set_level(logging.DEBUG)
         subject = f"Approve: {APP_URL}/approve?token={RAW_TOKEN}"
 
-        result = await email_service.send_raw_email(RECIPIENT, subject, f"<html>{subject}</html>")
+        result = await email_service.send_raw_email(
+            RECIPIENT, subject, f"<html>{subject}</html>"
+        )
 
         assert result["status"] == "logged"
         _assert_no_secrets(caplog, RAW_TOKEN, RECIPIENT, subject)
@@ -153,8 +166,14 @@ class TestEmailLogRedaction:
 
     @pytest.mark.parametrize(
         "address, expected",
-        [("a@B.Example", "b.example"), ("no-at-sign", "unknown"), ("", "unknown"), (None, "unknown"),
-         ("x@", "unknown"), ('"a@b"@c.example', "c.example")],
+        [
+            ("a@B.Example", "b.example"),
+            ("no-at-sign", "unknown"),
+            ("", "unknown"),
+            (None, "unknown"),
+            ("x@", "unknown"),
+            ('"a@b"@c.example', "c.example"),
+        ],
     )
     def test_recipient_domain(self, address, expected):
         assert email_service._recipient_domain(address) == expected
@@ -186,7 +205,9 @@ class TestHashedStorage:
         caplog.set_level(logging.DEBUG)
         headers = auth_headers(users["admin"])
 
-        response = await client.post(INVITE_URL, json={"email": RECIPIENT, "role": "user"}, headers=headers)
+        response = await client.post(
+            INVITE_URL, json={"email": RECIPIENT, "role": "user"}, headers=headers
+        )
         assert response.status_code == 200
         (raw,) = captured_tokens
         assert raw and len(raw) >= 32
@@ -204,18 +225,30 @@ class TestHashedStorage:
 
         _assert_no_secrets(caplog, raw, RECIPIENT)
 
-        accepted = await client.post(ACCEPT_URL, json={"token": raw, "password": PASSWORD})
+        accepted = await client.post(
+            ACCEPT_URL, json={"token": raw, "password": PASSWORD}
+        )
         assert accepted.status_code == 200
-        assert (await db.invitations.find_one({"id": doc["id"]}))["status"] == "accepted"
+        assert (await db.invitations.find_one({"id": doc["id"]}))[
+            "status"
+        ] == "accepted"
         assert await db.users.find_one({"email": RECIPIENT})
 
-    async def test_hash_itself_is_not_accepted_as_token(self, client, db, users, captured_tokens):
-        await client.post(INVITE_URL, json={"email": RECIPIENT}, headers=auth_headers(users["admin"]))
+    async def test_hash_itself_is_not_accepted_as_token(
+        self, client, db, users, captured_tokens
+    ):
+        await client.post(
+            INVITE_URL, json={"email": RECIPIENT}, headers=auth_headers(users["admin"])
+        )
         doc = await db.invitations.find_one({"email": RECIPIENT})
-        response = await client.post(ACCEPT_URL, json={"token": doc["tokenHash"], "password": PASSWORD})
+        response = await client.post(
+            ACCEPT_URL, json={"token": doc["tokenHash"], "password": PASSWORD}
+        )
         assert response.status_code == 404
 
-    async def test_two_invites_coexist_under_index_spec(self, db, users, client, captured_tokens):
+    async def test_two_invites_coexist_under_index_spec(
+        self, db, users, client, captured_tokens
+    ):
         await apply_indexes(db)
         headers = auth_headers(users["admin"])
         for email in ("one@x.example", "two@y.example"):
@@ -239,15 +272,26 @@ class TestAcceptByHash:
         assert "token" not in inv and inv["tokenHash"] == _sha(RAW_TOKEN)
         await db.invitations.insert_one(dict(inv))
 
-        r = await client.post(ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD})
+        r = await client.post(
+            ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD}
+        )
         assert r.status_code == 200
         assert RAW_TOKEN not in r.text and inv["tokenHash"] not in r.text
 
-    async def test_legacy_plaintext_token_works_and_is_migrated(self, client, db, org_id, users):
-        inv = make_invitation(org_id, invited_by=users["admin"]["id"], token=RAW_TOKEN, legacy_plaintext=True)
+    async def test_legacy_plaintext_token_works_and_is_migrated(
+        self, client, db, org_id, users
+    ):
+        inv = make_invitation(
+            org_id,
+            invited_by=users["admin"]["id"],
+            token=RAW_TOKEN,
+            legacy_plaintext=True,
+        )
         await db.invitations.insert_one(dict(inv))
 
-        r = await client.post(ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD})
+        r = await client.post(
+            ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD}
+        )
         assert r.status_code == 200
 
         doc = await db.invitations.find_one({"id": inv["id"]})
@@ -255,23 +299,38 @@ class TestAcceptByHash:
         assert doc["tokenHash"] == _sha(RAW_TOKEN)
         assert doc["status"] == "accepted"
         # Single use still holds after migration.
-        again = await client.post(ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD})
+        again = await client.post(
+            ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD}
+        )
         assert again.status_code == 404
 
-    async def test_legacy_lookup_migrates_even_when_not_accepted(self, db, org_id, users):
-        inv = make_invitation(org_id, invited_by=users["admin"]["id"], token=RAW_TOKEN, legacy_plaintext=True)
+    async def test_legacy_lookup_migrates_even_when_not_accepted(
+        self, db, org_id, users
+    ):
+        inv = make_invitation(
+            org_id,
+            invited_by=users["admin"]["id"],
+            token=RAW_TOKEN,
+            legacy_plaintext=True,
+        )
         await db.invitations.insert_one(dict(inv))
 
-        found = await invite_tokens.find_invitation_by_token(db.invitations, RAW_TOKEN, {"status": "pending"})
+        found = await invite_tokens.find_invitation_by_token(
+            db.invitations, RAW_TOKEN, {"status": "pending"}
+        )
         assert found["id"] == inv["id"] and "token" not in found
         stored = await db.invitations.find_one({"id": inv["id"]})
         assert "token" not in stored and stored["tokenHash"] == _sha(RAW_TOKEN)
         # Second lookup now resolves through the hash.
-        assert (await invite_tokens.find_invitation_by_token(db.invitations, RAW_TOKEN))["id"] == inv["id"]
+        assert (
+            await invite_tokens.find_invitation_by_token(db.invitations, RAW_TOKEN)
+        )["id"] == inv["id"]
 
     @pytest.mark.parametrize("token", ["wrong-token", "", RAW_TOKEN.upper()])
     async def test_invalid_tokens_rejected(self, client, db, org_id, users, token):
-        await db.invitations.insert_one(make_invitation(org_id, invited_by=users["admin"]["id"], token=RAW_TOKEN))
+        await db.invitations.insert_one(
+            make_invitation(org_id, invited_by=users["admin"]["id"], token=RAW_TOKEN)
+        )
         r = await client.post(ACCEPT_URL, json={"token": token, "password": PASSWORD})
         assert r.status_code == 404
         assert not await db.users.find_one({"email": "invitee@example.com"})
@@ -279,19 +338,28 @@ class TestAcceptByHash:
     @pytest.mark.parametrize("legacy", [False, True])
     async def test_expired_tokens_rejected(self, client, db, org_id, users, legacy):
         inv = make_invitation(
-            org_id, invited_by=users["admin"]["id"], token=RAW_TOKEN,
-            expires_at=iso_in(-1), legacy_plaintext=legacy,
+            org_id,
+            invited_by=users["admin"]["id"],
+            token=RAW_TOKEN,
+            expires_at=iso_in(-1),
+            legacy_plaintext=legacy,
         )
         await db.invitations.insert_one(dict(inv))
-        r = await client.post(ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD})
+        r = await client.post(
+            ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD}
+        )
         assert r.status_code == 400
         doc = await db.invitations.find_one({"id": inv["id"]})
         assert doc["status"] == "expired" and "token" not in doc
 
     async def test_non_pending_tokens_rejected(self, client, db, org_id, users):
-        inv = make_invitation(org_id, invited_by=users["admin"]["id"], token=RAW_TOKEN, status="accepted")
+        inv = make_invitation(
+            org_id, invited_by=users["admin"]["id"], token=RAW_TOKEN, status="accepted"
+        )
         await db.invitations.insert_one(dict(inv))
-        r = await client.post(ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD})
+        r = await client.post(
+            ACCEPT_URL, json={"token": RAW_TOKEN, "password": PASSWORD}
+        )
         assert r.status_code == 404
 
 
@@ -299,24 +367,39 @@ class TestAcceptByHash:
 # Startup migration
 # ---------------------------------------------------------------------------
 class TestLegacyMigration:
-    async def test_migration_hashes_all_plaintext_tokens_idempotently(self, db, org_id, users):
+    async def test_migration_hashes_all_plaintext_tokens_idempotently(
+        self, db, org_id, users
+    ):
         admin = users["admin"]["id"]
-        legacy_pending = make_invitation(org_id, admin, token="legacy-a", legacy_plaintext=True)
+        legacy_pending = make_invitation(
+            org_id, admin, token="legacy-a", legacy_plaintext=True
+        )
         legacy_accepted = make_invitation(
-            org_id, admin, token="legacy-b", legacy_plaintext=True, status="accepted", email="b@x.example"
+            org_id,
+            admin,
+            token="legacy-b",
+            legacy_plaintext=True,
+            status="accepted",
+            email="b@x.example",
         )
         modern = make_invitation(org_id, admin, token="modern-c", email="c@x.example")
         for doc in (legacy_pending, legacy_accepted, modern):
             await db.invitations.insert_one(dict(doc))
         # The pre-fix plaintext unique index, as it exists in production.
-        await db.invitations.create_index([("token", 1)], unique=True, name="uq_invitations_token")
+        await db.invitations.create_index(
+            [("token", 1)], unique=True, name="uq_invitations_token"
+        )
 
         (migration,) = [m for m in MIGRATIONS if m["name"] == "hash_invitation_tokens"]
         await migration["run"](db)
         await migration["run"](db)  # idempotent
 
         assert await db.invitations.count_documents({"token": {"$exists": True}}) == 0
-        for doc, raw in ((legacy_pending, "legacy-a"), (legacy_accepted, "legacy-b"), (modern, "modern-c")):
+        for doc, raw in (
+            (legacy_pending, "legacy-a"),
+            (legacy_accepted, "legacy-b"),
+            (modern, "modern-c"),
+        ):
             stored = await db.invitations.find_one({"id": doc["id"]})
             assert stored["tokenHash"] == _sha(raw)
             assert stored["status"] == doc["status"]

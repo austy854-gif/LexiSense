@@ -2,6 +2,7 @@
 agent sweep, playbook analysis and automatic playbook analysis on email
 intake). Lapsed orgs are skipped -- no AI work, a log line and a recorded
 ``skipped`` status -- instead of crashing."""
+
 import logging
 
 import pytest
@@ -21,19 +22,46 @@ PRICE = "price_bg_team"
 def team_price(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_TEAM_MONTHLY", PRICE)
 
+
 ENTITLED = {
-    "trial": dict(subscriptionTier=SubscriptionTier.TRIAL, billingStatus=BillingStatus.TRIALING, trialEndDate=iso_in(3)),
-    "paid": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.ACTIVE, stripePriceId=PRICE),
-    "grace": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.PAST_DUE, pastDueSince=iso_in(-2),
-                  stripePriceId=PRICE),
+    "trial": dict(
+        subscriptionTier=SubscriptionTier.TRIAL,
+        billingStatus=BillingStatus.TRIALING,
+        trialEndDate=iso_in(3),
+    ),
+    "paid": dict(
+        subscriptionTier=SubscriptionTier.TEAM,
+        billingStatus=BillingStatus.ACTIVE,
+        stripePriceId=PRICE,
+    ),
+    "grace": dict(
+        subscriptionTier=SubscriptionTier.TEAM,
+        billingStatus=BillingStatus.PAST_DUE,
+        pastDueSince=iso_in(-2),
+        stripePriceId=PRICE,
+    ),
 }
 BLOCKED = {
-    "expired": dict(subscriptionTier=SubscriptionTier.TRIAL, billingStatus=BillingStatus.TRIALING, trialEndDate=iso_in(-1)),
-    "cancelled": dict(subscriptionTier=SubscriptionTier.CANCELLED, billingStatus=BillingStatus.CANCELLED),
-    "past_due": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.PAST_DUE, pastDueSince=iso_in(-9),
-                     stripePriceId=PRICE),
-    "unmapped_price": dict(subscriptionTier=SubscriptionTier.TEAM, billingStatus=BillingStatus.ACTIVE,
-                           stripePriceId="price_unknown"),
+    "expired": dict(
+        subscriptionTier=SubscriptionTier.TRIAL,
+        billingStatus=BillingStatus.TRIALING,
+        trialEndDate=iso_in(-1),
+    ),
+    "cancelled": dict(
+        subscriptionTier=SubscriptionTier.CANCELLED,
+        billingStatus=BillingStatus.CANCELLED,
+    ),
+    "past_due": dict(
+        subscriptionTier=SubscriptionTier.TEAM,
+        billingStatus=BillingStatus.PAST_DUE,
+        pastDueSince=iso_in(-9),
+        stripePriceId=PRICE,
+    ),
+    "unmapped_price": dict(
+        subscriptionTier=SubscriptionTier.TEAM,
+        billingStatus=BillingStatus.ACTIVE,
+        stripePriceId="price_unknown",
+    ),
 }
 
 
@@ -53,21 +81,37 @@ def delays(monkeypatch):
         return lambda *a, **k: calls.append((name, a, k))
 
     monkeypatch.setattr(agent_tasks.execute_contract_agent, "delay", recorder("agent"))
-    monkeypatch.setattr(playbook_tasks.analyze_contract_with_playbook, "delay", recorder("playbook"))
+    monkeypatch.setattr(
+        playbook_tasks.analyze_contract_with_playbook, "delay", recorder("playbook")
+    )
     monkeypatch.setattr(risk_tasks.assess_contract_risk, "delay", recorder("risk"))
-    monkeypatch.setattr(obligation_tasks.extract_obligations_from_contract, "delay", recorder("obligations"))
+    monkeypatch.setattr(
+        obligation_tasks.extract_obligations_from_contract,
+        "delay",
+        recorder("obligations"),
+    )
     return calls
 
 
 async def _billing(db, state, org=ORG):
-    await db.organization_billing.insert_one({"id": f"b-{org}", "organizationId": org, **state})
+    await db.organization_billing.insert_one(
+        {"id": f"b-{org}", "organizationId": org, **state}
+    )
 
 
 async def _agent(db, agent_id="ag-1", org=ORG):
-    await db.contract_agents.insert_one({
-        "id": agent_id, "organizationId": org, "createdBy": "u-1", "name": "Expiry",
-        "agentType": "expiration_monitor", "status": "active", "config": {}, "executionHistory": [],
-    })
+    await db.contract_agents.insert_one(
+        {
+            "id": agent_id,
+            "organizationId": org,
+            "createdBy": "u-1",
+            "name": "Expiry",
+            "agentType": "expiration_monitor",
+            "status": "active",
+            "config": {},
+            "executionHistory": [],
+        }
+    )
 
 
 def test_task_modules_use_the_per_task_db(db):
@@ -118,8 +162,14 @@ async def test_scheduled_sweep_only_queues_entitled_orgs(task_db, delays):
 
 
 async def _seed_playbook_contract(db, org=ORG):
-    await db.contracts.insert_one(make_contract(org, "u-1", contract_id="c-pb", originalText="Confidentiality applies."))
-    await db.legal_playbooks.insert_one({"id": "pb-1", "organizationId": org, "rules": []})
+    await db.contracts.insert_one(
+        make_contract(
+            org, "u-1", contract_id="c-pb", originalText="Confidentiality applies."
+        )
+    )
+    await db.legal_playbooks.insert_one(
+        {"id": "pb-1", "organizationId": org, "rules": []}
+    )
 
 
 @pytest.mark.parametrize("name", list(BLOCKED))
@@ -141,15 +191,28 @@ async def test_playbook_task_runs_with_entitlement(task_db):
 async def test_playbook_task_rejects_other_orgs_playbook(task_db):
     await _billing(task_db, ENTITLED["paid"])
     await _seed_playbook_contract(task_db)
-    await task_db.legal_playbooks.insert_one({"id": "pb-other", "organizationId": "org-x", "rules": []})
-    result = await playbook_tasks._analyze_contract_with_playbook_async("c-pb", "pb-other")
+    await task_db.legal_playbooks.insert_one(
+        {"id": "pb-other", "organizationId": "org-x", "rules": []}
+    )
+    result = await playbook_tasks._analyze_contract_with_playbook_async(
+        "c-pb", "pb-other"
+    )
     assert result["status"] == "error"
 
 
 def _intake(playbook_id="pb-1"):
     return ContractIntake(
-        organizationId=ORG, channel=IntakeChannel.EMAIL, source_email="a@b.test",
-        attachments=[{"filename": "nda.pdf", "size": 10, "mime_type": "application/pdf", "storage_key": "k"}],
+        organizationId=ORG,
+        channel=IntakeChannel.EMAIL,
+        source_email="a@b.test",
+        attachments=[
+            {
+                "filename": "nda.pdf",
+                "size": 10,
+                "mime_type": "application/pdf",
+                "storage_key": "k",
+            }
+        ],
         playbook_id=playbook_id,
     )
 
@@ -159,7 +222,9 @@ async def test_intake_skips_auto_playbook_without_entitlement(task_db, delays, n
     await _billing(task_db, BLOCKED[name])
     intake = _intake()
     await task_db.contract_intakes.insert_one(intake.model_dump())
-    contract_id = await intake_tasks._create_contract_from_intake(intake, {"contract_type": "NDA"}, task_db)
+    contract_id = await intake_tasks._create_contract_from_intake(
+        intake, {"contract_type": "NDA"}, task_db
+    )
     assert contract_id  # the contract itself is still created
     assert "playbook" not in [c[0] for c in delays]
     doc = await task_db.contract_intakes.find_one({"id": intake.id})
@@ -170,7 +235,9 @@ async def test_intake_queues_auto_playbook_with_entitlement(task_db, delays):
     await _billing(task_db, ENTITLED["trial"])
     intake = _intake()
     await task_db.contract_intakes.insert_one(intake.model_dump())
-    contract_id = await intake_tasks._create_contract_from_intake(intake, {"contract_type": "NDA"}, task_db)
+    contract_id = await intake_tasks._create_contract_from_intake(
+        intake, {"contract_type": "NDA"}, task_db
+    )
     assert ("playbook", (contract_id, "pb-1"), {"auto_apply": False}) in delays
     doc = await task_db.contract_intakes.find_one({"id": intake.id})
     assert doc["playbook_analysis_status"] == "queued"
@@ -181,7 +248,12 @@ async def test_missing_billing_record_starts_trial(task_db):
 
     ent = await background_ai_entitlement("org-new", task_db, "test")
     assert ent is not None and ent.state == "trial"
-    assert await task_db.organization_billing.count_documents({"organizationId": "org-new"}) == 1
+    assert (
+        await task_db.organization_billing.count_documents(
+            {"organizationId": "org-new"}
+        )
+        == 1
+    )
     assert await background_ai_entitlement(None, task_db, "test") is None
 
 
@@ -219,21 +291,34 @@ def intake_fakes(monkeypatch):
 INTAKE_PAYLOAD = {
     "created_at": "2026-10-19T12:00:00Z",
     "data": {
-        "id": "em_1", "from": "legal@acme.test", "subject": "NDA",
-        "attachments": [{"filename": "nda.txt", "content_type": "text/plain", "content": "VGVybTogMSB5ZWFy"}],
+        "id": "em_1",
+        "from": "legal@acme.test",
+        "subject": "NDA",
+        "attachments": [
+            {
+                "filename": "nda.txt",
+                "content_type": "text/plain",
+                "content": "VGVybTogMSB5ZWFy",
+            }
+        ],
     },
 }
 
 
 @pytest.mark.parametrize("name", list(BLOCKED))
-async def test_email_intake_not_classified_or_stored_without_entitlement(task_db, intake_fakes, name):
+async def test_email_intake_not_classified_or_stored_without_entitlement(
+    task_db, intake_fakes, name
+):
     await _billing(task_db, BLOCKED[name])
     result = await intake_tasks._process_resend_webhook_async(INTAKE_PAYLOAD)
     assert result["status"] == "skipped" and result["reason"] == "no_ai_entitlement"
     assert intake_fakes == {"classify": [], "s3": []}
     doc = await task_db.contract_intakes.find_one({"id": result["intake_id"]})
     assert doc["organizationId"] == ORG and doc["status"] == "manual_review"
-    assert doc["processing_skip_reason"] == "no_ai_entitlement" and doc["attachments"] == []
+    assert (
+        doc["processing_skip_reason"] == "no_ai_entitlement"
+        and doc["attachments"] == []
+    )
 
 
 async def test_email_intake_classified_with_entitlement(task_db, intake_fakes):

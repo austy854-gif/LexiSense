@@ -5,6 +5,7 @@ through ``utils.feature_flags.enabled_groups`` -- the same helper server.py
 uses to decide whether to mount the agentic router. ``/auth/2fa``, ``/tags`` and
 ``/reports`` stay forbidden whatever the flags.
 """
+
 import importlib.util
 from pathlib import Path
 
@@ -27,7 +28,9 @@ ALLOWED_PATHS = ["/api/v1/", "/api/v1/auth/login", "/api/v1/contracts/{contract_
 
 @pytest.fixture(scope="module")
 def smoke():
-    spec = importlib.util.spec_from_file_location("backend_test", REPO_ROOT / "backend_test.py")
+    spec = importlib.util.spec_from_file_location(
+        "backend_test", REPO_ROOT / "backend_test.py"
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -60,7 +63,9 @@ def test_flags_off_forbids_every_agentic_path(smoke, flags_off, agentic_paths):
 
 
 @pytest.mark.parametrize("value", ["false", "0", "no", "off", ""])
-def test_falsy_flag_values_count_as_off(smoke, flags_off, monkeypatch, agentic_paths, value):
+def test_falsy_flag_values_count_as_off(
+    smoke, flags_off, monkeypatch, agentic_paths, value
+):
     for flag in AGENTIC_FLAGS:
         monkeypatch.setenv(flag, value)
     patterns = smoke.forbidden_route_patterns()
@@ -69,13 +74,18 @@ def test_falsy_flag_values_count_as_off(smoke, flags_off, monkeypatch, agentic_p
 
 
 @pytest.mark.parametrize("flag", AGENTIC_FLAGS)
-def test_any_flag_on_allows_agentic_but_keeps_other_patterns(smoke, flags_off, monkeypatch, agentic_paths, flag):
+def test_any_flag_on_allows_agentic_but_keeps_other_patterns(
+    smoke, flags_off, monkeypatch, agentic_paths, flag
+):
     monkeypatch.setenv(flag, "true")
     assert enabled_groups()  # server.py would mount /agentic
     patterns = smoke.forbidden_route_patterns()
     assert "/agentic" not in patterns
     assert smoke.find_forbidden_paths(agentic_paths, patterns) == []
-    assert smoke.find_forbidden_paths(OTHER_FORBIDDEN_PATHS, patterns) == OTHER_FORBIDDEN_PATHS
+    assert (
+        smoke.find_forbidden_paths(OTHER_FORBIDDEN_PATHS, patterns)
+        == OTHER_FORBIDDEN_PATHS
+    )
     assert smoke.find_forbidden_paths(ALLOWED_PATHS, patterns) == []
 
 
@@ -87,7 +97,10 @@ def test_other_patterns_are_unconditional(smoke, flags_off, monkeypatch, flags_o
     patterns = smoke.forbidden_route_patterns()
     for pattern in smoke.ALWAYS_FORBIDDEN_PATTERNS:
         assert pattern in patterns
-    assert smoke.find_forbidden_paths(OTHER_FORBIDDEN_PATHS, patterns) == OTHER_FORBIDDEN_PATHS
+    assert (
+        smoke.find_forbidden_paths(OTHER_FORBIDDEN_PATHS, patterns)
+        == OTHER_FORBIDDEN_PATHS
+    )
 
 
 def test_mixed_spec_reports_each_offending_path_once(smoke, flags_off, agentic_paths):
@@ -96,7 +109,9 @@ def test_mixed_spec_reports_each_offending_path_once(smoke, flags_off, agentic_p
     assert found == OTHER_FORBIDDEN_PATHS + agentic_paths[:1]
 
 
-@pytest.mark.parametrize("state", [set(), {"AGENTIC_PHASE1_ENABLED"}, set(AGENTIC_FLAGS)])
+@pytest.mark.parametrize(
+    "state", [set(), {"AGENTIC_PHASE1_ENABLED"}, set(AGENTIC_FLAGS)]
+)
 def test_agrees_with_server_mount_decision(smoke, state):
     """Explicit env_flag: /agentic forbidden <=> enabled_groups() is empty."""
     env_flag = state.__contains__

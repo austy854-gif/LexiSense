@@ -10,8 +10,12 @@ class OrganizationCreate(BaseModel):
 
 class Organization(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
-    createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    createdAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    updatedAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )

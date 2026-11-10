@@ -6,6 +6,7 @@ from ``pastDueSince`` (or ``updatedAt`` for records written before that field
 existed). After the grace window, and for any cancelled subscription, uploads
 are rejected with a billing message — never the free-trial copy.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,9 +17,7 @@ from utils import plans as _plans
 from utils.env import get_env
 from utils.feature_flags import billing_ui_enabled
 
-READ_ONLY_MESSAGE = (
-    "Your subscription needs attention. This workspace is read-only until billing is updated."
-)
+READ_ONLY_MESSAGE = "Your subscription needs attention. This workspace is read-only until billing is updated."
 
 _ALLOW = "allow"
 _TRIAL = "trial"
@@ -59,7 +58,11 @@ def upload_gate(billing: Optional[dict], now: Optional[datetime] = None) -> str:
     if tier == "team" and status in ("active", "trialing"):
         return _ALLOW
     if status == "past_due" and (tier == "team" or billing.get("stripeCustomerId")):
-        since = _parse_dt(billing.get("pastDueSince")) or _parse_dt(billing.get("updatedAt")) or now
+        since = (
+            _parse_dt(billing.get("pastDueSince"))
+            or _parse_dt(billing.get("updatedAt"))
+            or now
+        )
         if now - since <= grace_window():
             return _ALLOW
         return _READONLY
@@ -73,9 +76,13 @@ def grace_ends_at(billing: Optional[dict]) -> Optional[str]:
     billing = billing or {}
     if billing.get("billingStatus") != "past_due":
         return None
-    if not (billing.get("subscriptionTier") == "team" or billing.get("stripeCustomerId")):
+    if not (
+        billing.get("subscriptionTier") == "team" or billing.get("stripeCustomerId")
+    ):
         return None
-    since = _parse_dt(billing.get("pastDueSince")) or _parse_dt(billing.get("updatedAt"))
+    since = _parse_dt(billing.get("pastDueSince")) or _parse_dt(
+        billing.get("updatedAt")
+    )
     if since is None:
         return None
     return (since + grace_window()).isoformat()
@@ -91,9 +98,17 @@ ACCESS_PAID = "paid"
 ACCESS_GRACE = "grace"
 ACCESS_TRIAL = "trial"
 ACCESS_TRIAL_EXPIRED = "trial_expired"
-ACCESS_PAST_DUE = "past_due"          # read-only after the grace window
+ACCESS_PAST_DUE = "past_due"  # read-only after the grace window
 ACCESS_CANCELLED = "cancelled"
 ACCESS_UNVERIFIED_PLAN = "unverified_plan"
+
+#: States in which the workspace is read-only for every contract mutation.
+#: Single source of truth for ``assert_org_writable`` and ``/billing/capabilities``.
+#: ``trial_expired`` is deliberately absent: an expired trial only blocks new
+#: uploads (enforced by the upload gate), existing contracts stay editable.
+READ_ONLY_STATES = frozenset(
+    {ACCESS_PAST_DUE, ACCESS_CANCELLED, ACCESS_UNVERIFIED_PLAN}
+)
 
 MSG_UNVERIFIED_PLAN = (
     "We couldn't verify your subscription plan. Please contact support to restore "
@@ -158,7 +173,9 @@ def _paid_plan_for(billing: dict):
     return None, False
 
 
-def compute_entitlement(billing: Optional[dict], now: Optional[datetime] = None) -> Entitlement:
+def compute_entitlement(
+    billing: Optional[dict], now: Optional[datetime] = None
+) -> Entitlement:
     """B1: active or trialing is paid. B2: past-due grace then read-only.
     B4: a subscription on a price that isn't configured grants nothing."""
     billing = billing or {}
@@ -170,18 +187,36 @@ def compute_entitlement(billing: Optional[dict], now: Optional[datetime] = None)
     if gate == _ALLOW:
         plan, known = _paid_plan_for(billing)
         if not known:
-            return Entitlement(ACCESS_UNVERIFIED_PLAN, None, False, trial_cap,
-                               blocked_message(ACCESS_UNVERIFIED_PLAN))
+            return Entitlement(
+                ACCESS_UNVERIFIED_PLAN,
+                None,
+                False,
+                trial_cap,
+                blocked_message(ACCESS_UNVERIFIED_PLAN),
+            )
         state = ACCESS_GRACE if status == "past_due" else ACCESS_PAID
         return Entitlement(state, plan.id, True, plan.max_members)
     if gate == _READONLY:
         if status == "past_due" and billing.get("subscriptionTier") != "cancelled":
             plan, _ = _paid_plan_for(billing)
             cap = plan.max_members if plan else trial_cap
-            return Entitlement(ACCESS_PAST_DUE, plan.id if plan else None, False, cap,
-                               blocked_message(ACCESS_PAST_DUE))
-        return Entitlement(ACCESS_CANCELLED, None, False, trial_cap, blocked_message(ACCESS_CANCELLED))
+            return Entitlement(
+                ACCESS_PAST_DUE,
+                plan.id if plan else None,
+                False,
+                cap,
+                blocked_message(ACCESS_PAST_DUE),
+            )
+        return Entitlement(
+            ACCESS_CANCELLED, None, False, trial_cap, blocked_message(ACCESS_CANCELLED)
+        )
     trial_end = _parse_dt(billing.get("trialEndDate"))
     if trial_end is not None and now > trial_end:
-        return Entitlement(ACCESS_TRIAL_EXPIRED, None, False, trial_cap, blocked_message(ACCESS_TRIAL_EXPIRED))
+        return Entitlement(
+            ACCESS_TRIAL_EXPIRED,
+            None,
+            False,
+            trial_cap,
+            blocked_message(ACCESS_TRIAL_EXPIRED),
+        )
     return Entitlement(ACCESS_TRIAL, None, True, trial_cap)

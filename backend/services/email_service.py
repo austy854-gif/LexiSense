@@ -20,7 +20,9 @@ SENDER_EMAIL = (
 )
 APP_URL = get_env("APP_URL", "")
 if not APP_URL:
-    logger.warning("APP_URL is not set - links in outgoing emails will be relative/broken")
+    logger.warning(
+        "APP_URL is not set - links in outgoing emails will be relative/broken"
+    )
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
@@ -57,6 +59,7 @@ def _fill(template: str, values: dict, *, escape: bool) -> str:
     An unknown placeholder raises ``KeyError`` so a template/code mismatch
     fails loudly in tests instead of shipping literal braces to users.
     """
+
     def _sub(match):
         value = str(values[match.group(1)])
         return html_lib.escape(value, quote=True) if escape else value
@@ -120,7 +123,9 @@ def render_invitation_email(data: dict) -> tuple[str, str, str]:
         "invitee_email": data.get("invitee_email") or "you",
         "accept_url": build_accept_url(data.get("token", "")),
     }
-    subject_tpl, _preview_tpl, text_tpl = _split_text_template(_read_template(INVITE_TEXT_TEMPLATE))
+    subject_tpl, _preview_tpl, text_tpl = _split_text_template(
+        _read_template(INVITE_TEXT_TEMPLATE)
+    )
     subject = _one_line(_fill(subject_tpl, values, escape=False))
     html_tpl = _DEV_COMMENT.sub("", _read_template(INVITE_HTML_TEMPLATE))
     html_tpl = _MID_SENTENCE_INVITER.sub("{{inviter_name_mid}}", html_tpl)
@@ -132,12 +137,13 @@ def render_invitation_email(data: dict) -> tuple[str, str, str]:
 
 def get_email_template(template_type: str, data: dict) -> tuple[str, str]:
     """Generate email subject and HTML content based on template type."""
-    
+
     if template_type == "invitation":
         subject, html, _text = render_invitation_email(data)
 
     elif template_type == "password_reset":
         from html import escape
+
         reset_url = data.get("reset_url") or ""
         safe_url = escape(str(reset_url), quote=True)
         subject = "Reset your LexiSense password"
@@ -153,8 +159,12 @@ def get_email_template(template_type: str, data: dict) -> tuple[str, str]:
         """
 
     elif template_type == "expiration_alert":
-        days_remaining = data.get('days_remaining', 0)
-        urgency_color = "#ef4444" if days_remaining <= 7 else "#f59e0b" if days_remaining <= 14 else "#22c55e"
+        days_remaining = data.get("days_remaining", 0)
+        urgency_color = (
+            "#ef4444"
+            if days_remaining <= 7
+            else "#f59e0b" if days_remaining <= 14 else "#22c55e"
+        )
         subject = f"⚠️ Contract Expiring Soon: {data.get('contract_title', 'Contract')}"
         html = f"""
         <!DOCTYPE html>
@@ -221,15 +231,15 @@ def get_email_template(template_type: str, data: dict) -> tuple[str, str]:
         """
     else:
         subject = "LexiSense Notification"
-        html = f"<p>{data.get('message', 'You have a notification from LexiSense.')}</p>"
-    
+        html = (
+            f"<p>{data.get('message', 'You have a notification from LexiSense.')}</p>"
+        )
+
     return subject, html
 
 
 async def send_email(
-    to_email: str,
-    template_type: str,
-    data: dict
+    to_email: str, template_type: str, data: dict, idempotency_key: Optional[str] = None
 ) -> Optional[dict]:
     """Send an email using Resend API.
 
@@ -242,10 +252,11 @@ async def send_email(
     if not RESEND_API_KEY:
         logger.warning(
             "RESEND_API_KEY not configured; email not sent (template=%s recipient_domain=%s)",
-            template_type, domain,
+            template_type,
+            domain,
         )
         return {"status": "logged", "message": "Email logged (API key not configured)"}
-    
+
     try:
         text_content = None
         if template_type == "invitation":
@@ -257,43 +268,41 @@ async def send_email(
             "from": SENDER_EMAIL,
             "to": [to_email],
             "subject": subject,
-            "html": html_content
+            "html": html_content,
         }
         if text_content:
             params["text"] = text_content
-        
+
         # Run sync SDK in thread to keep FastAPI non-blocking
-        email = await asyncio.to_thread(resend.Emails.send, params)
-        
+        options = {"idempotency_key": idempotency_key} if idempotency_key else None
+        email = await asyncio.to_thread(resend.Emails.send, params, options)
+
         logger.info(
             "Email sent (template=%s recipient_domain=%s message_id=%s)",
-            template_type, domain, email.get("id"),
+            template_type,
+            domain,
+            email.get("id"),
         )
         return {
             "status": "success",
             "message": f"Email sent to ***@{domain}",
-            "email_id": email.get("id")
+            "email_id": email.get("id"),
         }
-        
+
     except Exception as e:
         # The provider/exception text can echo the request (recipient, links),
         # so only the exception type is logged or returned.
         logger.error(
             "Failed to send email (template=%s recipient_domain=%s error_type=%s)",
-            template_type, domain, type(e).__name__,
+            template_type,
+            domain,
+            type(e).__name__,
         )
-        return {
-            "status": "error",
-            "message": "Email delivery failed"
-        }
+        return {"status": "error", "message": "Email delivery failed"}
 
 
 async def send_invitation_email(
-    to_email: str,
-    inviter_name: str,
-    organization_name: str,
-    role: str,
-    token: str
+    to_email: str, inviter_name: str, organization_name: str, role: str, token: str
 ) -> Optional[dict]:
     """Send a team invitation email."""
     return await send_email(
@@ -305,7 +314,7 @@ async def send_invitation_email(
             "role": role,
             "token": token,
             "invitee_email": to_email,
-        }
+        },
     )
 
 
@@ -315,31 +324,39 @@ async def send_expiration_alert(
     contract_title: str,
     counterparty: str,
     expiry_date: str,
-    days_remaining: int
+    days_remaining: int,
+    idempotency_key: Optional[str] = None,
 ) -> Optional[dict]:
     """Send a contract expiration alert email."""
     return await send_email(
         to_email=to_email,
         template_type="expiration_alert",
+        idempotency_key=idempotency_key,
         data={
             "contract_id": contract_id,
             "contract_title": contract_title,
             "counterparty": counterparty,
             "expiry_date": expiry_date,
-            "days_remaining": days_remaining
-        }
+            "days_remaining": days_remaining,
+        },
     )
 
 
-async def send_raw_email(to_email: str, subject: str, html: str, tags: Optional[list] = None,
-                         idempotency_key: Optional[str] = None) -> dict:
+async def send_raw_email(
+    to_email: str,
+    subject: str,
+    html: str,
+    tags: Optional[list] = None,
+    idempotency_key: Optional[str] = None,
+) -> dict:
     """Send a pre-rendered email. Unlike :func:`send_email` this RAISES on a
     provider error so callers (e.g. a Celery task) can retry; it returns
     ``{"status": "logged"}`` without sending when RESEND_API_KEY is unset."""
     if not RESEND_API_KEY:
         logger.warning(
             "RESEND_API_KEY not configured; email not sent (template=%s recipient_domain=%s)",
-            "raw", _recipient_domain(to_email),
+            "raw",
+            _recipient_domain(to_email),
         )
         return {"status": "logged", "email_id": None}
     params = {"from": SENDER_EMAIL, "to": [to_email], "subject": subject, "html": html}

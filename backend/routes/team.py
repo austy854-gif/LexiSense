@@ -35,6 +35,7 @@ _require_admin = require_role(*ADMIN_ROLES)
 
 db = None
 
+
 def init_db(database):
     global db
     db = database
@@ -50,7 +51,9 @@ def _member_limit_detail(limit: int) -> str:
 
 async def _seats_used(org_id: str) -> int:
     """Active members plus pending, unexpired invitations for the org."""
-    active = await db.users.count_documents({"organizationId": org_id, "isActive": {"$ne": False}})
+    active = await db.users.count_documents(
+        {"organizationId": org_id, "isActive": {"$ne": False}}
+    )
     now = datetime.now(timezone.utc).isoformat()
     pending = await db.invitations.count_documents(
         {"organizationId": org_id, "status": "pending", "expiresAt": {"$gt": now}}
@@ -62,7 +65,9 @@ async def _enforce_member_limit(org_id: str) -> Optional[int]:
     """403 when the org's tier seat cap is reached. Returns the cap (None = unlimited)."""
     limit = await member_limit_for_org(org_id)
     if limit is not None and await _seats_used(org_id) >= limit:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_member_limit_detail(limit))
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=_member_limit_detail(limit)
+        )
     return limit
 
 
@@ -71,7 +76,7 @@ async def list_team_members(current_user: dict = Depends(get_current_user)):
     """List all team members in the organization."""
     members = await db.users.find(
         {"organizationId": current_user["organizationId"]},
-        {"_id": 0, "passwordHash": 0}
+        {"_id": 0, "passwordHash": 0},
     ).to_list(1000)
 
     return [
@@ -84,16 +89,17 @@ async def list_team_members(current_user: dict = Depends(get_current_user)):
             organizationId=m.get("organizationId"),
             isActive=m.get("isActive", True),
             lastLogin=m.get("lastLogin"),
-            createdAt=m["createdAt"]
+            createdAt=m["createdAt"],
         )
         for m in members
     ]
 
 
-@router.post("/invite", response_model=InvitationResponse, dependencies=[Depends(_require_admin)])
+@router.post(
+    "/invite", response_model=InvitationResponse, dependencies=[Depends(_require_admin)]
+)
 async def invite_member(
-    invitation_data: InvitationCreate,
-    current_user: dict = Depends(get_current_user)
+    invitation_data: InvitationCreate, current_user: dict = Depends(get_current_user)
 ):
     """Invite a new member to the organization."""
     # Validate the role at the boundary. Previously any string was accepted and
@@ -101,25 +107,27 @@ async def invite_member(
     if not is_valid_role(invitation_data.role):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid role. Must be one of: {', '.join(ROLES)}"
+            detail=f"Invalid role. Must be one of: {', '.join(ROLES)}",
         )
 
     existing_user = await db.users.find_one({"email": invitation_data.email})
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User with this email already exists"
+            detail="User with this email already exists",
         )
 
-    existing_invite = await db.invitations.find_one({
-        "email": invitation_data.email,
-        "organizationId": current_user["organizationId"],
-        "status": "pending"
-    })
+    existing_invite = await db.invitations.find_one(
+        {
+            "email": invitation_data.email,
+            "organizationId": current_user["organizationId"],
+            "status": "pending",
+        }
+    )
     if existing_invite:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invitation already sent to this email"
+            detail="Invitation already sent to this email",
         )
 
     # Read-only (past due after grace) or unverified plan: no new invitations.
@@ -146,19 +154,29 @@ async def invite_member(
     # before any email is sent. Concurrent requests may both withdraw, which
     # fails closed rather than exceeding the cap.
     if limit is not None and await _seats_used(current_user["organizationId"]) > limit:
-        await db.invitations.delete_one({"id": invitation.id})
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_member_limit_detail(limit))
+        await db.invitations.delete_one(
+            {"id": invitation.id, "organizationId": current_user["organizationId"]}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=_member_limit_detail(limit)
+        )
 
     # Get inviter details and organization name
-    inviter = await db.users.find_one(
-        {"id": current_user["sub"]},
-        {"_id": 0, "firstName": 1, "lastName": 1, "email": 1},
-    ) or {}
+    inviter = (
+        await db.users.find_one(
+            {"id": current_user["sub"]},
+            {"_id": 0, "firstName": 1, "lastName": 1, "email": 1},
+        )
+        or {}
+    )
     org = await db.organizations.find_one(
         {"id": current_user["organizationId"]}, {"_id": 0, "name": 1}
     )
 
-    inviter_name = f"{inviter.get('firstName', '')} {inviter.get('lastName', '')}".strip() or inviter.get("email", "Team member")
+    inviter_name = (
+        f"{inviter.get('firstName', '')} {inviter.get('lastName', '')}".strip()
+        or inviter.get("email", "Team member")
+    )
     org_name = org.get("name", "the organization") if org else "the organization"
 
     # Send invitation email
@@ -167,7 +185,7 @@ async def invite_member(
         inviter_name=inviter_name,
         organization_name=org_name,
         role=invitation_data.role,
-        token=raw_token
+        token=raw_token,
     )
 
     # The invitation token is a bearer secret -- never log its value.
@@ -197,17 +215,25 @@ async def invite_member(
         role=invitation.role,
         status=invitation.status,
         expiresAt=invitation.expiresAt,
-        createdAt=invitation.createdAt
+        createdAt=invitation.createdAt,
     )
 
 
-@router.get("/invitations", response_model=List[InvitationResponse], dependencies=[Depends(_require_admin)])
+@router.get(
+    "/invitations",
+    response_model=List[InvitationResponse],
+    dependencies=[Depends(_require_admin)],
+)
 async def list_invitations(current_user: dict = Depends(get_current_user)):
     """List all pending invitations for the organization."""
-    invitations = await db.invitations.find(
-        {"organizationId": current_user["organizationId"]},
-        {"_id": 0, "token": 0, "tokenHash": 0}
-    ).sort("createdAt", -1).to_list(1000)
+    invitations = (
+        await db.invitations.find(
+            {"organizationId": current_user["organizationId"]},
+            {"_id": 0, "token": 0, "tokenHash": 0},
+        )
+        .sort("createdAt", -1)
+        .to_list(1000)
+    )
 
     return [
         InvitationResponse(
@@ -216,7 +242,7 @@ async def list_invitations(current_user: dict = Depends(get_current_user)):
             role=inv["role"],
             status=inv["status"],
             expiresAt=inv["expiresAt"],
-            createdAt=inv["createdAt"]
+            createdAt=inv["createdAt"],
         )
         for inv in invitations
     ]
@@ -232,29 +258,43 @@ def _invitation_is_expired(invitation: dict) -> bool:
 def _invite_role(invitation: dict) -> str:
     # The invitation role was validated when it was issued; normalise anyway so
     # a legacy record with an unknown role cannot grant elevated access.
-    return invitation["role"] if is_valid_role(invitation.get("role")) else DEFAULT_MEMBER_ROLE
+    return (
+        invitation["role"]
+        if is_valid_role(invitation.get("role"))
+        else DEFAULT_MEMBER_ROLE
+    )
 
 
 async def _claim_invitation(invitation: dict) -> None:
     """Atomically move ``pending -> accepted`` (single-use guarantee)."""
     claim = await db.invitations.update_one(
-        {"id": invitation["id"], "status": "pending"},
-        {"$set": {
-            "status": "accepted",
-            "acceptedAt": datetime.now(timezone.utc).isoformat(),
-        }},
+        {
+            "id": invitation["id"],
+            "organizationId": invitation["organizationId"],
+            "status": "pending",
+        },
+        {
+            "$set": {
+                "status": "accepted",
+                "acceptedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
     if claim.modified_count == 0:
         # Lost the race to a concurrent acceptance of the same token.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Invalid or expired invitation"
+            detail="Invalid or expired invitation",
         )
 
 
 async def _release_invitation(invitation: dict) -> None:
     await db.invitations.update_one(
-        {"id": invitation["id"], "status": "accepted"},
+        {
+            "id": invitation["id"],
+            "organizationId": invitation["organizationId"],
+            "status": "accepted",
+        },
         {"$set": {"status": "pending"}, "$unset": {"acceptedAt": ""}},
     )
 
@@ -300,10 +340,19 @@ async def _join_existing_account(invitation: dict, user: dict, password: str) ->
     old_org_id = user.get("organizationId")
     if old_org_id and user.get("role") == "admin":
         other_members = await db.users.count_documents(
-            {"organizationId": old_org_id, "id": {"$ne": user["id"]}, "isActive": {"$ne": False}}
+            {
+                "organizationId": old_org_id,
+                "id": {"$ne": user["id"]},
+                "isActive": {"$ne": False},
+            }
         )
         other_admins = await db.users.count_documents(
-            {"organizationId": old_org_id, "id": {"$ne": user["id"]}, "role": "admin", "isActive": {"$ne": False}}
+            {
+                "organizationId": old_org_id,
+                "id": {"$ne": user["id"]},
+                "role": "admin",
+                "isActive": {"$ne": False},
+            }
         )
         if other_members and not other_admins:
             raise HTTPException(
@@ -316,11 +365,13 @@ async def _join_existing_account(invitation: dict, user: dict, password: str) ->
     try:
         await db.users.update_one(
             {"id": user["id"]},
-            {"$set": {
-                "organizationId": org_id,
-                "role": role,
-                "updatedAt": datetime.now(timezone.utc).isoformat(),
-            }},
+            {
+                "$set": {
+                    "organizationId": org_id,
+                    "role": role,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                }
+            },
         )
     except Exception:
         await _release_invitation(invitation)
@@ -334,7 +385,11 @@ async def _join_existing_account(invitation: dict, user: dict, password: str) ->
         resource_type="team",
         resource_id=invitation["id"],
         resource_title=user["email"],
-        details={"role": role, "existingAccount": True, "previousOrganizationId": old_org_id},
+        details={
+            "role": role,
+            "existingAccount": True,
+            "previousOrganizationId": old_org_id,
+        },
     )
     return {
         "message": "You've joined the team.",
@@ -346,7 +401,9 @@ async def _join_existing_account(invitation: dict, user: dict, password: str) ->
 
 @router.post(
     "/accept-invite/preview",
-    dependencies=[Depends(rate_limit(INVITE_RATE_LIMITER, "team:accept-invite-preview"))],
+    dependencies=[
+        Depends(rate_limit(INVITE_RATE_LIMITER, "team:accept-invite-preview"))
+    ],
 )
 async def preview_invitation(payload: InvitationPreviewRequest):
     """Look up an invitation by token so the accept page can show who invited
@@ -361,7 +418,11 @@ async def preview_invitation(payload: InvitationPreviewRequest):
     * ``409`` invitation already accepted.
     """
     invitation = await find_invitation_by_token(db.invitations, payload.token)
-    if not invitation or invitation.get("status") not in ("pending", "accepted", "expired"):
+    if not invitation or invitation.get("status") not in (
+        "pending",
+        "accepted",
+        "expired",
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invalid or expired invitation",
@@ -380,11 +441,17 @@ async def preview_invitation(payload: InvitationPreviewRequest):
     org = await db.organizations.find_one(
         {"id": invitation["organizationId"]}, {"_id": 0, "name": 1}
     )
-    inviter = await db.users.find_one(
-        {"id": invitation.get("invitedBy")},
-        {"_id": 0, "firstName": 1, "lastName": 1},
-    ) or {}
-    inviter_name = f"{inviter.get('firstName') or ''} {inviter.get('lastName') or ''}".strip() or None
+    inviter = (
+        await db.users.find_one(
+            {"id": invitation.get("invitedBy")},
+            {"_id": 0, "firstName": 1, "lastName": 1},
+        )
+        or {}
+    )
+    inviter_name = (
+        f"{inviter.get('firstName') or ''} {inviter.get('lastName') or ''}".strip()
+        or None
+    )
     role = _invite_role(invitation)
     # Lets the page ask for the existing password instead of a new one. The
     # token holder already knows the address, so this reveals nothing new.
@@ -394,7 +461,10 @@ async def preview_invitation(payload: InvitationPreviewRequest):
     account_exists = existing is not None
     # True when accepting would move the account out of another team (the
     # page warns that they'll lose access to that team's contracts).
-    in_other_team = bool(existing) and existing.get("organizationId") != invitation["organizationId"]
+    in_other_team = (
+        bool(existing)
+        and existing.get("organizationId") != invitation["organizationId"]
+    )
 
     return {
         "email": invitation["email"],
@@ -418,22 +488,23 @@ async def accept_invitation(payload: AcceptInvitationRequest):
     ``pending -> accepted`` transition is a single conditional update, so two
     concurrent requests with the same token cannot both create an account.
     """
-    invitation = await find_invitation_by_token(db.invitations, payload.token, {"status": "pending"})
+    invitation = await find_invitation_by_token(
+        db.invitations, payload.token, {"status": "pending"}
+    )
 
     if not invitation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Invalid or expired invitation"
+            detail="Invalid or expired invitation",
         )
 
     if _invitation_is_expired(invitation):
         await db.invitations.update_one(
-            {"id": invitation["id"]},
-            {"$set": {"status": "expired"}}
+            {"id": invitation["id"], "organizationId": invitation["organizationId"]},
+            {"$set": {"status": "expired"}},
         )
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invitation has expired"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invitation has expired"
         )
 
     # The address may already have an account (signed up on their own after
@@ -453,7 +524,7 @@ async def accept_invitation(payload: AcceptInvitationRequest):
         firstName=payload.firstName,
         lastName=payload.lastName,
         role=role,
-        organizationId=invitation["organizationId"]
+        organizationId=invitation["organizationId"],
     )
 
     user_doc = user.model_dump()
@@ -463,7 +534,7 @@ async def accept_invitation(payload: AcceptInvitationRequest):
         # Release the claim so a transient write failure does not strand the
         # invitation in a state where it can never be accepted.
         await db.invitations.update_one(
-            {"id": invitation["id"]},
+            {"id": invitation["id"], "organizationId": invitation["organizationId"]},
             {"$set": {"status": "pending"}},
         )
         raise
@@ -484,19 +555,16 @@ async def accept_invitation(payload: AcceptInvitationRequest):
 
 @router.delete("/invitations/{invitation_id}", dependencies=[Depends(_require_admin)])
 async def cancel_invitation(
-    invitation_id: str,
-    current_user: dict = Depends(get_current_user)
+    invitation_id: str, current_user: dict = Depends(get_current_user)
 ):
     """Cancel a pending invitation."""
-    result = await db.invitations.delete_one({
-        "id": invitation_id,
-        "organizationId": current_user["organizationId"]
-    })
+    result = await db.invitations.delete_one(
+        {"id": invitation_id, "organizationId": current_user["organizationId"]}
+    )
 
     if result.deleted_count == 0:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Invitation not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found"
         )
 
     await log_action(
@@ -515,7 +583,7 @@ async def cancel_invitation(
 async def update_member_role(
     member_id: str,
     payload: MemberRoleUpdate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Update a team member's role.
 
@@ -526,24 +594,28 @@ async def update_member_role(
     if member_id == current_user["sub"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot change your own role"
+            detail="Cannot change your own role",
         )
 
     if not is_valid_role(payload.role):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid role. Must be one of: {', '.join(ROLES)}"
+            detail=f"Invalid role. Must be one of: {', '.join(ROLES)}",
         )
 
     result = await db.users.update_one(
         {"id": member_id, "organizationId": current_user["organizationId"]},
-        {"$set": {"role": payload.role, "updatedAt": datetime.now(timezone.utc).isoformat()}}
+        {
+            "$set": {
+                "role": payload.role,
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
 
     if result.matched_count == 0:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Member not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
         )
 
     await log_action(
@@ -560,26 +632,20 @@ async def update_member_role(
 
 
 @router.delete("/members/{member_id}", dependencies=[Depends(_require_admin)])
-async def remove_member(
-    member_id: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def remove_member(member_id: str, current_user: dict = Depends(get_current_user)):
     """Remove a team member from the organization."""
     if member_id == current_user["sub"]:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot remove yourself"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot remove yourself"
         )
 
-    result = await db.users.delete_one({
-        "id": member_id,
-        "organizationId": current_user["organizationId"]
-    })
+    result = await db.users.delete_one(
+        {"id": member_id, "organizationId": current_user["organizationId"]}
+    )
 
     if result.deleted_count == 0:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Member not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Member not found"
         )
 
     # Reassign the removed member's version-history authorship to the acting

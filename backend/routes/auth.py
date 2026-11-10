@@ -35,7 +35,9 @@ _RESET_TTL = timedelta(hours=1)
 _FORGOT_RESPONSE = {
     "message": "If an account exists for that email, a reset link is on its way."
 }
-_REGISTER_TAKEN = "Could not create an account with that email. If you already have one, sign in."
+_REGISTER_TAKEN = (
+    "Could not create an account with that email. If you already have one, sign in."
+)
 
 
 def _session_version(user_doc: dict) -> int:
@@ -64,11 +66,12 @@ async def register(user_data: UserCreate):
     existing_user = await db.users.find_one({"email": user_data.email})
     if existing_user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=_REGISTER_TAKEN
+            status_code=status.HTTP_400_BAD_REQUEST, detail=_REGISTER_TAKEN
         )
 
-    org_name = user_data.organizationName or f"{user_data.email.split('@')[0]}'s Organization"
+    org_name = (
+        user_data.organizationName or f"{user_data.email.split('@')[0]}'s Organization"
+    )
     org = Organization(name=org_name)
     org_doc = org.model_dump()
     await db.organizations.insert_one(org_doc)
@@ -82,7 +85,7 @@ async def register(user_data: UserCreate):
         firstName=user_data.firstName,
         lastName=user_data.lastName,
         role=ROLE_ADMIN,
-        organizationId=org.id
+        organizationId=org.id,
     )
     user_doc = user.model_dump()
     await db.users.insert_one(user_doc)
@@ -106,7 +109,7 @@ async def register(user_data: UserCreate):
         organizationId=user.organizationId,
         isActive=user.isActive,
         lastLogin=user.lastLogin,
-        createdAt=user.createdAt
+        createdAt=user.createdAt,
     )
 
     return TokenResponse(access_token=access_token, user=user_response)
@@ -123,25 +126,22 @@ async def login(credentials: UserLogin):
     if not user_doc:
         # Identical response to a wrong password: do not leak which emails exist.
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
 
     if not verify_password(credentials.password, user_doc["passwordHash"]):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
 
     if not user_doc.get("isActive", True):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is deactivated"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated"
         )
 
     await db.users.update_one(
         {"id": user_doc["id"]},
-        {"$set": {"lastLogin": datetime.now(timezone.utc).isoformat()}}
+        {"$set": {"lastLogin": datetime.now(timezone.utc).isoformat()}},
     )
 
     access_token = create_access_token(
@@ -163,7 +163,7 @@ async def login(credentials: UserLogin):
         organizationId=user_doc.get("organizationId"),
         isActive=user_doc.get("isActive", True),
         lastLogin=datetime.now(timezone.utc).isoformat(),
-        createdAt=user_doc["createdAt"]
+        createdAt=user_doc["createdAt"],
     )
 
     return TokenResponse(access_token=access_token, user=user_response)
@@ -175,8 +175,7 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     user_doc = await db.users.find_one({"id": current_user["sub"]})
     if not user_doc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
         )
 
     return UserResponse(
@@ -188,7 +187,7 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
         organizationId=user_doc.get("organizationId"),
         isActive=user_doc.get("isActive", True),
         lastLogin=user_doc.get("lastLogin"),
-        createdAt=user_doc["createdAt"]
+        createdAt=user_doc["createdAt"],
     )
 
 
@@ -206,7 +205,13 @@ async def logout(current_user: dict = Depends(get_current_user)):
     if isinstance(jti, str) and jti:
         await db.revoked_tokens.update_one(
             {"jti": jti},
-            {"$set": {"jti": jti, "userId": current_user.get("sub"), "exp": expires_at}},
+            {
+                "$set": {
+                    "jti": jti,
+                    "userId": current_user.get("sub"),
+                    "exp": expires_at,
+                }
+            },
             upsert=True,
         )
     return {"message": "Successfully logged out"}
@@ -224,10 +229,19 @@ async def forgot_password(body: ForgotPasswordRequest):
         expires = (datetime.now(timezone.utc) + _RESET_TTL).isoformat()
         await db.users.update_one(
             {"id": user_doc["id"]},
-            {"$set": {"passwordResetHash": token_hash, "passwordResetExpires": expires}},
+            {
+                "$set": {
+                    "passwordResetHash": token_hash,
+                    "passwordResetExpires": expires,
+                }
+            },
         )
         app_url = (get_env("APP_URL", "") or "").rstrip("/")
-        reset_url = f"{app_url}/reset-password?token={raw}" if app_url else f"/reset-password?token={raw}"
+        reset_url = (
+            f"{app_url}/reset-password?token={raw}"
+            if app_url
+            else f"/reset-password?token={raw}"
+        )
         await send_email(
             to_email=user_doc["email"],
             template_type="password_reset",
@@ -245,7 +259,10 @@ async def reset_password(body: ResetPasswordRequest):
     token_hash = hash_invite_token(body.token)
     user_doc = await db.users.find_one({"passwordResetHash": token_hash})
     if not user_doc or not user_doc.get("isActive", True):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset link")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset link",
+        )
     expires_raw = user_doc.get("passwordResetExpires")
     try:
         expires = datetime.fromisoformat(str(expires_raw).replace("Z", "+00:00"))
@@ -254,7 +271,10 @@ async def reset_password(body: ResetPasswordRequest):
     except (TypeError, ValueError):
         expires = datetime.now(timezone.utc) - timedelta(seconds=1)
     if datetime.now(timezone.utc) > expires:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset link")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset link",
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     result = await db.users.update_one(
@@ -266,5 +286,8 @@ async def reset_password(body: ResetPasswordRequest):
         },
     )
     if result.matched_count == 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset link")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset link",
+        )
     return {"message": "Password updated. Sign in with your new password."}

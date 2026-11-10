@@ -20,6 +20,7 @@ class BillingStatus(str):
 
 class OrganizationBilling(BaseModel):
     """Billing information attached to an organization"""
+
     model_config = ConfigDict(extra="ignore")
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -29,7 +30,9 @@ class OrganizationBilling(BaseModel):
     stripePriceId: Optional[str] = None
     subscriptionTier: str = SubscriptionTier.TRIAL
     billingStatus: str = BillingStatus.TRIALING
-    trialStartDate: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    trialStartDate: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     trialEndDate: Optional[str] = None
     currentPeriodStart: Optional[str] = None
     currentPeriodEnd: Optional[str] = None
@@ -38,8 +41,12 @@ class OrganizationBilling(BaseModel):
     trialContractsUsed: int = 0
     trialContractsLimit: int = 25
     pastDueSince: Optional[str] = None
-    createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    createdAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    updatedAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
 
 class OrganizationBillingCreate(BaseModel):

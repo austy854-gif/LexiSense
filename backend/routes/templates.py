@@ -3,13 +3,20 @@ from typing import List, Optional
 from datetime import datetime, timezone
 import logging
 
-from models.template import ContractTemplate, ContractTemplateCreate, ContractTemplateResponse
+from models.template import (
+    ContractTemplate,
+    ContractTemplateCreate,
+    ContractTemplateResponse,
+)
 from utils.auth import get_current_user
+from utils.policy import require_capability
+from routes.billing import assert_org_writable
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/templates", tags=["Templates"])
 
 db = None
+
 
 def init_db(database):
     global db
@@ -66,10 +73,19 @@ Date:                            Date:""",
             {"name": "PARTY_A_ADDRESS", "type": "text", "label": "Party A Address"},
             {"name": "PARTY_B_NAME", "type": "text", "label": "Party B Name"},
             {"name": "PARTY_B_ADDRESS", "type": "text", "label": "Party B Address"},
-            {"name": "TERM_YEARS", "type": "number", "label": "Term (Years)", "default": "2"},
-            {"name": "JURISDICTION", "type": "text", "label": "Governing Law Jurisdiction"}
+            {
+                "name": "TERM_YEARS",
+                "type": "number",
+                "label": "Term (Years)",
+                "default": "2",
+            },
+            {
+                "name": "JURISDICTION",
+                "type": "text",
+                "label": "Governing Law Jurisdiction",
+            },
         ],
-        "tags": ["confidentiality", "mutual", "standard"]
+        "tags": ["confidentiality", "mutual", "standard"],
     },
     {
         "name": "Service Agreement",
@@ -125,15 +141,28 @@ Date:                            Date:""",
             {"name": "PROVIDER_ADDRESS", "type": "text", "label": "Provider Address"},
             {"name": "CLIENT_NAME", "type": "text", "label": "Client Name"},
             {"name": "CLIENT_ADDRESS", "type": "text", "label": "Client Address"},
-            {"name": "SERVICE_DESCRIPTION", "type": "textarea", "label": "Service Description"},
+            {
+                "name": "SERVICE_DESCRIPTION",
+                "type": "textarea",
+                "label": "Service Description",
+            },
             {"name": "PAYMENT_AMOUNT", "type": "text", "label": "Payment Amount"},
             {"name": "PAYMENT_TERMS", "type": "textarea", "label": "Payment Terms"},
             {"name": "START_DATE", "type": "date", "label": "Start Date"},
             {"name": "END_DATE", "type": "date", "label": "End Date"},
-            {"name": "NOTICE_DAYS", "type": "number", "label": "Notice Period (Days)", "default": "30"},
-            {"name": "JURISDICTION", "type": "text", "label": "Governing Law Jurisdiction"}
+            {
+                "name": "NOTICE_DAYS",
+                "type": "number",
+                "label": "Notice Period (Days)",
+                "default": "30",
+            },
+            {
+                "name": "JURISDICTION",
+                "type": "text",
+                "label": "Governing Law Jurisdiction",
+            },
         ],
-        "tags": ["services", "professional", "standard"]
+        "tags": ["services", "professional", "standard"],
     },
     {
         "name": "Employment Agreement",
@@ -190,14 +219,33 @@ Date:""",
             {"name": "EMPLOYEE_ADDRESS", "type": "text", "label": "Employee Address"},
             {"name": "JOB_TITLE", "type": "text", "label": "Job Title"},
             {"name": "ANNUAL_SALARY", "type": "text", "label": "Annual Salary"},
-            {"name": "PAYMENT_FREQUENCY", "type": "select", "label": "Payment Frequency", "options": ["weekly", "bi-weekly", "monthly"]},
+            {
+                "name": "PAYMENT_FREQUENCY",
+                "type": "select",
+                "label": "Payment Frequency",
+                "options": ["weekly", "bi-weekly", "monthly"],
+            },
             {"name": "START_DATE", "type": "date", "label": "Start Date"},
-            {"name": "EMPLOYMENT_TYPE", "type": "select", "label": "Employment Type", "options": ["full-time", "part-time", "contract"]},
-            {"name": "NOTICE_DAYS", "type": "number", "label": "Notice Period (Days)", "default": "14"},
-            {"name": "JURISDICTION", "type": "text", "label": "Governing Law Jurisdiction"}
+            {
+                "name": "EMPLOYMENT_TYPE",
+                "type": "select",
+                "label": "Employment Type",
+                "options": ["full-time", "part-time", "contract"],
+            },
+            {
+                "name": "NOTICE_DAYS",
+                "type": "number",
+                "label": "Notice Period (Days)",
+                "default": "14",
+            },
+            {
+                "name": "JURISDICTION",
+                "type": "text",
+                "label": "Governing Law Jurisdiction",
+            },
         ],
-        "tags": ["employment", "hr", "standard"]
-    }
+        "tags": ["employment", "hr", "standard"],
+    },
 ]
 
 
@@ -205,65 +253,74 @@ Date:""",
 async def list_templates(
     search: Optional[str] = None,
     contract_type: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """List all available templates (organization's own + public templates)."""
     query = {
-        "$or": [
-            {"organizationId": current_user["organizationId"]},
-            {"isPublic": True}
-        ]
+        "$or": [{"organizationId": current_user["organizationId"]}, {"isPublic": True}]
     }
-    
+
     if search:
-        query["$and"] = [{"$or": [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"description": {"$regex": search, "$options": "i"}},
-            {"tags": {"$regex": search, "$options": "i"}}
-        ]}]
-    
+        query["$and"] = [
+            {
+                "$or": [
+                    {"name": {"$regex": search, "$options": "i"}},
+                    {"description": {"$regex": search, "$options": "i"}},
+                    {"tags": {"$regex": search, "$options": "i"}},
+                ]
+            }
+        ]
+
     if contract_type:
         query["contractType"] = contract_type
-    
-    templates = await db.templates.find(query, {"_id": 0}).sort("createdAt", -1).to_list(100)
-    
+
+    templates = (
+        await db.templates.find(query, {"_id": 0}).sort("createdAt", -1).to_list(100)
+    )
+
     # Add default templates if no custom ones exist
     if len(templates) == 0:
         for template_data in DEFAULT_TEMPLATES:
-            templates.append({
-                "id": f"default-{template_data['contractType'].lower().replace(' ', '-')}",
-                "organizationId": "system",
-                "name": template_data["name"],
-                "description": template_data["description"],
-                "contractType": template_data["contractType"],
-                "content": template_data["content"],
-                "fields": template_data["fields"],
-                "tags": template_data["tags"],
-                "isPublic": True,
-                "createdBy": "system",
-                "createdAt": datetime.now(timezone.utc).isoformat()
-            })
-    
+            templates.append(
+                {
+                    "id": f"default-{template_data['contractType'].lower().replace(' ', '-')}",
+                    "organizationId": "system",
+                    "name": template_data["name"],
+                    "description": template_data["description"],
+                    "contractType": template_data["contractType"],
+                    "content": template_data["content"],
+                    "fields": template_data["fields"],
+                    "tags": template_data["tags"],
+                    "isPublic": True,
+                    "createdBy": "system",
+                    "createdAt": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+
     result = []
     for t in templates:
         creator = None
         if t.get("createdBy") and t["createdBy"] != "system":
-            creator = await db.users.find_one({"id": t["createdBy"]}, {"_id": 0, "email": 1})
-        
-        result.append(ContractTemplateResponse(
-            id=t["id"],
-            name=t["name"],
-            description=t.get("description"),
-            contractType=t["contractType"],
-            content=t["content"],
-            fields=t.get("fields", []),
-            tags=t.get("tags", []),
-            isPublic=t.get("isPublic", False),
-            createdBy=t["createdBy"],
-            createdByEmail=creator["email"] if creator else "System",
-            createdAt=t["createdAt"]
-        ))
-    
+            creator = await db.users.find_one(
+                {"id": t["createdBy"]}, {"_id": 0, "email": 1}
+            )
+
+        result.append(
+            ContractTemplateResponse(
+                id=t["id"],
+                name=t["name"],
+                description=t.get("description"),
+                contractType=t["contractType"],
+                content=t["content"],
+                fields=t.get("fields", []),
+                tags=t.get("tags", []),
+                isPublic=t.get("isPublic", False),
+                createdBy=t["createdBy"],
+                createdByEmail=creator["email"] if creator else "System",
+                createdAt=t["createdAt"],
+            )
+        )
+
     return result
 
 
@@ -275,8 +332,7 @@ async def get_default_templates():
 
 @router.get("/{template_id}", response_model=ContractTemplateResponse)
 async def get_template(
-    template_id: str,
-    current_user: dict = Depends(get_current_user)
+    template_id: str, current_user: dict = Depends(get_current_user)
 ):
     """Get a specific template."""
     # Check for default templates
@@ -294,30 +350,31 @@ async def get_template(
                     isPublic=True,
                     createdBy="system",
                     createdByEmail="System",
-                    createdAt=datetime.now(timezone.utc).isoformat()
+                    createdAt=datetime.now(timezone.utc).isoformat(),
                 )
-    
+
     template = await db.templates.find_one(
         {
             "id": template_id,
             "$or": [
                 {"organizationId": current_user["organizationId"]},
-                {"isPublic": True}
-            ]
+                {"isPublic": True},
+            ],
         },
-        {"_id": 0}
+        {"_id": 0},
     )
-    
+
     if not template:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Template not found"
         )
-    
+
     creator = None
     if template.get("createdBy") and template["createdBy"] != "system":
-        creator = await db.users.find_one({"id": template["createdBy"]}, {"_id": 0, "email": 1})
-    
+        creator = await db.users.find_one(
+            {"id": template["createdBy"]}, {"_id": 0, "email": 1}
+        )
+
     return ContractTemplateResponse(
         id=template["id"],
         name=template["name"],
@@ -329,16 +386,18 @@ async def get_template(
         isPublic=template.get("isPublic", False),
         createdBy=template["createdBy"],
         createdByEmail=creator["email"] if creator else "System",
-        createdAt=template["createdAt"]
+        createdAt=template["createdAt"],
     )
 
 
 @router.post("", response_model=ContractTemplateResponse)
 async def create_template(
     template_data: ContractTemplateCreate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Create a new template."""
+    require_capability(current_user, "template_manage")
+    await assert_org_writable(current_user["organizationId"])
     template = ContractTemplate(
         organizationId=current_user["organizationId"],
         name=template_data.name,
@@ -347,14 +406,16 @@ async def create_template(
         content=template_data.content,
         fields=template_data.fields,
         tags=template_data.tags,
-        createdBy=current_user["sub"]
+        createdBy=current_user["sub"],
     )
-    
+
     template_doc = template.model_dump()
     await db.templates.insert_one(template_doc)
-    
-    creator = await db.users.find_one({"id": current_user["sub"]}, {"_id": 0, "email": 1})
-    
+
+    creator = await db.users.find_one(
+        {"id": current_user["sub"]}, {"_id": 0, "email": 1}
+    )
+
     return ContractTemplateResponse(
         id=template.id,
         name=template.name,
@@ -366,31 +427,30 @@ async def create_template(
         isPublic=template.isPublic,
         createdBy=template.createdBy,
         createdByEmail=creator["email"] if creator else None,
-        createdAt=template.createdAt
+        createdAt=template.createdAt,
     )
 
 
 @router.delete("/{template_id}")
 async def delete_template(
-    template_id: str,
-    current_user: dict = Depends(get_current_user)
+    template_id: str, current_user: dict = Depends(get_current_user)
 ):
     """Delete a template."""
+    require_capability(current_user, "template_manage")
+    await assert_org_writable(current_user["organizationId"])
     if template_id.startswith("default-"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete default templates"
+            detail="Cannot delete default templates",
         )
-    
-    result = await db.templates.delete_one({
-        "id": template_id,
-        "organizationId": current_user["organizationId"]
-    })
-    
+
+    result = await db.templates.delete_one(
+        {"id": template_id, "organizationId": current_user["organizationId"]}
+    )
+
     if result.deleted_count == 0:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Template not found"
         )
-    
+
     return {"message": "Template deleted successfully"}

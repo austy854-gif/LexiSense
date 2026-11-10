@@ -1,4 +1,5 @@
 """Helpers shared by the Celery task modules: tenant scoping and pagination."""
+
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 #: Page size for org-wide scans (keyset pagination on the application ``id``).
@@ -26,7 +27,12 @@ async def iter_batches(
         page_query = dict(query)
         if last_id is not None:
             page_query["id"] = {"$gt": last_id}
-        batch = await collection.find(page_query, proj).sort("id", 1).limit(batch_size).to_list(batch_size)
+        batch = (
+            await collection.find(page_query, proj)
+            .sort("id", 1)
+            .limit(batch_size)
+            .to_list(batch_size)
+        )
         if not batch:
             return
         yield batch

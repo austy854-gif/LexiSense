@@ -49,6 +49,7 @@ These tests need the identity store wired; they request the
 ``db_authoritative_auth`` fixture for that. See ``conftest`` for why the wiring
 is otherwise off inside the unit suite.
 """
+
 import pytest
 
 from tests.unit.conftest import (
@@ -86,7 +87,10 @@ class TestDemotionTakesEffectMidToken:
         response = await client.get(INVITATIONS_URL, headers=headers)
 
         assert response.status_code == 403
-        assert response.json()["detail"] == "This action requires one of these roles: admin"
+        assert (
+            response.json()["detail"]
+            == "This action requires one of these roles: admin"
+        )
 
     async def test_demoted_admin_cannot_reach_protected_read(
         self, client, db, db_authoritative_auth, users
@@ -108,7 +112,9 @@ class TestDemotionTakesEffectMidToken:
         """Demotion also revokes the contract write path, not just admin reads."""
         admin = users["admin"]
         await seed_users(db, admin)
-        contract = make_contract(org_id, uploaded_by=admin["id"], contract_id="contract-demote")
+        contract = make_contract(
+            org_id, uploaded_by=admin["id"], contract_id="contract-demote"
+        )
         await db.contracts.insert_one(dict(contract))
         headers = auth_headers(admin)
 
@@ -160,7 +166,9 @@ class TestDemotionTakesEffectMidToken:
         # is still valid; the 403 on the admin-only route proves the role was
         # re-read rather than taken from the token.
         assert (await client.get(MEMBERS_URL, headers=headers)).status_code == 200
-        assert (await client.get(f"{API_PREFIX}/team/invitations", headers=headers)).status_code == 403
+        assert (
+            await client.get(f"{API_PREFIX}/team/invitations", headers=headers)
+        ).status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -239,12 +247,18 @@ class TestAccountLifecycleMidToken:
         await db.users.delete_one({"id": member["id"]})
         after_removal = await client.get(MEMBERS_URL, headers=auth_headers(member))
 
-        forged = await client.get(MEMBERS_URL, headers={"Authorization": "Bearer not-a-real-token"})
+        forged = await client.get(
+            MEMBERS_URL, headers={"Authorization": "Bearer not-a-real-token"}
+        )
 
         assert removed.status_code == 200
         assert after_removal.status_code == 401
         assert forged.status_code == 401
-        assert after_removal.json()["detail"] == forged.json()["detail"] == "Invalid or expired token"
+        assert (
+            after_removal.json()["detail"]
+            == forged.json()["detail"]
+            == "Invalid or expired token"
+        )
 
     async def test_token_for_an_unknown_subject_is_unauthorized(
         self, client, db, db_authoritative_auth, org_id
@@ -284,7 +298,9 @@ class TestOrganisationComesFromTheDatabase:
             }
         )
 
-        response = await client.get(MEMBERS_URL, headers={"Authorization": f"Bearer {token}"})
+        response = await client.get(
+            MEMBERS_URL, headers={"Authorization": f"Bearer {token}"}
+        )
 
         assert response.status_code == 200
         emails = {row["email"] for row in response.json()}
@@ -328,7 +344,9 @@ class TestRoleNormalisation:
         await db.users.update_one({"id": admin["id"]}, {"$set": {"role": bogus_role}})
 
         assert (await client.get(MEMBERS_URL, headers=headers)).status_code == 200
-        assert (await client.get(f"{API_PREFIX}/team/invitations", headers=headers)).status_code == 403
+        assert (
+            await client.get(f"{API_PREFIX}/team/invitations", headers=headers)
+        ).status_code == 403
 
     async def test_forged_role_in_token_cannot_exceed_stored_role(
         self, client, db, db_authoritative_auth, users
@@ -348,7 +366,9 @@ class TestRoleNormalisation:
             }
         )
 
-        response = await client.get(INVITATIONS_URL, headers={"Authorization": f"Bearer {token}"})
+        response = await client.get(
+            INVITATIONS_URL, headers={"Authorization": f"Bearer {token}"}
+        )
 
         assert response.status_code == 403
 
@@ -357,9 +377,7 @@ class TestRoleNormalisation:
 # Wiring guard
 # ---------------------------------------------------------------------------
 class TestIdentityStoreWiring:
-    async def test_token_only_mode_when_store_is_unwired(
-        self, client, db, users
-    ):
+    async def test_token_only_mode_when_store_is_unwired(self, client, db, users):
         """Documents the fallback: without the fixture the body is trusted.
 
         This is not desired behaviour in production -- it is the documented

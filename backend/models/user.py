@@ -19,7 +19,7 @@ class UserLogin(BaseModel):
 
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     email: str
     passwordHash: str
@@ -29,8 +29,12 @@ class User(BaseModel):
     organizationId: Optional[str] = None
     isActive: bool = True
     lastLogin: Optional[str] = None
-    createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    createdAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    updatedAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
 
 class UserResponse(BaseModel):

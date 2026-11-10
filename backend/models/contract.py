@@ -23,7 +23,7 @@ class ContractCreate(BaseModel):
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     organizationId: str
     uploadedBy: str
@@ -45,8 +45,12 @@ class Contract(BaseModel):
     workflowHistory: List[Dict[str, Any]] = Field(default_factory=list)
     approvedBy: Optional[str] = None
     approvedAt: Optional[str] = None
-    createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    createdAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    updatedAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
 
 class ContractResponse(BaseModel):
@@ -78,6 +82,7 @@ class ContractUpdate(BaseModel):
     Using a body model (instead of bare query parameters) keeps the update
     payload out of URLs/logs and gives FastAPI a single validated schema.
     """
+
     title: Optional[str] = None
     counterparty: Optional[str] = None
     contractType: Optional[str] = None

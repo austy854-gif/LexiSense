@@ -14,6 +14,7 @@ _require_audit_reader = require_role(*AUDIT_READER_ROLES)
 
 db = None
 
+
 def init_db(database):
     global db
     db = database

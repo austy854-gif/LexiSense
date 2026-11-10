@@ -9,6 +9,7 @@ every index creation failed and ``/api/v1/ready`` stayed 503.
 Use :func:`get_env` for connection strings, URLs, secrets and API keys, and
 :func:`get_database_url` for the MongoDB connection string.
 """
+
 import logging
 import os
 from typing import Optional, Set, overload
@@ -21,18 +22,15 @@ _whitespace_warned: Set[str] = set()
 
 
 @overload
-def get_env(name: str) -> Optional[str]:
-    ...
+def get_env(name: str) -> Optional[str]: ...
 
 
 @overload
-def get_env(name: str, default: str) -> str:
-    ...
+def get_env(name: str, default: str) -> str: ...
 
 
 @overload
-def get_env(name: str, default: None) -> Optional[str]:
-    ...
+def get_env(name: str, default: None) -> Optional[str]: ...
 
 
 def get_env(name: str, default: Optional[str] = None) -> Optional[str]:

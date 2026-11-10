@@ -8,6 +8,7 @@ the person was never added to the team. Now:
 * in another team -> proves ownership with the account's current password,
   then moves to the inviting team with the invite's role.
 """
+
 from tests.unit.conftest import API_PREFIX, make_invitation, make_user
 from utils.auth import verify_password
 
@@ -24,11 +25,17 @@ async def _seed(db, org_id, users, user, **kwargs):
     return invitation
 
 
-async def test_account_in_another_team_joins_with_invite_role(client, db, org_id, users):
-    user = make_user("org-other", role="admin", user_id="u-ext", email="ext@example.com")
+async def test_account_in_another_team_joins_with_invite_role(
+    client, db, org_id, users
+):
+    user = make_user(
+        "org-other", role="admin", user_id="u-ext", email="ext@example.com"
+    )
     inv = await _seed(db, org_id, users, user, token="tok-move", role="manager")
 
-    response = await client.post(ACCEPT_URL, json={"token": "tok-move", "password": PASSWORD})
+    response = await client.post(
+        ACCEPT_URL, json={"token": "tok-move", "password": PASSWORD}
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -44,10 +51,14 @@ async def test_account_in_another_team_joins_with_invite_role(client, db, org_id
 
 
 async def test_wrong_password_does_not_move_the_account(client, db, org_id, users):
-    user = make_user("org-other", role="user", user_id="u-ext2", email="ext2@example.com")
+    user = make_user(
+        "org-other", role="user", user_id="u-ext2", email="ext2@example.com"
+    )
     inv = await _seed(db, org_id, users, user, token="tok-wrong")
 
-    response = await client.post(ACCEPT_URL, json={"token": "tok-wrong", "password": "not-the-password"})
+    response = await client.post(
+        ACCEPT_URL, json={"token": "tok-wrong", "password": "not-the-password"}
+    )
 
     # 403, never 401 (the SPA treats 401 as an expired session).
     assert response.status_code == 403
@@ -57,11 +68,15 @@ async def test_wrong_password_does_not_move_the_account(client, db, org_id, user
 
 
 async def test_already_a_member_is_idempotent(client, db, org_id, users):
-    member = make_user(org_id, role="admin", user_id="u-mem", email="member@example.com")
+    member = make_user(
+        org_id, role="admin", user_id="u-mem", email="member@example.com"
+    )
     inv = await _seed(db, org_id, users, member, token="tok-member", role="viewer")
 
     # Password is irrelevant for a no-op; nothing about the account changes.
-    response = await client.post(ACCEPT_URL, json={"token": "tok-member", "password": "whatever123"})
+    response = await client.post(
+        ACCEPT_URL, json={"token": "tok-member", "password": "whatever123"}
+    )
 
     assert response.status_code == 200
     assert response.json()["alreadyMember"] is True
@@ -73,10 +88,16 @@ async def test_already_a_member_is_idempotent(client, db, org_id, users):
     assert (await db.invitations.find_one({"id": inv["id"]}))["status"] == "accepted"
 
 
-async def test_second_invite_for_an_existing_member_is_also_a_no_op(client, db, org_id, users):
-    member = make_user(org_id, role="user", user_id="u-mem2", email="member2@example.com")
+async def test_second_invite_for_an_existing_member_is_also_a_no_op(
+    client, db, org_id, users
+):
+    member = make_user(
+        org_id, role="user", user_id="u-mem2", email="member2@example.com"
+    )
     await _seed(db, org_id, users, member, token="tok-a")
-    second = make_invitation(org_id, invited_by=users["admin"]["id"], email=member["email"], token="tok-b")
+    second = make_invitation(
+        org_id, invited_by=users["admin"]["id"], email=member["email"], token="tok-b"
+    )
     await db.invitations.insert_one(dict(second))
 
     first = await client.post(ACCEPT_URL, json={"token": "tok-a", "password": PASSWORD})
@@ -87,23 +108,33 @@ async def test_second_invite_for_an_existing_member_is_also_a_no_op(client, db, 
     assert (await db.users.find_one({"id": "u-mem2"}))["role"] == "user"
 
 
-async def test_reusing_the_same_token_after_joining_is_rejected(client, db, org_id, users):
+async def test_reusing_the_same_token_after_joining_is_rejected(
+    client, db, org_id, users
+):
     user = make_user("org-other", user_id="u-ext3", email="ext3@example.com")
     await _seed(db, org_id, users, user, token="tok-once")
 
-    first = await client.post(ACCEPT_URL, json={"token": "tok-once", "password": PASSWORD})
-    second = await client.post(ACCEPT_URL, json={"token": "tok-once", "password": PASSWORD})
+    first = await client.post(
+        ACCEPT_URL, json={"token": "tok-once", "password": PASSWORD}
+    )
+    second = await client.post(
+        ACCEPT_URL, json={"token": "tok-once", "password": PASSWORD}
+    )
 
     assert first.status_code == 200
     assert second.status_code == 404
 
 
 async def test_sole_admin_of_a_team_with_members_is_refused(client, db, org_id, users):
-    admin = make_user("org-other", role="admin", user_id="u-boss", email="boss@example.com")
+    admin = make_user(
+        "org-other", role="admin", user_id="u-boss", email="boss@example.com"
+    )
     await db.users.insert_one(make_user("org-other", role="user", user_id="u-staff"))
     inv = await _seed(db, org_id, users, admin, token="tok-boss")
 
-    response = await client.post(ACCEPT_URL, json={"token": "tok-boss", "password": PASSWORD})
+    response = await client.post(
+        ACCEPT_URL, json={"token": "tok-boss", "password": PASSWORD}
+    )
 
     assert response.status_code == 409
     assert (await db.users.find_one({"id": "u-boss"}))["organizationId"] == "org-other"
@@ -111,11 +142,15 @@ async def test_sole_admin_of_a_team_with_members_is_refused(client, db, org_id, 
 
 
 async def test_admin_with_a_co_admin_can_move(client, db, org_id, users):
-    admin = make_user("org-other", role="admin", user_id="u-boss2", email="boss2@example.com")
+    admin = make_user(
+        "org-other", role="admin", user_id="u-boss2", email="boss2@example.com"
+    )
     await db.users.insert_one(make_user("org-other", role="admin", user_id="u-coadmin"))
     await _seed(db, org_id, users, admin, token="tok-boss2", role="user")
 
-    response = await client.post(ACCEPT_URL, json={"token": "tok-boss2", "password": PASSWORD})
+    response = await client.post(
+        ACCEPT_URL, json={"token": "tok-boss2", "password": PASSWORD}
+    )
 
     assert response.status_code == 200
     assert (await db.users.find_one({"id": "u-boss2"}))["role"] == "user"
@@ -126,15 +161,22 @@ async def test_deactivated_account_is_refused(client, db, org_id, users):
     user["isActive"] = False
     await _seed(db, org_id, users, user, token="tok-off")
 
-    response = await client.post(ACCEPT_URL, json={"token": "tok-off", "password": PASSWORD})
+    response = await client.post(
+        ACCEPT_URL, json={"token": "tok-off", "password": PASSWORD}
+    )
 
     assert response.status_code == 403
     # Quinn's approved UI-LOGIN-INACTIVE text; nothing about who or why.
-    assert response.json()["detail"] == "This account is deactivated. Contact your workspace admin."
+    assert (
+        response.json()["detail"]
+        == "This account is deactivated. Contact your workspace admin."
+    )
     assert (await db.users.find_one({"id": "u-off"}))["organizationId"] == "org-other"
 
 
-async def test_wrong_password_error_is_identical_for_active_and_deactivated(client, db, org_id, users):
+async def test_wrong_password_error_is_identical_for_active_and_deactivated(
+    client, db, org_id, users
+):
     """AD-FR-23: the password is checked before the active flag, so a wrong
     password can't reveal whether the account is deactivated."""
     active = make_user("org-other", user_id="u-on", email="on@example.com")
@@ -143,8 +185,12 @@ async def test_wrong_password_error_is_identical_for_active_and_deactivated(clie
     await _seed(db, org_id, users, active, token="tok-on")
     await _seed(db, org_id, users, inactive, token="tok-off2")
 
-    on = await client.post(ACCEPT_URL, json={"token": "tok-on", "password": "not-the-password"})
-    off = await client.post(ACCEPT_URL, json={"token": "tok-off2", "password": "not-the-password"})
+    on = await client.post(
+        ACCEPT_URL, json={"token": "tok-on", "password": "not-the-password"}
+    )
+    off = await client.post(
+        ACCEPT_URL, json={"token": "tok-off2", "password": "not-the-password"}
+    )
 
     assert on.status_code == off.status_code == 403
     assert on.json() == off.json()
@@ -155,15 +201,24 @@ async def test_wrong_password_error_is_identical_for_active_and_deactivated(clie
     # Nothing moved and both invites are still usable.
     for uid in ("u-on", "u-off2"):
         assert (await db.users.find_one({"id": uid}))["organizationId"] == "org-other"
-    pending = {"status": "pending", "email": {"$in": ["on@example.com", "off2@example.com"]}}
+    pending = {
+        "status": "pending",
+        "email": {"$in": ["on@example.com", "off2@example.com"]},
+    }
     assert await db.invitations.count_documents(pending) == 2
 
 
-async def test_existing_account_join_works_with_a_legacy_plaintext_invite(client, db, org_id, users):
+async def test_existing_account_join_works_with_a_legacy_plaintext_invite(
+    client, db, org_id, users
+):
     user = make_user("org-other", user_id="u-leg", email="leg@example.com")
-    await _seed(db, org_id, users, user, token="tok-leg", legacy_plaintext=True, role="manager")
+    await _seed(
+        db, org_id, users, user, token="tok-leg", legacy_plaintext=True, role="manager"
+    )
 
-    response = await client.post(ACCEPT_URL, json={"token": "tok-leg", "password": PASSWORD})
+    response = await client.post(
+        ACCEPT_URL, json={"token": "tok-leg", "password": PASSWORD}
+    )
 
     assert response.status_code == 200
     stored = await db.users.find_one({"id": "u-leg"})

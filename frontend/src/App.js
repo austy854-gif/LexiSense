@@ -6,6 +6,7 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { HomeRoute } from './components/HomeRoute';
 import { RouteHead } from './components/RouteHead';
 import { HostAuthRedirect } from './components/HostAuthRedirect';
+import { RouteErrorBoundary } from './components/SectionErrorBoundary';
 
 import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
@@ -37,6 +38,8 @@ function App() {
           <Toaster position="top-right" richColors closeButton />
           {/* Canonical on '/', robots noindex everywhere else */}
           <RouteHead />
+          {/* LX-ENG-KT-01: a page that throws is contained here, not app-wide */}
+          <RouteErrorBoundary>
           <Routes>
             {/* Public routes */}
             <Route path="/login" element={<HostAuthRedirect><LoginPage /></HostAuthRedirect>} />
@@ -127,6 +130,7 @@ function App() {
             {/* Fallback */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </RouteErrorBoundary>
         </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>

@@ -16,6 +16,7 @@ query string. ``normalize_date_bound`` accepts either a bare date
 a comparable value for the field being filtered, so a "created before X" filter
 cannot accidentally exclude everything from the day of X.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -69,9 +70,11 @@ def _parse_iso(value: str, *, end_of_day: bool) -> str:
                 detail="Invalid date filter. Expected YYYY-MM-DD or an ISO-8601 timestamp.",
             )
         if end_of_day:
-            return day.replace(
-                hour=23, minute=59, second=59, microsecond=999999
-            ).replace(tzinfo=timezone.utc).isoformat()
+            return (
+                day.replace(hour=23, minute=59, second=59, microsecond=999999)
+                .replace(tzinfo=timezone.utc)
+                .isoformat()
+            )
         return day.replace(tzinfo=timezone.utc).isoformat()
 
     try:
@@ -87,7 +90,9 @@ def _parse_iso(value: str, *, end_of_day: bool) -> str:
     return parsed.isoformat()
 
 
-def normalize_date_bound(value: Optional[str], field: str, *, is_upper_bound: bool) -> Optional[str]:
+def normalize_date_bound(
+    value: Optional[str], field: str, *, is_upper_bound: bool
+) -> Optional[str]:
     """Normalise a date-only or ISO timestamp filter for ``field``.
 
     ``expiryDate`` is stored as a date-only string (``YYYY-MM-DD``) whereas

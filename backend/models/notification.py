@@ -14,7 +14,9 @@ class Notification(BaseModel):
     resourceType: Optional[str] = None  # contract, team, alert
     resourceId: Optional[str] = None
     isRead: bool = False
-    createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    createdAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
 
 class NotificationResponse(BaseModel):

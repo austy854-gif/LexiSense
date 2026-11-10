@@ -8,6 +8,7 @@ Covers the two fixes applied to this endpoint:
    (``ContractUpdate``) rather than bare query parameters, so it stays out of
    URLs, access logs and browser history, and is schema-validated by FastAPI.
 """
+
 import pytest
 
 from tests.unit.conftest import (
@@ -383,7 +384,9 @@ class TestPatchContractUpdates:
         stored = await db.contracts.find_one({"id": contract["id"]})
         assert stored["updatedAt"] >= contract["updatedAt"]
 
-    async def test_empty_body_is_a_no_op_but_succeeds(self, client, db, contract, users):
+    async def test_empty_body_is_a_no_op_but_succeeds(
+        self, client, db, contract, users
+    ):
         await _seed_contract(db, contract)
 
         response = await client.patch(
@@ -413,7 +416,9 @@ class TestPatchContractVersioning:
         assert response.status_code == 200
         assert response.json()["version"] == 1
 
-        versions = await db.contract_versions.find({"contractId": contract["id"]}).to_list(10)
+        versions = await db.contract_versions.find(
+            {"contractId": contract["id"]}
+        ).to_list(10)
         assert len(versions) == 1
         snapshot = versions[0]
         # The snapshot captures the PRE-update state.
@@ -446,7 +451,9 @@ class TestPatchContractVersioning:
 
         assert response.status_code == 200
         assert response.json()["version"] == 4
-        versions = await db.contract_versions.find({"contractId": contract["id"]}).to_list(10)
+        versions = await db.contract_versions.find(
+            {"contractId": contract["id"]}
+        ).to_list(10)
         assert sorted(v["version"] for v in versions) == [3, 4]
 
     async def test_records_change_reason_and_author(self, client, db, contract, owner):
@@ -462,7 +469,9 @@ class TestPatchContractVersioning:
         assert snapshot["changedBy"] == owner["id"]
         assert snapshot["changeReason"] == "Typo fix"
 
-    async def test_forbidden_request_creates_no_version(self, client, db, contract, users):
+    async def test_forbidden_request_creates_no_version(
+        self, client, db, contract, users
+    ):
         await _seed_contract(db, contract)
 
         response = await client.patch(
@@ -486,7 +495,8 @@ class TestPatchContractBodyModel:
         await _seed_contract(db, contract)
 
         response = await client.patch(
-            PATCH_URL.format(contract_id=contract["id"]) + "?title=Injected&status=active",
+            PATCH_URL.format(contract_id=contract["id"])
+            + "?title=Injected&status=active",
             json={},
             headers=auth_headers(users["admin"]),
         )
@@ -550,7 +560,10 @@ class TestPatchContractBodyModel:
         response = await client.patch(
             PATCH_URL.format(contract_id=contract["id"]),
             content=b"{not valid json",
-            headers={**auth_headers(users["admin"]), "Content-Type": "application/json"},
+            headers={
+                **auth_headers(users["admin"]),
+                "Content-Type": "application/json",
+            },
         )
 
         assert response.status_code == 422

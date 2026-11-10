@@ -16,6 +16,7 @@ Entry points (both opt-in, neither runs by default):
 
 Output is counts only -- never tokens, hashes or email addresses.
 """
+
 from __future__ import annotations
 
 import logging
@@ -50,13 +51,17 @@ def parse_iso(value: str) -> datetime:
 
 async def default_cutoff(db) -> Optional[datetime]:
     """When migration 003 (token hashing) was applied, or ``None`` if it has not run."""
-    record = await db.schema_migrations.find_one({"version": HASH_MIGRATION_VERSION}, {"_id": 0, "appliedAt": 1})
+    record = await db.schema_migrations.find_one(
+        {"version": HASH_MIGRATION_VERSION}, {"_id": 0, "appliedAt": 1}
+    )
     if not record or not record.get("appliedAt"):
         return None
     return parse_iso(record["appliedAt"])
 
 
-async def expire_pending_invites_before(db, cutoff: datetime, apply: bool = False) -> ExpiryReport:
+async def expire_pending_invites_before(
+    db, cutoff: datetime, apply: bool = False
+) -> ExpiryReport:
     """Expire (when ``apply``) every pending invitation with ``createdAt < cutoff``.
 
     Idempotent: only ``pending`` records match, and each update is conditional
@@ -66,7 +71,9 @@ async def expire_pending_invites_before(db, cutoff: datetime, apply: bool = Fals
         cutoff = cutoff.replace(tzinfo=timezone.utc)
     pending_total = matched = expired = unparseable = 0
     ids = []
-    async for doc in db.invitations.find({"status": "pending"}, {"_id": 0, "id": 1, "createdAt": 1}):
+    async for doc in db.invitations.find(
+        {"status": "pending"}, {"_id": 0, "id": 1, "createdAt": 1}
+    ):
         pending_total += 1
         try:
             created = parse_iso(str(doc.get("createdAt") or ""))
@@ -83,15 +90,29 @@ async def expire_pending_invites_before(db, cutoff: datetime, apply: bool = Fals
         for invitation_id in ids:
             result = await db.invitations.update_one(
                 {"id": invitation_id, "status": "pending"},
-                {"$set": {"status": "expired", "expiresAt": now, "expiredAt": now, "expiredReason": EXPIRY_REASON}},
+                {
+                    "$set": {
+                        "status": "expired",
+                        "expiresAt": now,
+                        "expiredAt": now,
+                        "expiredReason": EXPIRY_REASON,
+                    }
+                },
             )
             expired += result.modified_count
 
-    return ExpiryReport(cutoff.isoformat(), pending_total, matched, expired, unparseable, apply)
+    return ExpiryReport(
+        cutoff.isoformat(), pending_total, matched, expired, unparseable, apply
+    )
 
 
 def startup_flag_enabled() -> bool:
-    return (get_env(STARTUP_FLAG, "false") or "").strip().lower() in ("1", "true", "yes", "on")
+    return (get_env(STARTUP_FLAG, "false") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 async def maybe_expire_on_startup(db) -> Optional[ExpiryReport]:
@@ -100,11 +121,18 @@ async def maybe_expire_on_startup(db) -> Optional[ExpiryReport]:
         return None
     cutoff = await default_cutoff(db)
     if cutoff is None:
-        logger.warning("%s set but migration %03d has not run; skipping", STARTUP_FLAG, HASH_MIGRATION_VERSION)
+        logger.warning(
+            "%s set but migration %03d has not run; skipping",
+            STARTUP_FLAG,
+            HASH_MIGRATION_VERSION,
+        )
         return None
     report = await expire_pending_invites_before(db, cutoff, apply=True)
     logger.info(
         "Legacy invitation expiry applied (cutoff=%s pending=%d matched=%d expired=%d)",
-        report.cutoff, report.pending_total, report.matched, report.expired,
+        report.cutoff,
+        report.pending_total,
+        report.matched,
+        report.expired,
     )
     return report
