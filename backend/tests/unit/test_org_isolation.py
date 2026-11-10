@@ -6,6 +6,7 @@ both its id and the caller's organizationId."""
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from routes import agentic as agentic_route
@@ -353,14 +354,52 @@ class TestWriteFilters:
         await c.patch(
             f"{API_PREFIX}/tags/{cid}/category", headers=h, params={"category": "c"}
         )
+        current = await world["db"].contracts.find_one({"id": cid}, {"_id": 0})
+        await world["db"].contract_versions.insert_one(
+            {
+                "id": "v-b-1",
+                "contractId": cid,
+                "version": 1,
+                "title": "B",
+                "status": current.get("status", "draft"),
+                "changedBy": world["b_admin"]["id"],
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        r = await c.post(f"{API_PREFIX}/contracts/{cid}/restore/1", headers=h)
+        assert r.status_code == 200, r.text
         await c.post(
             f"{API_PREFIX}/contracts/{cid}/workflow/submit_for_review", headers=h
         )
         await c.delete(f"{API_PREFIX}/contracts/{cid}", headers=h)
         contract_writes = [f for name, f in spy if name == "contracts"]
-        assert len(contract_writes) >= 6, spy
+        assert len(contract_writes) >= 7, spy
         for flt in contract_writes:
             assert flt.get("organizationId") == ORG_B and flt.get("id") == cid, flt
+
+    async def test_own_intake_write_filters_on_org(self, world, spy):
+        r = await world["client"].post(
+            f"{API_PREFIX}/agentic/intake/intake-b/process",
+            headers=world["attacker"],
+            json={"intakeId": "intake-b", "assign_to": world["b_admin"]["id"]},
+        )
+        assert r.status_code == 200, r.text
+        intake_writes = [f for name, f in spy if name == "contract_intakes"]
+        assert intake_writes, spy
+        for flt in intake_writes:
+            assert flt.get("id") == "intake-b" and flt.get("organizationId") == ORG_B
+
+    async def test_own_invitation_write_filters_on_org(self, world, spy):
+        r = await world["client"].delete(
+            f"{API_PREFIX}/team/invitations/inv-a",
+            headers=auth_headers(world["a_admin"]),
+        )
+        assert r.status_code in (200, 204), r.text
+        assert await world["db"].invitations.find_one({"id": "inv-a"}) is None
+        invite_writes = [f for name, f in spy if name == "invitations"]
+        assert invite_writes, spy
+        for flt in invite_writes:
+            assert flt.get("id") == "inv-a" and flt.get("organizationId") == ORG_A
 
     async def test_status_transition_never_touches_another_org(self, world):
         a = await _a_contract(world)
@@ -370,11 +409,12 @@ class TestWriteFilters:
             "role": "admin",
             "email": world["b_admin"]["email"],
         }
-        try:
+        audits_before = await world["db"].audit_logs.count_documents({})
+        with pytest.raises(HTTPException) as exc:
             await workflow_service.apply_status_transition(
                 world["db"], a, "review", b_user, action="submit_for_review"
             )
-        except Exception:
-            pass
+        assert exc.value.status_code == 404
         after = await _a_contract(world)
         assert after["status"] == a["status"]
+        assert await world["db"].audit_logs.count_documents({}) == audits_before

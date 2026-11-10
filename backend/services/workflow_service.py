@@ -165,9 +165,14 @@ async def apply_status_transition(
     update = status_update_fields(
         current_status, new_status, current_user, action=action, comment=comment
     )
-    await db.contracts.update_one(
+    result = await db.contracts.update_one(
         {"id": contract["id"], "organizationId": current_user["organizationId"]}, update
     )
+    if not result.matched_count:
+        # Fail closed: never audit or report a transition that was not applied.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contract not found"
+        )
     await record_transition_audit(
         contract,
         current_status,
