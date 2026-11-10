@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
 # Configure structured logging FIRST (before other imports that may log)
 from utils.env import get_database_url, get_env  # noqa: E402
@@ -24,12 +24,14 @@ from utils.logging_config import (
     request_id_var,
     setup_logging,
 )
+
 setup_logging(
     level=get_env("LOG_LEVEL", "INFO"),
-    json_format=get_env("LOG_JSON", "true").lower() == "true"
+    json_format=get_env("LOG_JSON", "true").lower() == "true",
 )
 logger = get_logger("main")
 from utils.logging_config import install_access_log_redaction  # noqa: E402
+
 install_access_log_redaction()
 
 # MongoDB connection.
@@ -63,6 +65,7 @@ def _resolve_db_name(url: str) -> str:
         return name
     try:
         from pymongo.uri_parser import parse_uri
+
         return parse_uri(url).get("database") or "lexisense"
     except Exception:
         return "lexisense"
@@ -94,10 +97,7 @@ if sentry_dsn and not sentry_dsn.startswith("your-"):
     # Scrubber diagnostics must never become Sentry events themselves.
     ignore_logger(_sentry_scrub_logger.name)
 
-    sentry_logging = LoggingIntegration(
-        level=logging.INFO,
-        event_level=logging.ERROR
-    )
+    sentry_logging = LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)
 
     sentry_sdk.init(
         dsn=sentry_dsn,
@@ -114,7 +114,10 @@ if sentry_dsn and not sentry_dsn.startswith("your-"):
         # of tokens, email addresses and query strings (utils/sentry_scrub.py).
         **sentry_init_options(),
     )
-    logger.info("Sentry initialized", extra={"environment": get_env("ENVIRONMENT", "development")})
+    logger.info(
+        "Sentry initialized",
+        extra={"environment": get_env("ENVIRONMENT", "development")},
+    )
 else:
     logger.info("Sentry not configured (SENTRY_DSN not set)")
 
@@ -134,8 +137,11 @@ async def lifespan(app: FastAPI):
     # with exponential backoff while the database is unreachable; readiness
     # (/api/v1/ready) reports 503 until it has completed.
     app.state.bootstrap_ok = False
+    app.state.alerts_ready = False
+    app.state.alert_index_task = None
 
     async def _bootstrap():
+        """Retry database and storage bootstrap before marking the application ready."""
         delay = 2.0
         attempt = 0
         while True:
@@ -144,13 +150,18 @@ async def lifespan(app: FastAPI):
                 await db.command("ping")
                 # Canonical index specification (see utils/database.py).
                 from utils.database import apply_indexes
+
                 result = await apply_indexes(db)
                 logger.info(
                     "Database indexes ensured",
-                    extra={"indexes_created": result["created"], "indexes_failed": result["failed"]},
+                    extra={
+                        "indexes_created": result["created"],
+                        "indexes_failed": result["failed"],
+                    },
                 )
 
                 from services.storage_service import ensure_bucket_exists
+
                 if await ensure_bucket_exists():
                     logger.info("S3 bucket verified")
                 else:
@@ -159,19 +170,41 @@ async def lifespan(app: FastAPI):
                 # Celery is not initialized -- agentic subsystem is stripped for launch.
 
                 from utils.migrations import run_migrations
+
                 await run_migrations(db)
 
                 # Opt-in (EXPIRE_LEGACY_INVITES_ON_STARTUP, OFF by default).
                 from utils.invite_expiry import maybe_expire_on_startup
+
                 try:
                     await maybe_expire_on_startup(db)
-                except Exception as exc:  # optional maintenance must not block readiness
-                    logger.error("Legacy invitation expiry failed (error_type=%s)", type(exc).__name__)
+                except (
+                    Exception
+                ) as exc:  # optional maintenance must not block readiness
+                    logger.error(
+                        "Legacy invitation expiry failed (error_type=%s)",
+                        type(exc).__name__,
+                    )
 
                 if AGENTIC_GROUPS:
                     from routes.agentic import _create_indexes as create_agentic_indexes
+
                     await create_agentic_indexes()
 
+                # Alert delivery is only safe once the unique idempotency index
+                # is built (it turns a duplicate upsert into DuplicateKeyError).
+                # A listed index may still be building, so alerts are enabled
+                # only after create_index returns successfully, retried in the
+                # background on transient failure.
+                from services.alert_service import ensure_alert_idempotency_index
+
+                def _enable_alerts():
+                    """Enable alert delivery after the unique idempotency index is verified."""
+                    app.state.alerts_ready = True
+
+                app.state.alert_index_task = asyncio.create_task(
+                    ensure_alert_idempotency_index(db, _enable_alerts)
+                )
                 app.state.bootstrap_ok = True
                 logger.info("Startup bootstrap complete", extra={"attempt": attempt})
                 return
@@ -186,12 +219,17 @@ async def lifespan(app: FastAPI):
                 delay = min(delay * 2, 60.0)
 
     bootstrap_task = asyncio.create_task(_bootstrap())
+    # Scheduled alert delivery runs as a separate cron job, not in-process,
+    # so no scheduler starts on boot (or once per replica).
 
     yield
 
     logger.info("LexiSense API shutting down...")
     if not bootstrap_task.done():
         bootstrap_task.cancel()
+    alert_index_task = getattr(app.state, "alert_index_task", None)
+    if alert_index_task is not None and not alert_index_task.done():
+        alert_index_task.cancel()
     client.close()
 
 
@@ -216,6 +254,7 @@ app.state.db_name = DB_NAME
 app.add_middleware(RequestLoggingMiddleware)
 # Trust X-Forwarded-Proto from the proxy hop only (uvicorn no longer does, see Dockerfile).
 from utils.proxy import ForwardedProtoMiddleware  # noqa: E402
+
 app.add_middleware(ForwardedProtoMiddleware)
 
 # Create a router with the /api/v1 prefix
@@ -231,12 +270,21 @@ from routes.templates import router as templates_router, init_db as init_templat
 from routes.export import router as export_router, init_db as init_export_db
 from routes.analytics import router as analytics_router, init_db as init_analytics_db
 from routes.audit import router as audit_router, init_db as init_audit_db
-from routes.notifications import router as notifications_router, init_db as init_notifications_db
+from routes.notifications import (
+    router as notifications_router,
+    init_db as init_notifications_db,
+)
 from routes.workflow import router as workflow_router, init_db as init_workflow_db
+from routes.tags import router as tags_router, init_db as init_tags_db
+
 # NOTE: Agentic subsystem is stripped from launch (see PRODUCT_SCOPE.md).
 # Backend code kept for future re-enable, but router is NOT mounted and DB is NOT initialized here.
 # Also requires Redis + Celery worker + beat which are not provisioned for launch.
-from routes.agentic import build_router as build_agentic_router, enabled_groups as agentic_enabled_groups, init_db as init_agentic_db
+from routes.agentic import (
+    build_router as build_agentic_router,
+    enabled_groups as agentic_enabled_groups,
+    init_db as init_agentic_db,
+)
 from routes.billing import router as billing_router, init_db as init_billing_db
 from services.audit_service import init_db as init_audit_service_db
 from utils.feature_flags import approval_emails_enabled
@@ -253,6 +301,7 @@ init_analytics_db(db)
 init_audit_db(db)
 init_notifications_db(db)
 init_workflow_db(db)
+init_tags_db(db)
 init_billing_db(db)
 init_audit_service_db(db)
 
@@ -268,6 +317,7 @@ api_router.include_router(analytics_router)
 api_router.include_router(audit_router)
 api_router.include_router(notifications_router)
 api_router.include_router(workflow_router)
+api_router.include_router(tags_router)
 # Agentic routes are feature-flagged (all flags default to off):
 #   AGENTIC_PHASE1_ENABLED  -> risk + obligations
 #   AGENTIC_AGENTS_ENABLED / AGENTIC_INTAKE_ENABLED / AGENTIC_REDLINE_ENABLED
@@ -281,10 +331,15 @@ api_router.include_router(billing_router)
 
 # Approval email links + Resend delivery webhook (APPROVAL_EMAILS_ENABLED, default off).
 if approval_emails_enabled():
-    from routes.approvals import router as approvals_router, init_db as init_approvals_db
+    from routes.approvals import (
+        router as approvals_router,
+        init_db as init_approvals_db,
+    )
+
     init_approvals_db(db)
     api_router.include_router(approvals_router)
     logger.info("Approval email routes enabled")
+
 
 @api_router.get("/")
 async def root():
@@ -294,7 +349,9 @@ async def root():
 # Timeout budget for a single dependency probe inside the health check.
 # The database probe waits at least SERVER_SELECTION_TIMEOUT_MS; this value
 # still bounds the storage probe and can raise the database budget further.
-HEALTH_PROBE_TIMEOUT_SECONDS = float(os.environ.get("HEALTH_PROBE_TIMEOUT_SECONDS", "3"))
+HEALTH_PROBE_TIMEOUT_SECONDS = float(
+    os.environ.get("HEALTH_PROBE_TIMEOUT_SECONDS", "3")
+)
 # Extra wait so asyncio does not cancel a ping a few milliseconds before
 # pymongo reports server selection itself.
 _DB_PROBE_MARGIN_SECONDS = 0.25
@@ -418,7 +475,10 @@ async def health_check():
     if db_status == "ok":
         checks["database"] = {"status": "healthy", "details": "Connected"}
     elif db_status == "timeout":
-        checks["database"] = {"status": "unhealthy", "details": "Database probe timed out"}
+        checks["database"] = {
+            "status": "unhealthy",
+            "details": "Database probe timed out",
+        }
         overall_healthy = False
     else:
         checks["database"] = {"status": "unhealthy", "details": "Database unreachable"}
@@ -482,7 +542,7 @@ def _redis_url():
 
 
 async def _probe_redis() -> str:
-    """"skipped" when no Redis is configured, else "healthy"/"unhealthy".
+    """ "skipped" when no Redis is configured, else "healthy"/"unhealthy".
 
     Uses the asyncio client with ~1s timeouts so the event loop never blocks.
     The URL is never logged (it carries credentials).
@@ -519,7 +579,9 @@ app.include_router(api_router)
 
 # Parse CORS origins defensively: an unset/empty CORS_ORIGINS previously
 # produced [''] (a bogus origin) instead of an empty allow-list.
-cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+cors_origins = [
+    o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()
+]
 if not cors_origins:
     logger.warning("CORS_ORIGINS is empty - no cross-origin requests will be allowed")
 
@@ -548,7 +610,9 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         incoming = request.headers.get("X-Request-ID", "")
-        request_id = incoming if _ALLOWED_REQUEST_ID.match(incoming) else str(uuid.uuid4())
+        request_id = (
+            incoming if _ALLOWED_REQUEST_ID.match(incoming) else str(uuid.uuid4())
+        )
         request_id_var.set(request_id)
         try:
             response = await call_next(request)
@@ -564,6 +628,7 @@ app.add_middleware(RequestIDMiddleware)
 # Every error -- HTTPException, validation failure or unhandled exception --
 # returns one machine-readable envelope: {"error": {...}, "requestId", "status"}.
 from utils.errors import register_exception_handlers  # noqa: E402
+
 register_exception_handlers(app)
 
 
@@ -592,5 +657,9 @@ if (FRONTEND_BUILD_DIR / "index.html").is_file():
         if full_path.startswith("static/") or "." in last:
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         return FileResponse(_frontend_root / "index.html")
+
 else:
-    logger.info("Frontend build not found; serving API only", extra={"dir": str(FRONTEND_BUILD_DIR)})
+    logger.info(
+        "Frontend build not found; serving API only",
+        extra={"dir": str(FRONTEND_BUILD_DIR)},
+    )

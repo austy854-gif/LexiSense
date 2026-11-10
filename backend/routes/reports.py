@@ -14,6 +14,7 @@ router = APIRouter(prefix="/reports", tags=["Reports"])
 
 db = None
 
+
 def init_db(database):
     global db
     db = database
@@ -44,37 +45,59 @@ async def export_contracts_csv(
     if tags:
         query["tags"] = {"$in": [t.strip() for t in tags.split(",")]}
 
-    contracts = await db.contracts.find(
-        query, {"_id": 0, "originalText": 0, "aiAnalysis": 0, "workflowHistory": 0}
-    ).sort("createdAt", -1).to_list(5000)
+    contracts = (
+        await db.contracts.find(
+            query, {"_id": 0, "originalText": 0, "aiAnalysis": 0, "workflowHistory": 0}
+        )
+        .sort("createdAt", -1)
+        .to_list(5000)
+    )
 
     # Batch fetch uploader emails
-    uploader_ids = list(set(c.get("uploadedBy") for c in contracts if c.get("uploadedBy")))
-    uploaders = await db.users.find({"id": {"$in": uploader_ids}}, {"_id": 0, "id": 1, "email": 1}).to_list(len(uploader_ids))
+    uploader_ids = list(
+        set(c.get("uploadedBy") for c in contracts if c.get("uploadedBy"))
+    )
+    uploaders = await db.users.find(
+        {"id": {"$in": uploader_ids}}, {"_id": 0, "id": 1, "email": 1}
+    ).to_list(len(uploader_ids))
     uploader_map = {u["id"]: u["email"] for u in uploaders}
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "Title", "Counterparty", "Type", "Category", "Status", "Risk Level",
-        "Value", "Effective Date", "Expiry Date", "Tags", "Uploaded By", "Created At",
-    ])
+    writer.writerow(
+        [
+            "Title",
+            "Counterparty",
+            "Type",
+            "Category",
+            "Status",
+            "Risk Level",
+            "Value",
+            "Effective Date",
+            "Expiry Date",
+            "Tags",
+            "Uploaded By",
+            "Created At",
+        ]
+    )
 
     for c in contracts:
-        writer.writerow([
-            c.get("title", ""),
-            c.get("counterparty", ""),
-            c.get("contractType", ""),
-            c.get("category", ""),
-            c.get("status", ""),
-            c.get("riskLevel", ""),
-            c.get("value", ""),
-            c.get("effectiveDate", ""),
-            c.get("expiryDate", ""),
-            ", ".join(c.get("tags", [])),
-            uploader_map.get(c.get("uploadedBy"), ""),
-            c.get("createdAt", ""),
-        ])
+        writer.writerow(
+            [
+                c.get("title", ""),
+                c.get("counterparty", ""),
+                c.get("contractType", ""),
+                c.get("category", ""),
+                c.get("status", ""),
+                c.get("riskLevel", ""),
+                c.get("value", ""),
+                c.get("effectiveDate", ""),
+                c.get("expiryDate", ""),
+                ", ".join(c.get("tags", [])),
+                uploader_map.get(c.get("uploadedBy"), ""),
+                c.get("createdAt", ""),
+            ]
+        )
 
     content = output.getvalue()
     output.close()
@@ -82,7 +105,9 @@ async def export_contracts_csv(
     return Response(
         content=content,
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=lexisense_contracts_report.csv"},
+        headers={
+            "Content-Disposition": "attachment; filename=lexisense_contracts_report.csv"
+        },
     )
 
 
@@ -102,43 +127,57 @@ async def get_report_summary(
 
     total = await db.contracts.count_documents(query)
 
-    by_status = await db.contracts.aggregate([
-        {"$match": query},
-        {"$group": {"_id": "$status", "count": {"$sum": 1}}},
-    ]).to_list(20)
+    by_status = await db.contracts.aggregate(
+        [
+            {"$match": query},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+        ]
+    ).to_list(20)
 
-    by_type = await db.contracts.aggregate([
-        {"$match": query},
-        {"$group": {"_id": "$contractType", "count": {"$sum": 1}}},
-    ]).to_list(50)
+    by_type = await db.contracts.aggregate(
+        [
+            {"$match": query},
+            {"$group": {"_id": "$contractType", "count": {"$sum": 1}}},
+        ]
+    ).to_list(50)
 
-    by_risk = await db.contracts.aggregate([
-        {"$match": query},
-        {"$group": {"_id": "$riskLevel", "count": {"$sum": 1}}},
-    ]).to_list(10)
+    by_risk = await db.contracts.aggregate(
+        [
+            {"$match": query},
+            {"$group": {"_id": "$riskLevel", "count": {"$sum": 1}}},
+        ]
+    ).to_list(10)
 
-    by_category = await db.contracts.aggregate([
-        {"$match": {**query, "category": {"$ne": None}}},
-        {"$group": {"_id": "$category", "count": {"$sum": 1}}},
-    ]).to_list(50)
+    by_category = await db.contracts.aggregate(
+        [
+            {"$match": {**query, "category": {"$ne": None}}},
+            {"$group": {"_id": "$category", "count": {"$sum": 1}}},
+        ]
+    ).to_list(50)
 
-    by_tag = await db.contracts.aggregate([
-        {"$match": query},
-        {"$unwind": "$tags"},
-        {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 20},
-    ]).to_list(20)
+    by_tag = await db.contracts.aggregate(
+        [
+            {"$match": query},
+            {"$unwind": "$tags"},
+            {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 20},
+        ]
+    ).to_list(20)
 
     # Monthly trend for the period
-    monthly = await db.contracts.aggregate([
-        {"$match": query},
-        {"$group": {
-            "_id": {"$substr": ["$createdAt", 0, 7]},
-            "count": {"$sum": 1},
-        }},
-        {"$sort": {"_id": 1}},
-    ]).to_list(24)
+    monthly = await db.contracts.aggregate(
+        [
+            {"$match": query},
+            {
+                "$group": {
+                    "_id": {"$substr": ["$createdAt", 0, 7]},
+                    "count": {"$sum": 1},
+                }
+            },
+            {"$sort": {"_id": 1}},
+        ]
+    ).to_list(24)
 
     # Expiring soon counts
     now = datetime.now(timezone.utc).isoformat()
@@ -146,9 +185,15 @@ async def get_report_summary(
     d30 = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     d90 = (datetime.now(timezone.utc) + timedelta(days=90)).isoformat()
 
-    exp7 = await db.contracts.count_documents({**query, "expiryDate": {"$gte": now, "$lte": d7}})
-    exp30 = await db.contracts.count_documents({**query, "expiryDate": {"$gte": now, "$lte": d30}})
-    exp90 = await db.contracts.count_documents({**query, "expiryDate": {"$gte": now, "$lte": d90}})
+    exp7 = await db.contracts.count_documents(
+        {**query, "expiryDate": {"$gte": now, "$lte": d7}}
+    )
+    exp30 = await db.contracts.count_documents(
+        {**query, "expiryDate": {"$gte": now, "$lte": d30}}
+    )
+    exp90 = await db.contracts.count_documents(
+        {**query, "expiryDate": {"$gte": now, "$lte": d90}}
+    )
 
     return {
         "total": total,
@@ -177,16 +222,22 @@ async def export_summary_pdf(
         query.setdefault("createdAt", {})["$lte"] = date_to
 
     total = await db.contracts.count_documents(query)
-    by_status = await db.contracts.aggregate([
-        {"$match": query},
-        {"$group": {"_id": "$status", "count": {"$sum": 1}}},
-    ]).to_list(20)
-    by_risk = await db.contracts.aggregate([
-        {"$match": query},
-        {"$group": {"_id": "$riskLevel", "count": {"$sum": 1}}},
-    ]).to_list(10)
+    by_status = await db.contracts.aggregate(
+        [
+            {"$match": query},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+        ]
+    ).to_list(20)
+    by_risk = await db.contracts.aggregate(
+        [
+            {"$match": query},
+            {"$group": {"_id": "$riskLevel", "count": {"$sum": 1}}},
+        ]
+    ).to_list(10)
 
-    contracts = await db.contracts.find(query, {"_id": 0, "originalText": 0}).to_list(5000)
+    contracts = await db.contracts.find(query, {"_id": 0, "originalText": 0}).to_list(
+        5000
+    )
 
     stats = {
         "overview": {
@@ -207,5 +258,7 @@ async def export_summary_pdf(
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=lexisense_report{period}.pdf"},
+        headers={
+            "Content-Disposition": f"attachment; filename=lexisense_report{period}.pdf"
+        },
     )

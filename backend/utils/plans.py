@@ -22,6 +22,7 @@ when Stripe can't be reached; a mismatch with Stripe is logged as an error.
 
 Values are read on every call so tests and config changes need no re-import.
 """
+
 from __future__ import annotations
 
 import logging
@@ -107,7 +108,10 @@ def _build_plan(plan_id: str) -> PlanConfig:
         name=_NAMES[plan_id],
         max_members=_limit(_env_int(env + "MAX_MEMBERS", _MEMBER_DEFAULTS[plan_id])),
         interval_prices=prices,
-        fallback_prices={i: _env_int(env + "PRICE_" + _PRICE_ENV_SUFFIX[i], None) for i in CHECKOUT_INTERVALS},
+        fallback_prices={
+            i: _env_int(env + "PRICE_" + _PRICE_ENV_SUFFIX[i], None)
+            for i in CHECKOUT_INTERVALS
+        },
     )
 
 
@@ -129,7 +133,9 @@ def plan_for_price_id(price_id: Optional[str]) -> Optional[PlanConfig]:
     return None
 
 
-def plan_and_interval_for_price_id(price_id: Optional[str]) -> Tuple[Optional[PlanConfig], Optional[str]]:
+def plan_and_interval_for_price_id(
+    price_id: Optional[str],
+) -> Tuple[Optional[PlanConfig], Optional[str]]:
     plan = plan_for_price_id(price_id)
     if plan is None:
         return None, None
@@ -141,7 +147,9 @@ def plan_and_interval_for_price_id(price_id: Optional[str]) -> Tuple[Optional[Pl
 
 def allowed_price_ids() -> FrozenSet[str]:
     """Every Stripe price checkout may use: exactly the six STRIPE_PRICE_* vars."""
-    return frozenset(pid for plan in get_paid_plans().values() for pid in plan.stripe_price_ids)
+    return frozenset(
+        pid for plan in get_paid_plans().values() for pid in plan.stripe_price_ids
+    )
 
 
 #: Stripe ``tax_behavior`` of the six prices. All six are created with
@@ -152,7 +160,9 @@ TAX_BEHAVIORS = ("inclusive", "exclusive", "unspecified")
 
 
 def tax_behavior() -> str:
-    value = (get_env("BILLING_TAX_BEHAVIOR", "inclusive") or "inclusive").strip().lower()
+    value = (
+        (get_env("BILLING_TAX_BEHAVIOR", "inclusive") or "inclusive").strip().lower()
+    )
     if value not in TAX_BEHAVIORS:
         logger.error("BILLING_TAX_BEHAVIOR=%r is invalid; using 'inclusive'", value)
         return "inclusive"

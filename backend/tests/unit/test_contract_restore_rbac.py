@@ -38,6 +38,7 @@ admin                         non-owner               200
 admin (other organisation)    n/a                     404
 ============================  ======================  =======
 """
+
 import pytest
 
 from models.contract_version import ContractVersion
@@ -127,7 +128,9 @@ class TestRestoreRbacMatrix:
         """The viewer gate runs before the ownership gate."""
         viewer_uploader = make_user(org_id, role="viewer", user_id="viewer-uploader")
         owned = make_contract(
-            org_id, uploaded_by=viewer_uploader["id"], contract_id="contract-viewer-restore"
+            org_id,
+            uploaded_by=viewer_uploader["id"],
+            contract_id="contract-viewer-restore",
         )
         await _seed(db, owned, make_version(owned["id"], 1, viewer_uploader["id"]))
 
@@ -136,7 +139,9 @@ class TestRestoreRbacMatrix:
         assert response.status_code == 403
         assert response.json()["detail"] == "Viewers cannot modify contracts"
 
-    async def test_non_uploader_user_is_forbidden(self, client, db, contract, owner, users):
+    async def test_non_uploader_user_is_forbidden(
+        self, client, db, contract, owner, users
+    ):
         """A plain ``user`` who did not upload the contract cannot restore it."""
         await _seed(db, contract, make_version(contract["id"], 1, owner["id"]))
 
@@ -155,14 +160,18 @@ class TestRestoreRbacMatrix:
 
         assert response.status_code == 200
 
-    async def test_manager_is_allowed_for_any_contract(self, client, db, contract, owner, users):
+    async def test_manager_is_allowed_for_any_contract(
+        self, client, db, contract, owner, users
+    ):
         await _seed(db, contract, make_version(contract["id"], 1, owner["id"]))
 
         response = await _restore(client, contract["id"], 1, users["manager"])
 
         assert response.status_code == 200
 
-    async def test_admin_is_allowed_for_any_contract(self, client, db, contract, owner, users):
+    async def test_admin_is_allowed_for_any_contract(
+        self, client, db, contract, owner, users
+    ):
         await _seed(db, contract, make_version(contract["id"], 1, owner["id"]))
 
         response = await _restore(client, contract["id"], 1, users["admin"])
@@ -204,14 +213,19 @@ class TestRestoreDeniedHasNoSideEffects:
         assert stored["status"] == contract["status"]
         assert stored["counterparty"] == contract["counterparty"]
 
-    async def test_forbidden_restore_creates_no_snapshot(self, client, db, contract, owner, users):
+    async def test_forbidden_restore_creates_no_snapshot(
+        self, client, db, contract, owner, users
+    ):
         await _seed(db, contract, make_version(contract["id"], 1, owner["id"]))
 
         response = await _restore(client, contract["id"], 1, users["viewer"])
 
         assert response.status_code == 403
         # Only the seeded v1 exists; the pre-restore snapshot must not be written.
-        assert await db.contract_versions.count_documents({"contractId": contract["id"]}) == 1
+        assert (
+            await db.contract_versions.count_documents({"contractId": contract["id"]})
+            == 1
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +238,9 @@ class TestRestoreExistenceHandling:
         assert response.status_code == 404
         assert response.json()["detail"] == "Contract not found"
 
-    async def test_unknown_version_is_not_found(self, client, db, contract, owner, users):
+    async def test_unknown_version_is_not_found(
+        self, client, db, contract, owner, users
+    ):
         await _seed(db, contract, make_version(contract["id"], 1, owner["id"]))
 
         response = await _restore(client, contract["id"], 99, users["admin"])
@@ -245,7 +261,9 @@ class TestRestoreExistenceHandling:
 
         assert response.status_code == 404
 
-    async def test_admin_of_another_org_is_not_found(self, client, db, contract, owner, other_org_id):
+    async def test_admin_of_another_org_is_not_found(
+        self, client, db, contract, owner, other_org_id
+    ):
         await _seed(db, contract, make_version(contract["id"], 1, owner["id"]))
         foreign_admin = make_user(other_org_id, role="admin", user_id="foreign-admin")
 
@@ -258,7 +276,9 @@ class TestRestoreExistenceHandling:
 # Successful restore semantics
 # ---------------------------------------------------------------------------
 class TestRestoreSuccessSemantics:
-    async def test_restores_the_target_version_fields(self, client, db, contract, owner, users):
+    async def test_restores_the_target_version_fields(
+        self, client, db, contract, owner, users
+    ):
         target = make_version(
             contract["id"],
             1,
@@ -279,7 +299,9 @@ class TestRestoreSuccessSemantics:
         assert stored["counterparty"] == "Globex"
         assert stored["riskLevel"] == "high"
 
-    async def test_snapshots_the_pre_restore_state(self, client, db, contract, owner, users):
+    async def test_snapshots_the_pre_restore_state(
+        self, client, db, contract, owner, users
+    ):
         """Rolling back is itself reversible: the current state is snapshotted first."""
         await _seed(db, contract, make_version(contract["id"], 1, owner["id"]))
 
@@ -307,7 +329,10 @@ class TestRestoreSuccessSemantics:
 
         assert first.json()["newVersion"] == 2
         assert second.json()["newVersion"] == 3
-        assert await db.contract_versions.count_documents({"contractId": contract["id"]}) == 3
+        assert (
+            await db.contract_versions.count_documents({"contractId": contract["id"]})
+            == 3
+        )
 
     async def test_response_reports_the_target_version(
         self, client, db, contract, owner, users
@@ -331,3 +356,29 @@ class TestRestoreSuccessSemantics:
 
         stored = await db.contracts.find_one({"id": contract["id"]})
         assert stored["updatedAt"] >= contract["updatedAt"]
+
+
+@pytest.mark.parametrize("target", ["approved", "active"])
+async def test_restore_checks_capability_before_invalid_edge(
+    client, db, contract, owner, target
+):
+    await _seed(
+        db, contract, make_version(contract["id"], 1, owner["id"], status=target)
+    )
+    response = await _restore(client, contract["id"], 1, owner)
+    assert response.status_code == 403
+    assert (
+        await db.contract_versions.count_documents({"contractId": contract["id"]}) == 1
+    )
+
+
+async def test_restore_cannot_expire_active_contract(
+    client, db, contract, owner, users
+):
+    contract["status"] = "active"
+    await _seed(
+        db, contract, make_version(contract["id"], 1, owner["id"], status="expired")
+    )
+    response = await _restore(client, contract["id"], 1, users["admin"])
+    assert response.status_code == 400
+    assert (await db.contracts.find_one({"id": contract["id"]}))["status"] == "active"

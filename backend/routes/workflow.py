@@ -7,6 +7,7 @@ from utils.auth import get_current_user
 from services.audit_service import log_action, send_notification
 from utils.feature_flags import approval_emails_enabled
 from routes.billing import assert_org_writable
+from utils.policy import require_capability, require_uploader_for_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contracts", tags=["Workflow"])
@@ -72,26 +73,20 @@ async def workflow_action(
         raise HTTPException(status_code=404, detail="Contract not found")
 
     current_status = contract.get("status", "draft")
-    user_role = current_user["role"]
-
     # Determine new status based on action
     action_map = {
-        "submit_for_review": ("review", ["admin", "manager", "user"]),
-        "approve": ("approved", ["admin", "manager"]),
-        "reject": ("draft", ["admin", "manager"]),
-        "activate": ("active", ["admin", "manager"]),
+        "submit_for_review": "review",
+        "approve": "approved",
+        "reject": "draft",
+        "activate": "active",
     }
 
     if action not in action_map:
         raise HTTPException(status_code=400, detail=f"Invalid action: {action}")
 
-    new_status, allowed_roles = action_map[action]
-
-    if user_role not in allowed_roles:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Role '{user_role}' cannot perform '{action}'",
-        )
+    new_status = action_map[action]
+    require_capability(current_user, action)
+    require_uploader_for_user(current_user, contract)
 
     # Validate transition
     allowed = WORKFLOW_TRANSITIONS.get(current_status, [])
@@ -181,7 +176,9 @@ async def workflow_action(
 
     approval_info = None
     if approval_emails_enabled():
-        approval_info = await _handle_approval_emails(contract, action, comment, approver_id, current_user, background)
+        approval_info = await _handle_approval_emails(
+            contract, action, comment, approver_id, current_user, background
+        )
 
     response = {
         "message": f"Contract status changed to '{new_status}'",
@@ -193,25 +190,45 @@ async def workflow_action(
     return response
 
 
-async def _handle_approval_emails(contract, action, comment, approver_id, current_user, background):
+async def _handle_approval_emails(
+    contract, action, comment, approver_id, current_user, background
+):
     """Best effort: never fails the workflow request."""
     from services import approval_service
     from services.approval_tasks import dispatch_notification
 
     try:
         if action == "submit_for_review":
-            created = await approval_service.request_approval(db, contract, current_user, approver_id, comment)
+            created = await approval_service.request_approval(
+                db, contract, current_user, approver_id, comment
+            )
             if not created:
                 return {"status": "no_approver"}
             approval = created["approval"]
-            background.add_task(dispatch_notification, db, created["notification"]["id"], approval["organizationId"])
-            return {"id": approval["id"], "approverId": approval["approverId"], "status": "pending"}
+            background.add_task(
+                dispatch_notification,
+                db,
+                created["notification"]["id"],
+                approval["organizationId"],
+            )
+            return {
+                "id": approval["id"],
+                "approverId": approval["approverId"],
+                "status": "pending",
+            }
         if action in ("approve", "reject"):
             await approval_service.sync_in_app_decision(
-                db, contract["id"], current_user["organizationId"], action, current_user, comment
+                db,
+                contract["id"],
+                current_user["organizationId"],
+                action,
+                current_user,
+                comment,
             )
     except Exception:
-        logger.exception("Approval email handling failed for contract %s", contract.get("id"))
+        logger.exception(
+            "Approval email handling failed for contract %s", contract.get("id")
+        )
     return None
 
 

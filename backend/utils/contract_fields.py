@@ -5,6 +5,7 @@ string. A prose date, a number, or a nested object used to be stored verbatim,
 which either crashed the upload or silently dropped the contract out of
 "expiring soon". Anything that is not a real calendar date becomes ``None``.
 """
+
 from __future__ import annotations
 
 from datetime import datetime

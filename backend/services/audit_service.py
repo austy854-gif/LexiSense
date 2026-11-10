@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 
 db = None
 
+
 def init_db(database):
     global db
     db = database
@@ -22,6 +23,7 @@ async def log_action(
 ):
     """Log an audit action."""
     from models.audit import AuditLog
+
     entry = AuditLog(
         organizationId=organization_id,
         userId=user_id,
@@ -49,6 +51,7 @@ async def send_notification(
 ):
     """Create an in-app notification for a user."""
     from models.notification import Notification
+
     notif = Notification(
         organizationId=organization_id,
         userId=user_id,

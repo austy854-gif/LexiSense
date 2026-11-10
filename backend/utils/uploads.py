@@ -5,6 +5,7 @@ only a PDF that starts with the PDF magic bytes, or UTF-8 text with a ``.txt``
 extension, and we store a sanitised extension so the object key cannot carry
 path characters from the original filename.
 """
+
 from __future__ import annotations
 
 import re

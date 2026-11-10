@@ -18,6 +18,7 @@ and sig is HMAC-SHA256 under ``APPROVAL_TOKEN_SECRET`` (falls back to
 ``JWT_SECRET``). Only ``sha256(token)`` is stored, in ``approval_tokens``,
 together with the binding (approval, approver, org, action) and ``usedAt``.
 """
+
 from __future__ import annotations
 
 import base64
@@ -87,7 +88,9 @@ def _jwt_derived_key() -> Optional[bytes]:
     jwt_secret = get_env("JWT_SECRET")
     if not jwt_secret:
         return None
-    return hmac.new(jwt_secret.encode("utf-8"), b"approval-token-v1", hashlib.sha256).digest()
+    return hmac.new(
+        jwt_secret.encode("utf-8"), b"approval-token-v1", hashlib.sha256
+    ).digest()
 
 
 def _b64e(raw: bytes) -> str:
@@ -130,10 +133,16 @@ class TokenClaims:
 # ---------------------------------------------------------------------------
 # Token create / verify
 # ---------------------------------------------------------------------------
-def create_action_token(approval_id: str, approver_id: str, organization_id: str, action: str,
-                        ttl_hours: Optional[int] = None, now: Optional[datetime] = None,
-                        expires_at: Optional[datetime] = None, seed: Optional[str] = None
-                        ) -> tuple[str, Dict[str, Any]]:
+def create_action_token(
+    approval_id: str,
+    approver_id: str,
+    organization_id: str,
+    action: str,
+    ttl_hours: Optional[int] = None,
+    now: Optional[datetime] = None,
+    expires_at: Optional[datetime] = None,
+    seed: Optional[str] = None,
+) -> tuple[str, Dict[str, Any]]:
     """Return ``(raw_token, token_doc)``. Persist ``token_doc``, never the raw token.
 
     With ``seed`` (the notification id) and a fixed ``expires_at`` the token is
@@ -145,7 +154,11 @@ def create_action_token(approval_id: str, approver_id: str, organization_id: str
     expires_at = expires_at or (now + timedelta(hours=ttl_hours or _ttl_hours()))
     key = _current_key()
     if seed:
-        jti = _b64e(hmac.new(key, f"jti:{seed}:{approval_id}:{action}".encode(), hashlib.sha256).digest()[:16])
+        jti = _b64e(
+            hmac.new(
+                key, f"jti:{seed}:{approval_id}:{action}".encode(), hashlib.sha256
+            ).digest()[:16]
+        )
     else:
         jti = secrets.token_urlsafe(16)
     payload = {
@@ -196,11 +209,19 @@ def decode_action_token(token: str, now: Optional[datetime] = None) -> TokenClai
             expires_at=datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc),
         )
     except Exception:
-        raise ApprovalTokenError("invalid", "This approval link is invalid or has been tampered with.", 400)
+        raise ApprovalTokenError(
+            "invalid", "This approval link is invalid or has been tampered with.", 400
+        )
     if claims.action not in ACTIONS:
-        raise ApprovalTokenError("invalid", "This approval link is invalid or has been tampered with.", 400)
+        raise ApprovalTokenError(
+            "invalid", "This approval link is invalid or has been tampered with.", 400
+        )
     if (now or _now()) >= claims.expires_at:
-        raise ApprovalTokenError("expired", "This approval link has expired. Please review the contract in LexiSense.", 410)
+        raise ApprovalTokenError(
+            "expired",
+            "This approval link has expired. Please review the contract in LexiSense.",
+            410,
+        )
     return claims
 
 
@@ -214,32 +235,61 @@ async def verify_action_token(
     links and a stale contract supersedes the approval. The preview never
     mutates anything."""
     claims = decode_action_token(token, now=now)
-    doc = await db.approval_tokens.find_one({"tokenHash": hash_token(token)}, {"_id": 0})
+    doc = await db.approval_tokens.find_one(
+        {"tokenHash": hash_token(token)}, {"_id": 0}
+    )
     if not doc:
-        raise ApprovalTokenError("not_found", "This approval link is invalid or has been revoked.", 404)
-    binding = (doc.get("approvalId"), doc.get("approverId"), doc.get("organizationId"), doc.get("action"))
-    if binding != (claims.approval_id, claims.approver_id, claims.organization_id, claims.action):
-        raise ApprovalTokenError("mismatch", "This approval link is invalid or has been tampered with.", 400)
+        raise ApprovalTokenError(
+            "not_found", "This approval link is invalid or has been revoked.", 404
+        )
+    binding = (
+        doc.get("approvalId"),
+        doc.get("approverId"),
+        doc.get("organizationId"),
+        doc.get("action"),
+    )
+    if binding != (
+        claims.approval_id,
+        claims.approver_id,
+        claims.organization_id,
+        claims.action,
+    ):
+        raise ApprovalTokenError(
+            "mismatch", "This approval link is invalid or has been tampered with.", 400
+        )
     if doc.get("usedAt") or doc.get("revokedAt"):
-        raise ApprovalTokenError("used", "This approval link has already been used.", 409)
+        raise ApprovalTokenError(
+            "used", "This approval link has already been used.", 409
+        )
     approval = await db.approvals.find_one(
         {"id": claims.approval_id, "organizationId": claims.organization_id}, {"_id": 0}
     )
     if not approval or approval.get("approverId") != claims.approver_id:
-        raise ApprovalTokenError("mismatch", "This approval link is invalid or has been tampered with.", 400)
+        raise ApprovalTokenError(
+            "mismatch", "This approval link is invalid or has been tampered with.", 400
+        )
     if approval.get("status") != "pending":
-        raise ApprovalTokenError("decided", f"This request has already been {approval.get('status')}.", 409)
+        raise ApprovalTokenError(
+            "decided", f"This request has already been {approval.get('status')}.", 409
+        )
     if not await _approver_still_eligible(db, approval):
         if enforce:
             await revoke_tokens(db, approval["id"], approval["organizationId"])
-        raise ApprovalTokenError("forbidden", "You are no longer allowed to decide this request.", 403)
+        raise ApprovalTokenError(
+            "forbidden", "You are no longer allowed to decide this request.", 403
+        )
     contract = await db.contracts.find_one(
-        {"id": approval["contractId"], "organizationId": approval["organizationId"]}, {"_id": 0, "status": 1}
+        {"id": approval["contractId"], "organizationId": approval["organizationId"]},
+        {"_id": 0, "status": 1},
     )
     if not contract or contract.get("status") != "review":
         if enforce:
             await supersede(db, approval, "contract_not_in_review")
-        raise ApprovalTokenError("stale", "This contract is no longer awaiting review; nothing was changed.", 409)
+        raise ApprovalTokenError(
+            "stale",
+            "This contract is no longer awaiting review; nothing was changed.",
+            409,
+        )
     return claims, doc, approval
 
 
@@ -250,15 +300,31 @@ async def _approver_still_eligible(db, approval: dict) -> bool:
         {"id": approval["approverId"], "organizationId": approval["organizationId"]},
         {"_id": 0, "role": 1, "isActive": 1},
     )
-    return bool(user) and user.get("isActive", True) is not False and user.get("role") in APPROVER_ROLES
+    return (
+        bool(user)
+        and user.get("isActive", True) is not False
+        and user.get("role") in APPROVER_ROLES
+    )
 
 
 async def supersede(db, approval: dict, reason: str) -> None:
     now = _now().isoformat()
     await db.approvals.update_one(
-        {"id": approval["id"], "organizationId": approval["organizationId"], "status": "pending"},
-        {"$set": {"status": "superseded", "supersededReason": reason, "updatedAt": now},
-         "$push": {"auditTrail": {"event": "superseded", "reason": reason, "at": now}}},
+        {
+            "id": approval["id"],
+            "organizationId": approval["organizationId"],
+            "status": "pending",
+        },
+        {
+            "$set": {
+                "status": "superseded",
+                "supersededReason": reason,
+                "updatedAt": now,
+            },
+            "$push": {
+                "auditTrail": {"event": "superseded", "reason": reason, "at": now}
+            },
+        },
     )
     await revoke_tokens(db, approval["id"], approval["organizationId"])
 
@@ -266,13 +332,22 @@ async def supersede(db, approval: dict, reason: str) -> None:
 # ---------------------------------------------------------------------------
 # Approver selection & request creation
 # ---------------------------------------------------------------------------
-async def choose_approver(db, organization_id: str, requester_id: str, preferred_id: Optional[str] = None,
-                          contract: Optional[dict] = None) -> Optional[dict]:
+async def choose_approver(
+    db,
+    organization_id: str,
+    requester_id: str,
+    preferred_id: Optional[str] = None,
+    contract: Optional[dict] = None,
+) -> Optional[dict]:
     """Explicit approver (request param), else the contract's
     ``assignedManagerId``, else the first active manager, else the first admin.
     The requester never approves their own submission."""
-    base = {"organizationId": organization_id, "role": {"$in": list(APPROVER_ROLES)},
-            "isActive": {"$ne": False}, "id": {"$ne": requester_id}}
+    base = {
+        "organizationId": organization_id,
+        "role": {"$in": list(APPROVER_ROLES)},
+        "isActive": {"$ne": False},
+        "id": {"$ne": requester_id},
+    }
     proj = {"_id": 0, "id": 1, "email": 1, "firstName": 1, "lastName": 1, "role": 1}
     for candidate in (preferred_id, (contract or {}).get("assignedManagerId")):
         if candidate and candidate != requester_id:
@@ -282,31 +357,49 @@ async def choose_approver(db, organization_id: str, requester_id: str, preferred
             if user:
                 return user
     for role in APPROVER_ROLES:
-        users = await db.users.find({**base, "role": role}, proj).sort("createdAt", 1).to_list(1)
+        users = (
+            await db.users.find({**base, "role": role}, proj)
+            .sort("createdAt", 1)
+            .to_list(1)
+        )
         if users:
             return users[0]
     return None
 
 
-async def request_approval(db, contract: dict, requester: dict, approver_id: Optional[str] = None,
-                           comment: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def request_approval(
+    db,
+    contract: dict,
+    requester: dict,
+    approver_id: Optional[str] = None,
+    comment: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Create the approval + notification record. Tokens are minted (and the
     email rendered) at send time by :func:`mint_tokens_for_notification`, so no
     raw token ever passes through the task queue. Returns ``None`` when no
     approver exists. Supersedes any older pending request."""
     org_id = requester["organizationId"]
-    approver = await choose_approver(db, org_id, requester["sub"], approver_id, contract)
+    approver = await choose_approver(
+        db, org_id, requester["sub"], approver_id, contract
+    )
     if not approver:
-        logger.warning("No approver available for contract %s in org %s", contract.get("id"), org_id)
+        logger.warning(
+            "No approver available for contract %s in org %s",
+            contract.get("id"),
+            org_id,
+        )
         return None
 
     now = _now()
     old = await db.approvals.find(
-        {"organizationId": org_id, "contractId": contract["id"], "status": "pending"}, {"_id": 0, "id": 1}
+        {"organizationId": org_id, "contractId": contract["id"], "status": "pending"},
+        {"_id": 0, "id": 1},
     ).to_list(50)
     for prev in old:
-        await db.approvals.update_one({"id": prev["id"], "organizationId": org_id, "status": "pending"},
-                                      {"$set": {"status": "superseded", "updatedAt": now.isoformat()}})
+        await db.approvals.update_one(
+            {"id": prev["id"], "organizationId": org_id, "status": "pending"},
+            {"$set": {"status": "superseded", "updatedAt": now.isoformat()}},
+        )
         await revoke_tokens(db, prev["id"], org_id)
 
     approval = {
@@ -324,12 +417,16 @@ async def request_approval(db, contract: dict, requester: dict, approver_id: Opt
         "updatedAt": now.isoformat(),
         "decidedAt": None,
         "decidedBy": None,
-        "auditTrail": [{"event": "requested", "by": requester["sub"], "at": now.isoformat()}],
+        "auditTrail": [
+            {"event": "requested", "by": requester["sub"], "at": now.isoformat()}
+        ],
     }
     await db.approvals.insert_one(dict(approval))
 
     approval["expiresAt"] = (now + timedelta(hours=_ttl_hours())).isoformat()
-    await db.approvals.update_one({"id": approval["id"]}, {"$set": {"expiresAt": approval["expiresAt"]}})
+    await db.approvals.update_one(
+        {"id": approval["id"]}, {"$set": {"expiresAt": approval["expiresAt"]}}
+    )
 
     notification = {
         "id": str(uuid.uuid4()),
@@ -349,22 +446,37 @@ async def request_approval(db, contract: dict, requester: dict, approver_id: Opt
     return {"approval": approval, "notification": notification, "approver": approver}
 
 
-async def mint_tokens_for_notification(db, approval: dict, notification_id: str) -> Dict[str, str]:
+async def mint_tokens_for_notification(
+    db, approval: dict, notification_id: str
+) -> Dict[str, str]:
     """Deterministically (re)mint this notification's two tokens and upsert
     their hashes. Calling it again (a retry) yields the identical tokens."""
     expires_at = datetime.fromisoformat(approval["expiresAt"])
     tokens = {}
     for action in ACTIONS:
-        raw, doc = create_action_token(approval["id"], approval["approverId"], approval["organizationId"], action,
-                                       expires_at=expires_at, seed=notification_id)
-        await db.approval_tokens.update_one({"tokenHash": doc["tokenHash"]}, {"$setOnInsert": doc}, upsert=True)
+        raw, doc = create_action_token(
+            approval["id"],
+            approval["approverId"],
+            approval["organizationId"],
+            action,
+            expires_at=expires_at,
+            seed=notification_id,
+        )
+        await db.approval_tokens.update_one(
+            {"tokenHash": doc["tokenHash"]}, {"$setOnInsert": doc}, upsert=True
+        )
         tokens[action] = raw
     return tokens
 
 
 async def revoke_tokens(db, approval_id: str, organization_id: str) -> None:
     await db.approval_tokens.update_many(
-        {"approvalId": approval_id, "organizationId": organization_id, "usedAt": None, "revokedAt": None},
+        {
+            "approvalId": approval_id,
+            "organizationId": organization_id,
+            "usedAt": None,
+            "revokedAt": None,
+        },
         {"$set": {"revokedAt": _now().isoformat()}},
     )
 
@@ -372,8 +484,16 @@ async def revoke_tokens(db, approval_id: str, organization_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Decision
 # ---------------------------------------------------------------------------
-async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_email: Optional[str],
-                         ip: Optional[str], via: str, comment: Optional[str] = None) -> Optional[dict]:
+async def apply_decision(
+    db,
+    approval: dict,
+    action: str,
+    actor_id: str,
+    actor_email: Optional[str],
+    ip: Optional[str],
+    via: str,
+    comment: Optional[str] = None,
+) -> Optional[dict]:
     """Move a *pending* approval to approved/rejected (conditional update, so
     concurrent or repeated calls are no-ops). For email-link decisions the
     contract must still be in ``review``: if the contract update matches
@@ -382,15 +502,30 @@ async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_e
     Returns the updated approval, or ``None`` if it was no longer pending."""
     now = _now().isoformat()
     org_id = approval["organizationId"]
-    entry = {"event": DECISION_STATUS[action], "by": actor_id, "email": actor_email, "ip": ip,
-             "via": via, "at": now, "comment": comment}
+    entry = {
+        "event": DECISION_STATUS[action],
+        "by": actor_id,
+        "email": actor_email,
+        "ip": ip,
+        "via": via,
+        "at": now,
+        "comment": comment,
+    }
     from pymongo import ReturnDocument
 
     updated = await db.approvals.find_one_and_update(
         {"id": approval["id"], "organizationId": org_id, "status": "pending"},
-        {"$set": {"status": DECISION_STATUS[action], "decidedAt": now, "decidedBy": actor_id,
-                  "decidedIp": ip, "decidedVia": via, "updatedAt": now},
-         "$push": {"auditTrail": entry}},
+        {
+            "$set": {
+                "status": DECISION_STATUS[action],
+                "decidedAt": now,
+                "decidedBy": actor_id,
+                "decidedIp": ip,
+                "decidedVia": via,
+                "updatedAt": now,
+            },
+            "$push": {"auditTrail": entry},
+        },
         return_document=ReturnDocument.AFTER,
     )
     if not updated:
@@ -402,15 +537,30 @@ async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_e
         new_status = CONTRACT_STATUS[action]
         contract_update = {
             "$set": {"status": new_status, "updatedAt": now},
-            "$push": {"workflowHistory": {"fromStatus": "review", "toStatus": new_status, "action": action,
-                                          "userId": actor_id, "userEmail": actor_email, "comment": comment,
-                                          "timestamp": now, "via": via, "approvalId": approval["id"]}},
+            "$push": {
+                "workflowHistory": {
+                    "fromStatus": "review",
+                    "toStatus": new_status,
+                    "action": action,
+                    "userId": actor_id,
+                    "userEmail": actor_email,
+                    "comment": comment,
+                    "timestamp": now,
+                    "via": via,
+                    "approvalId": approval["id"],
+                }
+            },
         }
         if action == "approve":
             contract_update["$set"].update({"approvedBy": actor_id, "approvedAt": now})
         try:
             result = await db.contracts.update_one(
-                {"id": approval["contractId"], "organizationId": org_id, "status": "review"}, contract_update
+                {
+                    "id": approval["contractId"],
+                    "organizationId": org_id,
+                    "status": "review",
+                },
+                contract_update,
             )
             changed = result.modified_count == 1
         except Exception:
@@ -421,22 +571,54 @@ async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_e
             if not changed:
                 # Put the approval back so the (un-claimed) link can be retried.
                 await db.approvals.update_one(
-                    {"id": approval["id"], "organizationId": org_id, "status": DECISION_STATUS[action]},
-                    {"$set": {"status": "pending", "decidedAt": None, "decidedBy": None, "decidedIp": None,
-                              "decidedVia": None, "updatedAt": now},
-                     "$pull": {"auditTrail": {"at": now, "event": DECISION_STATUS[action]}}},
+                    {
+                        "id": approval["id"],
+                        "organizationId": org_id,
+                        "status": DECISION_STATUS[action],
+                    },
+                    {
+                        "$set": {
+                            "status": "pending",
+                            "decidedAt": None,
+                            "decidedBy": None,
+                            "decidedIp": None,
+                            "decidedVia": None,
+                            "updatedAt": now,
+                        },
+                        "$pull": {
+                            "auditTrail": {"at": now, "event": DECISION_STATUS[action]}
+                        },
+                    },
                 )
                 raise
-            logger.warning("Contract update for approval %s errored but was applied; keeping decision",
-                           approval["id"])
+            logger.warning(
+                "Contract update for approval %s errored but was applied; keeping decision",
+                approval["id"],
+            )
         if not changed:
             await db.approvals.update_one(
                 {"id": approval["id"], "organizationId": org_id},
-                {"$set": {"status": "superseded", "supersededReason": "contract_not_in_review", "updatedAt": now},
-                 "$push": {"auditTrail": {"event": "superseded", "reason": "contract_not_in_review", "at": now}}},
+                {
+                    "$set": {
+                        "status": "superseded",
+                        "supersededReason": "contract_not_in_review",
+                        "updatedAt": now,
+                    },
+                    "$push": {
+                        "auditTrail": {
+                            "event": "superseded",
+                            "reason": "contract_not_in_review",
+                            "at": now,
+                        }
+                    },
+                },
             )
             await revoke_tokens(db, approval["id"], org_id)
-            raise ApprovalTokenError("stale", "This contract is no longer awaiting review; nothing was changed.", 409)
+            raise ApprovalTokenError(
+                "stale",
+                "This contract is no longer awaiting review; nothing was changed.",
+                409,
+            )
     await _post_commit(db, approval, action, actor_id, actor_email, ip, via, comment)
     return updated
 
@@ -444,10 +626,14 @@ async def apply_decision(db, approval: dict, action: str, actor_id: str, actor_e
 async def _contract_reached(db, approval: dict, org_id: str, new_status: str) -> bool:
     try:
         current = await db.contracts.find_one(
-            {"id": approval["contractId"], "organizationId": org_id}, {"_id": 0, "status": 1, "workflowHistory": 1}
+            {"id": approval["contractId"], "organizationId": org_id},
+            {"_id": 0, "status": 1, "workflowHistory": 1},
         )
     except Exception:
-        logger.exception("Could not re-read contract %s after an ambiguous update", approval["contractId"])
+        logger.exception(
+            "Could not re-read contract %s after an ambiguous update",
+            approval["contractId"],
+        )
         return False
     if not current or current.get("status") != new_status:
         return False
@@ -455,7 +641,9 @@ async def _contract_reached(db, approval: dict, org_id: str, new_status: str) ->
     return any(h.get("approvalId") == approval["id"] for h in history)
 
 
-async def _post_commit(db, approval, action, actor_id, actor_email, ip, via, comment) -> None:
+async def _post_commit(
+    db, approval, action, actor_id, actor_email, ip, via, comment
+) -> None:
     """Side effects after the decision is committed. They must never raise:
     a failure here can't undo the decision, so it is logged and swallowed."""
     org_id = approval["organizationId"]
@@ -467,25 +655,43 @@ async def _post_commit(db, approval, action, actor_id, actor_email, ip, via, com
     from services.audit_service import log_action, send_notification
 
     try:
-        await log_action(organization_id=org_id, user_id=actor_id, user_email=actor_email,
-                         action=f"contract_{action}", resource_type="contract", resource_id=approval["contractId"],
-                         resource_title=approval.get("contractTitle"),
-                         details={"approvalId": approval["id"], "via": via, "ip": ip, "comment": comment})
+        await log_action(
+            organization_id=org_id,
+            user_id=actor_id,
+            user_email=actor_email,
+            action=f"contract_{action}",
+            resource_type="contract",
+            resource_id=approval["contractId"],
+            resource_title=approval.get("contractTitle"),
+            details={
+                "approvalId": approval["id"],
+                "via": via,
+                "ip": ip,
+                "comment": comment,
+            },
+        )
     except Exception:
         logger.exception("Audit log failed for approval %s", approval["id"])
     if approval.get("requesterId") and approval["requesterId"] != actor_id:
         try:
             await send_notification(
-                organization_id=org_id, user_id=approval["requesterId"], notification_type=f"workflow_{action}",
+                organization_id=org_id,
+                user_id=approval["requesterId"],
+                notification_type=f"workflow_{action}",
                 title=f"Contract {DECISION_STATUS[action]}",
                 message=f'"{approval.get("contractTitle")}" was {DECISION_STATUS[action]} by {actor_email}',
-                resource_type="contract", resource_id=approval["contractId"],
+                resource_type="contract",
+                resource_id=approval["contractId"],
             )
         except Exception:
-            logger.exception("Requester notification failed for approval %s", approval["id"])
+            logger.exception(
+                "Requester notification failed for approval %s", approval["id"]
+            )
 
 
-async def consume_token_and_decide(db, token: str, ip: Optional[str], comment: Optional[str] = None) -> dict:
+async def consume_token_and_decide(
+    db, token: str, ip: Optional[str], comment: Optional[str] = None
+) -> dict:
     """Verify, claim the token (single use), decide. MongoDB transactions need
     a replica set and aren't guaranteed in every deployment, so instead of a
     transaction the claim is released if the decision raises unexpectedly."""
@@ -495,14 +701,27 @@ async def consume_token_and_decide(db, token: str, ip: Optional[str], comment: O
         {"$set": {"usedAt": _now().isoformat(), "usedIp": ip}},
     )
     if claimed.modified_count != 1:
-        raise ApprovalTokenError("used", "This approval link has already been used.", 409)
+        raise ApprovalTokenError(
+            "used", "This approval link has already been used.", 409
+        )
     try:
-        approver = await db.users.find_one(
-            {"id": claims.approver_id, "organizationId": claims.organization_id}, {"_id": 0, "email": 1}
-        ) or {}
-        updated = await apply_decision(db, approval, claims.action, claims.approver_id,
-                                       approver.get("email") or approval.get("approverEmail"), ip,
-                                       "email_link", comment)
+        approver = (
+            await db.users.find_one(
+                {"id": claims.approver_id, "organizationId": claims.organization_id},
+                {"_id": 0, "email": 1},
+            )
+            or {}
+        )
+        updated = await apply_decision(
+            db,
+            approval,
+            claims.action,
+            claims.approver_id,
+            approver.get("email") or approval.get("approverEmail"),
+            ip,
+            "email_link",
+            comment,
+        )
     except ApprovalTokenError:
         raise  # deliberate outcome (e.g. stale): token stays consumed/revoked
     except Exception:
@@ -511,35 +730,70 @@ async def consume_token_and_decide(db, token: str, ip: Optional[str], comment: O
         # unknown or decided, the token stays consumed.
         try:
             current = await db.approvals.find_one(
-                {"id": approval["id"], "organizationId": approval["organizationId"]}, {"_id": 0, "status": 1}
+                {"id": approval["id"], "organizationId": approval["organizationId"]},
+                {"_id": 0, "status": 1},
             )
             if current and current.get("status") == "pending":
                 await db.approval_tokens.update_one(
-                    {"tokenHash": doc["tokenHash"], "revokedAt": None}, {"$set": {"usedAt": None, "usedIp": None}}
+                    {"tokenHash": doc["tokenHash"], "revokedAt": None},
+                    {"$set": {"usedAt": None, "usedIp": None}},
                 )
         except Exception:
-            logger.exception("Could not release token claim for approval %s", approval["id"])
+            logger.exception(
+                "Could not release token claim for approval %s", approval["id"]
+            )
         raise
     if not updated:
-        raise ApprovalTokenError("decided", "This request has already been decided.", 409)
+        raise ApprovalTokenError(
+            "decided", "This request has already been decided.", 409
+        )
     return updated
 
 
-async def sync_in_app_decision(db, contract_id: str, organization_id: str, action: str, actor: dict,
-                               comment: Optional[str] = None) -> None:
+async def sync_in_app_decision(
+    db,
+    contract_id: str,
+    organization_id: str,
+    action: str,
+    actor: dict,
+    comment: Optional[str] = None,
+) -> None:
     """Called by the in-app workflow route so a pending email approval is
     closed (and its links revoked) when someone decides inside the app."""
     pending = await db.approvals.find(
-        {"organizationId": organization_id, "contractId": contract_id, "status": "pending"}, {"_id": 0}
+        {
+            "organizationId": organization_id,
+            "contractId": contract_id,
+            "status": "pending",
+        },
+        {"_id": 0},
     ).to_list(10)
     for approval in pending:
         updated = await db.approvals.find_one_and_update(
-            {"id": approval["id"], "organizationId": organization_id, "status": "pending"},
-            {"$set": {"status": DECISION_STATUS[action], "decidedAt": _now().isoformat(),
-                      "decidedBy": actor["sub"], "decidedVia": "in_app", "updatedAt": _now().isoformat()},
-             "$push": {"auditTrail": {"event": DECISION_STATUS[action], "by": actor["sub"],
-                                      "email": actor.get("email"), "via": "in_app",
-                                      "at": _now().isoformat(), "comment": comment}}},
+            {
+                "id": approval["id"],
+                "organizationId": organization_id,
+                "status": "pending",
+            },
+            {
+                "$set": {
+                    "status": DECISION_STATUS[action],
+                    "decidedAt": _now().isoformat(),
+                    "decidedBy": actor["sub"],
+                    "decidedVia": "in_app",
+                    "updatedAt": _now().isoformat(),
+                },
+                "$push": {
+                    "auditTrail": {
+                        "event": DECISION_STATUS[action],
+                        "by": actor["sub"],
+                        "email": actor.get("email"),
+                        "via": "in_app",
+                        "at": _now().isoformat(),
+                        "comment": comment,
+                    }
+                },
+            },
         )
         if updated:
             await revoke_tokens(db, approval["id"], organization_id)
@@ -558,13 +812,17 @@ def action_link(token: str) -> str:
     return f"{_app_url()}/approvals/respond#token={token}"
 
 
-def render_request_email(approval: dict, approver: Optional[dict], tokens: Dict[str, str]) -> tuple[str, str]:
+def render_request_email(
+    approval: dict, approver: Optional[dict], tokens: Dict[str, str]
+) -> tuple[str, str]:
     title = escape(approval.get("contractTitle") or "Untitled contract")
     requester = escape(approval.get("requesterEmail") or "A teammate")
     comment = escape(approval.get("comment") or "")
     view = f"{_app_url()}/contracts/{approval['contractId']}"
-    btn = ("display:inline-block;padding:12px 28px;margin:0 6px;color:#fff;text-decoration:none;"
-           "font-weight:600;border-radius:8px;background-color:{}")
+    btn = (
+        "display:inline-block;padding:12px 28px;margin:0 6px;color:#fff;text-decoration:none;"
+        "font-weight:600;border-radius:8px;background-color:{}"
+    )
     subject = f"Approval requested: {approval.get('contractTitle') or 'Contract'}"
     html = f"""<!DOCTYPE html><html><body style="font-family:Segoe UI,Arial,sans-serif;background:#0f1318;padding:32px">
 <table width="600" align="center" cellpadding="0" cellspacing="0" style="background:#1a1f26;border-radius:12px;color:#e5e7eb">
@@ -587,7 +845,9 @@ def render_decision_email(approval: dict) -> tuple[str, str]:
     status = approval.get("status")
     view = f"{_app_url()}/contracts/{approval['contractId']}"
     subject = f"Contract {status}: {approval.get('contractTitle') or 'Contract'}"
-    html = (f"<p><strong>{title}</strong> was {escape(str(status))} by "
-            f"{escape(approval.get('approverEmail') or 'your approver')}.</p>"
-            f'<p><a href="{escape(view, quote=True)}">View the contract in LexiSense</a></p>')
+    html = (
+        f"<p><strong>{title}</strong> was {escape(str(status))} by "
+        f"{escape(approval.get('approverEmail') or 'your approver')}.</p>"
+        f'<p><a href="{escape(view, quote=True)}">View the contract in LexiSense</a></p>'
+    )
     return subject, html

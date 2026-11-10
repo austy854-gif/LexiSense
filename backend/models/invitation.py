@@ -11,7 +11,7 @@ class InvitationCreate(BaseModel):
 
 class Invitation(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     organizationId: str
     email: str
@@ -21,8 +21,14 @@ class Invitation(BaseModel):
     tokenHash: str
     status: str = "pending"
     invitedBy: str
-    expiresAt: str = Field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=7)).isoformat())
-    createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    expiresAt: str = Field(
+        default_factory=lambda: (
+            datetime.now(timezone.utc) + timedelta(days=7)
+        ).isoformat()
+    )
+    createdAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
 
 class AcceptInvitationRequest(BaseModel):
@@ -31,6 +37,7 @@ class AcceptInvitationRequest(BaseModel):
     Previously the password was passed as a query parameter, which leaks it
     into access logs, browser history and proxy logs.
     """
+
     token: str
     password: str = Field(min_length=8)
     firstName: Optional[str] = None
@@ -39,6 +46,7 @@ class AcceptInvitationRequest(BaseModel):
 
 class InvitationPreviewRequest(BaseModel):
     """Body model for POST /team/accept-invite/preview (token stays out of URLs)."""
+
     token: str = Field(min_length=1)
 
 
@@ -52,6 +60,7 @@ class MemberRoleUpdate(BaseModel):
     body in OpenAPI. A body model is validated by FastAPI before the handler
     runs and keeps the payload out of the URL.
     """
+
     role: str
 
 

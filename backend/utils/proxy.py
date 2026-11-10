@@ -9,6 +9,7 @@ accepting only http/https. Many load balancers/CDNs *overwrite*
 X-Forwarded-Proto instead of appending, so with a CDN + LB set
 ``FORWARDED_PROTO_HOP=1`` even though ``TRUSTED_PROXY_COUNT=2``.
 """
+
 from utils.env import get_env
 from utils.rbac import _trusted_proxy_count
 
@@ -36,8 +37,14 @@ class ForwardedProtoMiddleware:
         if scope["type"] in ("http", "websocket"):
             hops = _forwarded_proto_hop()
             if hops:
-                values = [v.decode("latin-1") for k, v in scope.get("headers", []) if k == b"x-forwarded-proto"]
-                parts = [p.strip().lower() for v in values for p in v.split(",") if p.strip()]
+                values = [
+                    v.decode("latin-1")
+                    for k, v in scope.get("headers", [])
+                    if k == b"x-forwarded-proto"
+                ]
+                parts = [
+                    p.strip().lower() for v in values for p in v.split(",") if p.strip()
+                ]
                 if len(parts) >= hops and parts[-hops] in _ALLOWED:
                     proto = parts[-hops]
                     if scope["type"] == "websocket":

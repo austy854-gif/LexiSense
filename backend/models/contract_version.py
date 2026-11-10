@@ -6,7 +6,7 @@ import uuid
 
 class ContractVersion(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     contractId: str
     version: int
@@ -22,7 +22,9 @@ class ContractVersion(BaseModel):
     aiAnalysis: Optional[Dict[str, Any]] = None
     changedBy: str
     changeReason: Optional[str] = None
-    createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    createdAt: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
 
 class ContractVersionResponse(BaseModel):

@@ -24,6 +24,7 @@ Security note: internal exception text is never returned for 5xx responses --
 only a correlation id, so an operator can find the traceback in the logs while
 the caller learns nothing about the stack.
 """
+
 from __future__ import annotations
 
 import logging
@@ -125,7 +126,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(RequestValidationError)
-    async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    async def _validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ):
         # Collapse pydantic's error list into safe, serialisable primitives.
         fields = []
         for err in exc.errors():

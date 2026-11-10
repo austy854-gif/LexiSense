@@ -16,6 +16,7 @@ It needs no network access and no pytest:
 
     python3 backend/scripts/seed_harness.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -70,7 +71,7 @@ def run_checks(log: list[str] | None = None) -> dict:
         tags: list = Field(default_factory=list)
         isPublic: bool = False
         organizationId: str  # required -> was the source of the crash
-        createdBy: str       # required -> was the source of the crash
+        createdBy: str  # required -> was the source of the crash
 
     try:
         for entry in DEFAULT_TEMPLATES:
@@ -80,7 +81,9 @@ def run_checks(log: list[str] | None = None) -> dict:
         result["missing_fields"] = sorted(
             {str(err["loc"][0]) for err in exc.errors() if err.get("loc")}
         )
-        log.append(f"PASS  unpatched model reproduces the crash ({exc.error_count()} error(s))")
+        log.append(
+            f"PASS  unpatched model reproduces the crash ({exc.error_count()} error(s))"
+        )
     else:
         log.append("FAIL  unpatched model unexpectedly accepted the entries")
 
@@ -157,7 +160,8 @@ async def check_live_seed(log: list[str]) -> dict:
         # A second run must be idempotent (the isDefault guard must match).
         await seed_module.seed_database()
         outcome["second_run_skipped"] = (
-            await db.templates.count_documents({"isDefault": True}) == outcome["inserted"]
+            await db.templates.count_documents({"isDefault": True})
+            == outcome["inserted"]
         )
         log.append(
             f"PASS  live seed inserted {outcome['inserted']} templates "

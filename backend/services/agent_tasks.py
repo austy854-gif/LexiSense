@@ -2,6 +2,7 @@
 Celery tasks for Contract Agent execution.
 Handles scheduled agent runs, monitoring, and alerting.
 """
+
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
@@ -39,8 +40,13 @@ async def _record_skipped_run(db, agent: dict, reason: str, when: datetime) -> N
     entry["skip_reason"] = reason
     await db.contract_agents.update_one(
         {"id": agent["id"], "organizationId": agent.get("organizationId")},
-        {"$push": {"executionHistory": entry},
-         "$set": {"lastSkippedAt": when.isoformat(), "updatedAt": datetime.now(timezone.utc).isoformat()}},
+        {
+            "$push": {"executionHistory": entry},
+            "$set": {
+                "lastSkippedAt": when.isoformat(),
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            },
+        },
     )
 
 
@@ -63,24 +69,32 @@ def cron_to_next_run(cron_expr: str, from_time: datetime = None) -> Optional[dat
     """Convert cron expression to next run datetime. Simplified implementation."""
     if not from_time:
         from_time = datetime.now(timezone.utc)
-    
+
     # Simple parser for common cron patterns
     # Supports: "0 9 * * *" (daily 9 AM), "0 */6 * * *" (every 6 hours), etc.
     parts = cron_expr.strip().split()
     if len(parts) != 5:
         return from_time + timedelta(hours=24)
-    
+
     minute, hour, day, month, dow = parts
-    
+
     # For now, just handle daily at specific hour
-    if minute.isdigit() and hour.isdigit() and day == "*" and month == "*" and dow == "*":
+    if (
+        minute.isdigit()
+        and hour.isdigit()
+        and day == "*"
+        and month == "*"
+        and dow == "*"
+    ):
         target_hour = int(hour)
         target_minute = int(minute)
-        next_run = from_time.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+        next_run = from_time.replace(
+            hour=target_hour, minute=target_minute, second=0, microsecond=0
+        )
         if next_run <= from_time:
             next_run += timedelta(days=1)
         return next_run
-    
+
     # Default: daily
     return from_time + timedelta(days=1)
 
@@ -116,35 +130,45 @@ async def _check_due_agents_async():
 
     try:
         # Find active agents that are due
-        cursor = db.contract_agents.find({
-            "status": "active",
-            "$or": [
-                {"nextRunAt": {"$lte": now.isoformat()}},
-                {"nextRunAt": {"$exists": False}},
-                {"nextRunAt": None}
-            ]
-        })
-        
+        cursor = db.contract_agents.find(
+            {
+                "status": "active",
+                "$or": [
+                    {"nextRunAt": {"$lte": now.isoformat()}},
+                    {"nextRunAt": {"$exists": False}},
+                    {"nextRunAt": None},
+                ],
+            }
+        )
+
         agents = await cursor.to_list(100)
         agents_skipped = 0
-        
+
         for agent in agents:
             # Billing gate: lapsed / expired orgs don't get scheduled AI runs.
-            if await _agent_ai_allowed(db, agent, f"scheduled agent {agent.get('id')}", now):
+            if await _agent_ai_allowed(
+                db, agent, f"scheduled agent {agent.get('id')}", now
+            ):
                 execute_contract_agent.delay(agent["id"])
                 agents_queued += 1
             else:
                 agents_skipped += 1
-            
+
             # Update next run time
             next_run = cron_to_next_run(agent.get("schedule", "0 9 * * *"), now)
             await db.contract_agents.update_one(
                 {"id": agent["id"]},
-                {"$set": {"nextRunAt": next_run.isoformat() if next_run else None}}
+                {"$set": {"nextRunAt": next_run.isoformat() if next_run else None}},
             )
 
-        logger.info(f"Queued {agents_queued} contract agents for execution ({agents_skipped} skipped: billing)")
-        return {"status": "success", "agents_queued": agents_queued, "agents_skipped": agents_skipped}
+        logger.info(
+            f"Queued {agents_queued} contract agents for execution ({agents_skipped} skipped: billing)"
+        )
+        return {
+            "status": "success",
+            "agents_queued": agents_queued,
+            "agents_skipped": agents_skipped,
+        }
 
     except Exception as e:
         logger.error(f"Check due agents failed: {e}")
@@ -182,7 +206,7 @@ async def _execute_contract_agent_async(agent_id: str):
         return {"status": "error", "message": "Database not available"}
 
     start_time = datetime.now(timezone.utc)
-    
+
     try:
         agent = await db.contract_agents.find_one({"id": agent_id})
         if not agent:
@@ -194,7 +218,11 @@ async def _execute_contract_agent_async(agent_id: str):
         # Billing gate (also covers runs queued before the org lapsed and
         # manual triggers that slipped past the API gate).
         if not await _agent_ai_allowed(db, agent, f"agent run {agent_id}", start_time):
-            return {"status": "skipped", "reason": "no_ai_entitlement", "agent_id": agent_id}
+            return {
+                "status": "skipped",
+                "reason": "no_ai_entitlement",
+                "agent_id": agent_id,
+            }
 
         config = agent.get("config", {})
         org_id = agent["organizationId"]
@@ -202,7 +230,7 @@ async def _execute_contract_agent_async(agent_id: str):
 
         # Build query based on agent config
         query = {"organizationId": org_id, "status": {"$ne": "expired"}}
-        
+
         if config.get("contract_types"):
             query["contractType"] = {"$in": config["contract_types"]}
         if config.get("risk_levels"):
@@ -218,7 +246,7 @@ async def _execute_contract_agent_async(agent_id: str):
         query["createdAt"] = {"$gte": cutoff}
 
         contracts = await db.contracts.find(query, {"_id": 0}).to_list(500)
-        
+
         contracts_checked = len(contracts)
         alerts_generated = 0
         actions_taken = []
@@ -232,22 +260,22 @@ async def _execute_contract_agent_async(agent_id: str):
                     # Check expiration
                     await _check_expiration(contract, agent, config, db, actions_taken)
                     alerts_generated += 1
-                    
+
                 elif agent_type == "risk_alert":
                     # Check risk level changes
                     await _check_risk_change(contract, agent, config, db, actions_taken)
                     alerts_generated += 1
-                    
+
                 elif agent_type == "compliance_checker":
                     # Check compliance rules
                     await _check_compliance(contract, agent, config, db, actions_taken)
                     alerts_generated += 1
-                    
+
                 elif agent_type == "obligation_tracker":
                     # Check obligation deadlines
                     await _check_obligations(contract, agent, config, db, actions_taken)
                     alerts_generated += 1
-                    
+
                 elif agent_type == "renewal_negotiator":
                     # Check renewal opportunities
                     await _check_renewal(contract, agent, config, db, actions_taken)
@@ -258,8 +286,10 @@ async def _execute_contract_agent_async(agent_id: str):
                 logger.error(f"Error processing contract {contract.get('id')}: {e}")
 
         # Update agent stats
-        duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
-        
+        duration_ms = int(
+            (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+        )
+
         execution_log = AgentExecutionLog(
             executed_at=start_time.isoformat(),
             contracts_checked=contracts_checked,
@@ -267,7 +297,7 @@ async def _execute_contract_agent_async(agent_id: str):
             actions_taken=actions_taken,
             errors=errors,
             duration_ms=duration_ms,
-            status=AgentStatus.COMPLETED if not errors else AgentStatus.ERROR
+            status=AgentStatus.COMPLETED if not errors else AgentStatus.ERROR,
         )
 
         await db.contract_agents.update_one(
@@ -276,11 +306,12 @@ async def _execute_contract_agent_async(agent_id: str):
                 "$set": {
                     "lastRunAt": start_time.isoformat(),
                     "totalExecutions": agent.get("totalExecutions", 0) + 1,
-                    "totalAlertsGenerated": agent.get("totalAlertsGenerated", 0) + alerts_generated,
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
+                    "totalAlertsGenerated": agent.get("totalAlertsGenerated", 0)
+                    + alerts_generated,
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
                 },
-                "$push": {"executionHistory": execution_log.model_dump()}
-            }
+                "$push": {"executionHistory": execution_log.model_dump()},
+            },
         )
 
         # Audit log
@@ -296,18 +327,20 @@ async def _execute_contract_agent_async(agent_id: str):
                 "contracts_checked": contracts_checked,
                 "alerts_generated": alerts_generated,
                 "actions_count": len(actions_taken),
-                "errors_count": len(errors)
-            }
+                "errors_count": len(errors),
+            },
         )
 
-        logger.info(f"Agent {agent_id} completed: {contracts_checked} checked, {alerts_generated} alerts")
+        logger.info(
+            f"Agent {agent_id} completed: {contracts_checked} checked, {alerts_generated} alerts"
+        )
         return {
             "status": "success",
             "agent_id": agent_id,
             "contracts_checked": contracts_checked,
             "alerts_generated": alerts_generated,
             "actions_taken": len(actions_taken),
-            "errors": len(errors)
+            "errors": len(errors),
         }
 
     except Exception as e:
@@ -323,11 +356,14 @@ async def _execute_contract_agent_async(agent_id: str):
                         alerts_generated=0,
                         actions_taken=[],
                         errors=[str(e)],
-                        duration_ms=int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000),
-                        status=AgentStatus.ERROR
+                        duration_ms=int(
+                            (datetime.now(timezone.utc) - start_time).total_seconds()
+                            * 1000
+                        ),
+                        status=AgentStatus.ERROR,
                     ).model_dump()
                 }
-            }
+            },
         )
         raise
 
@@ -337,18 +373,21 @@ async def _check_expiration(contract, agent, config, db, actions_taken):
     expiry_date = contract.get("expiryDate")
     if not expiry_date:
         return
-    
+
     try:
         expiry = datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
         days_until = (expiry - datetime.now(timezone.utc)).days
-        
+
         threshold = config.get("alert_threshold", 30)
         if days_until <= threshold and days_until >= 0:
             # Create notification
             await _create_agent_alert(
-                contract, agent, "expiration_warning",
+                contract,
+                agent,
+                "expiration_warning",
                 f"Contract expires in {days_until} days",
-                db, actions_taken
+                db,
+                actions_taken,
             )
     except Exception as e:
         logger.error(f"Expiration check error: {e}")
@@ -360,13 +399,16 @@ async def _check_risk_change(contract, agent, config, db, actions_taken):
     current_risk = contract.get("riskLevel")
     if not current_risk:
         return
-    
+
     # Check if risk is high/critical
     if current_risk in ["high", "critical"]:
         await _create_agent_alert(
-            contract, agent, "high_risk_detected",
+            contract,
+            agent,
+            "high_risk_detected",
             f"Contract has {current_risk} risk level",
-            db, actions_taken
+            db,
+            actions_taken,
         )
 
 
@@ -379,11 +421,10 @@ async def _check_compliance(contract, agent, config, db, actions_taken):
 
 async def _check_obligations(contract, agent, config, db, actions_taken):
     """Check obligation deadlines."""
-    obligations = await db.extracted_obligations.find({
-        "contractId": contract["id"],
-        "status": {"$in": ["pending", "in_progress"]}
-    }).to_list(100)
-    
+    obligations = await db.extracted_obligations.find(
+        {"contractId": contract["id"], "status": {"$in": ["pending", "in_progress"]}}
+    ).to_list(100)
+
     for obl in obligations:
         due_date = obl.get("due_date")
         if due_date:
@@ -392,9 +433,12 @@ async def _check_obligations(contract, agent, config, db, actions_taken):
                 days_until = (due - datetime.now(timezone.utc)).days
                 if days_until <= 7 and days_until >= 0:
                     await _create_agent_alert(
-                        contract, agent, "obligation_due",
+                        contract,
+                        agent,
+                        "obligation_due",
                         f"Obligation '{obl.get('title')}' due in {days_until} days",
-                        db, actions_taken
+                        db,
+                        actions_taken,
                     )
             except Exception:
                 pass
@@ -405,17 +449,20 @@ async def _check_renewal(contract, agent, config, db, actions_taken):
     expiry_date = contract.get("expiryDate")
     if not expiry_date:
         return
-    
+
     try:
         expiry = datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
         days_until = (expiry - datetime.now(timezone.utc)).days
-        
+
         # Renewal window: 90-60 days before expiry
         if 60 <= days_until <= 90:
             await _create_agent_alert(
-                contract, agent, "renewal_opportunity",
+                contract,
+                agent,
+                "renewal_opportunity",
                 f"Contract renewal window open ({days_until} days until expiry)",
-                db, actions_taken
+                db,
+                actions_taken,
             )
     except Exception as e:
         logger.error(f"Renewal check error: {e}")
@@ -424,13 +471,16 @@ async def _check_renewal(contract, agent, config, db, actions_taken):
 async def _create_agent_alert(contract, agent, alert_type, message, db, actions_taken):
     """Create an in-app notification for agent alert."""
     from services.audit_service import send_notification
-    
+
     # Get admin users
     admins = await db.users.find(
-        {"organizationId": agent["organizationId"], "role": {"$in": ["admin", "manager"]}},
-        {"_id": 0, "id": 1}
+        {
+            "organizationId": agent["organizationId"],
+            "role": {"$in": ["admin", "manager"]},
+        },
+        {"_id": 0, "id": 1},
     ).to_list(50)
-    
+
     for admin in admins:
         await send_notification(
             organization_id=agent["organizationId"],
@@ -439,12 +489,14 @@ async def _create_agent_alert(contract, agent, alert_type, message, db, actions_
             title=f"Agent Alert: {agent.get('name')}",
             message=f"{message} - Contract: {contract.get('title')}",
             resource_type="contract",
-            resource_id=contract["id"]
+            resource_id=contract["id"],
         )
-    
-    actions_taken.append({
-        "type": "notification",
-        "alert_type": alert_type,
-        "contract_id": contract["id"],
-        "recipients": len(admins)
-    })
+
+    actions_taken.append(
+        {
+            "type": "notification",
+            "alert_type": alert_type,
+            "contract_id": contract["id"],
+            "recipients": len(admins),
+        }
+    )
