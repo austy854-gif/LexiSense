@@ -266,11 +266,12 @@ class TestBulkUpload:
         assert pipeline["purged"] == [] and pipeline["released"] == []
 
 
-async def test_confirmed_failure_also_deletes_a_late_committing_record(
-    client, db, user, pipeline, monkeypatch
+@pytest.mark.parametrize("bulk", [False, True])
+async def test_confirmed_failure_passes_contract_id_to_org_scoped_delete(
+    client, db, user, pipeline, monkeypatch, bulk
 ):
-    """The rollback passes the contract id, so its org-scoped delete removes a
-    write that the server applies after the insert call already failed."""
+    """Single and bulk rollbacks pass the contract id, so the org-scoped delete
+    can remove a write the server applies after the insert call failed."""
     deleted = []
     _fail_inserts(monkeypatch, db)
 
@@ -279,8 +280,42 @@ async def test_confirmed_failure_also_deletes_a_late_committing_record(
         return await original(self, flt, *args, **kwargs)
 
     _patch_collection(monkeypatch, db, "contracts", "delete_one", spy_delete)
-    r = await _upload(client, user)
-    assert r.status_code == 500
+    if bulk:
+        r = await _bulk(client, user, ["a.txt"])
+        assert r.json()["failed"] == 1
+    else:
+        r = await _upload(client, user)
+        assert r.status_code == 500
     assert len(deleted) == 1
     assert deleted[0]["organizationId"] == user["organizationId"]
     assert deleted[0]["id"]
+
+
+async def test_bulk_cancellation_during_insert_does_not_roll_back(
+    client, db, user, pipeline, monkeypatch
+):
+    """A cancellation while the insert is in flight leaves the outcome unknown,
+    so the bulk path keeps the object and the slot."""
+    import asyncio
+
+    async def cancelled(original, self, doc, *args, **kwargs):
+        raise asyncio.CancelledError()
+
+    _patch_collection(monkeypatch, db, "contracts", "insert_one", cancelled)
+    with pytest.raises(BaseException):
+        await contracts_route.bulk_upload_contracts(
+            files=[_FakeUpload("a.txt")],
+            contractType="General",
+            current_user={**user, "sub": user["id"]},
+        )
+    assert pipeline["purged"] == [] and pipeline["released"] == []
+
+
+class _FakeUpload:
+    """Minimal UploadFile stand-in for calling the route function directly."""
+
+    def __init__(self, filename):
+        self.filename = filename
+
+    async def read(self):
+        return DOC

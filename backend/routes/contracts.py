@@ -876,6 +876,9 @@ async def bulk_upload_contracts(
                     contract_doc["aiAnalysisStatus"] = "failed"
                 else:
                     contract_doc["aiAnalysisStatus"] = "success"
+                # Unknown until the insert call returns: a cancellation here
+                # must not be handled as a confirmed failure.
+                committed = None
                 committed = await _persist_contract(contract_doc)
             finally:
                 # If the insert definitely did not commit, delete the S3 object
