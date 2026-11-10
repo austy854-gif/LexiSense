@@ -1,0 +1,211 @@
+"""Upload atomicity: the quota slot is refunded and the stored object purged
+only when the contract insert did not commit, exactly once. Once the record
+is saved, audit or lookup failures are logged and never fail or roll back the
+upload. An insert whose outcome cannot be established keeps both the object
+and the slot."""
+
+import pytest
+
+from routes import contracts as contracts_route
+from tests.unit.conftest import API_PREFIX, auth_headers, make_user
+
+DOC = b"This Agreement is made between A and B."
+
+
+@pytest.fixture
+def pipeline(monkeypatch):
+    calls = {"released": [], "purged": [], "uploaded": []}
+
+    async def _extract(content, mime):
+        return DOC.decode()
+
+    async def _reserve(org_id):
+        return True, ""
+
+    async def _release(org_id):
+        calls["released"].append(org_id)
+
+    async def _s3(content, filename, org_id, mime, extension=None):
+        key = f"{org_id}/{len(calls['uploaded'])}-{filename}"
+        calls["uploaded"].append(key)
+        return key
+
+    async def _purge(key):
+        calls["purged"].append(key)
+        return True
+
+    async def _noop(**kwargs):
+        return None
+
+    async def _analyze(text):
+        return {"summary": "ok"}
+
+    monkeypatch.setattr(contracts_route, "extract_text_from_file", _extract)
+    monkeypatch.setattr(contracts_route, "reserve_trial_upload_atomic", _reserve)
+    monkeypatch.setattr(contracts_route, "release_trial_upload", _release)
+    monkeypatch.setattr(contracts_route, "upload_file_to_s3", _s3)
+    monkeypatch.setattr(contracts_route, "purge_uploaded_object", _purge)
+    monkeypatch.setattr(contracts_route, "log_action", _noop)
+    monkeypatch.setattr(contracts_route, "analyze_contract", _analyze)
+    return calls
+
+
+@pytest.fixture
+async def user(db, org_id):
+    u = make_user(org_id, role="user")
+    await db.users.insert_one(dict(u))
+    return u
+
+
+def _patch_collection(monkeypatch, db, name, method, fake):
+    """Replace ``method`` for collection ``name`` only, keeping the original."""
+    cls = type(db.contracts)
+    original = getattr(cls, method)
+
+    async def wrapper(self, *args, **kwargs):
+        if self.name == name:
+            return await fake(original, self, *args, **kwargs)
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(cls, method, wrapper)
+
+
+def _fail_inserts(monkeypatch, db, *, commit=False, fail_on=None):
+    """Make contract inserts raise; ``commit`` writes the record first (a retried
+    write that committed), ``fail_on`` limits failures to those filenames."""
+
+    async def fake(original, self, doc, *args, **kwargs):
+        if fail_on is not None and doc.get("fileName") not in fail_on:
+            return await original(self, doc, *args, **kwargs)
+        if commit:
+            await original(self, doc, *args, **kwargs)
+        raise RuntimeError("connection reset during insert")
+
+    _patch_collection(monkeypatch, db, "contracts", "insert_one", fake)
+
+
+async def _upload(client, user, name="msa.txt"):
+    return await client.post(
+        f"{API_PREFIX}/contracts",
+        headers=auth_headers(user),
+        files={"file": (name, DOC, "text/plain")},
+        data={"title": "MSA", "contractType": "General"},
+    )
+
+
+async def _bulk(client, user, names):
+    return await client.post(
+        f"{API_PREFIX}/contracts/bulk",
+        headers=auth_headers(user),
+        files=[("files", (n, DOC, "text/plain")) for n in names],
+    )
+
+
+class TestSingleUpload:
+    async def test_storage_ok_insert_fails_purges_and_refunds_once(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        _fail_inserts(monkeypatch, db)
+        r = await _upload(client, user)
+        assert r.status_code == 500
+        assert "Nothing was saved" in r.json()["detail"]
+        assert pipeline["purged"] == pipeline["uploaded"] and pipeline["uploaded"]
+        assert pipeline["released"] == [user["organizationId"]]
+        assert await db.contracts.count_documents({}) == 0
+
+    async def test_insert_that_committed_despite_error_is_kept(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        _fail_inserts(monkeypatch, db, commit=True)
+        r = await _upload(client, user)
+        assert r.status_code == 200, r.text
+        assert await db.contracts.count_documents({"id": r.json()["id"]}) == 1
+        assert pipeline["purged"] == [] and pipeline["released"] == []
+
+    async def test_unverifiable_insert_keeps_object_and_slot(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        _fail_inserts(monkeypatch, db)
+
+        async def down(original, self, *args, **kwargs):
+            raise RuntimeError("primary unavailable")
+
+        _patch_collection(monkeypatch, db, "contracts", "find_one", down)
+        r = await _upload(client, user)
+        assert r.status_code == 500
+        assert r.json()["detail"] == contracts_route.UPLOAD_UNCONFIRMED_MESSAGE
+        assert pipeline["purged"] == [] and pipeline["released"] == []
+
+    async def test_audit_failure_does_not_fail_or_roll_back(
+        self, client, db, user, pipeline, monkeypatch, caplog
+    ):
+        async def audit_down(**kwargs):
+            raise RuntimeError("audit store down")
+
+        monkeypatch.setattr(contracts_route, "log_action", audit_down)
+        r = await _upload(client, user)
+        assert r.status_code == 200, r.text
+        assert await db.contracts.count_documents({"id": r.json()["id"]}) == 1
+        assert pipeline["purged"] == [] and pipeline["released"] == []
+        assert "Audit log for uploaded contract" in caplog.text
+
+    async def test_post_insert_error_does_not_fail_or_roll_back(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        async def lookup_down(original, self, flt=None, *args, **kwargs):
+            projection = args[0] if args else kwargs.get("projection")
+            if projection == {"_id": 0, "email": 1}:
+                raise RuntimeError("users lookup failed")
+            return await original(self, flt, *args, **kwargs)
+
+        _patch_collection(monkeypatch, db, "users", "find_one", lookup_down)
+        r = await _upload(client, user)
+        assert r.status_code == 200, r.text
+        assert r.json()["uploaderEmail"] is None
+        assert await db.contracts.count_documents({"id": r.json()["id"]}) == 1
+        assert pipeline["purged"] == [] and pipeline["released"] == []
+
+
+class TestBulkUpload:
+    async def test_partial_failure_rolls_back_only_the_failed_file(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        _fail_inserts(monkeypatch, db, fail_on={"b.txt"})
+        r = await _bulk(client, user, ["a.txt", "b.txt", "c.txt"])
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["successful"] == 2 and body["failed"] == 1
+        assert body["results"]["failed"][0]["filename"] == "b.txt"
+        assert pipeline["purged"] == [pipeline["uploaded"][1]]
+        assert pipeline["released"] == [user["organizationId"]]
+        names = sorted(d["fileName"] for d in await db.contracts.find({}).to_list(10))
+        assert names == ["a.txt", "c.txt"]
+
+    async def test_unverifiable_insert_is_reported_without_rollback(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        _fail_inserts(monkeypatch, db)
+
+        async def down(original, self, *args, **kwargs):
+            raise RuntimeError("primary unavailable")
+
+        _patch_collection(monkeypatch, db, "contracts", "find_one", down)
+        r = await _bulk(client, user, ["a.txt"])
+        body = r.json()
+        assert body["failed"] == 1
+        assert (
+            body["results"]["failed"][0]["error"]
+            == contracts_route.UPLOAD_UNCONFIRMED_MESSAGE
+        )
+        assert pipeline["purged"] == [] and pipeline["released"] == []
+
+    async def test_audit_failure_keeps_every_saved_file(
+        self, client, db, user, pipeline, monkeypatch
+    ):
+        async def audit_down(**kwargs):
+            raise RuntimeError("audit store down")
+
+        monkeypatch.setattr(contracts_route, "log_action", audit_down)
+        r = await _bulk(client, user, ["a.txt", "b.txt"])
+        assert r.json()["successful"] == 2
+        assert pipeline["purged"] == [] and pipeline["released"] == []
