@@ -247,3 +247,71 @@ async def test_event_without_valid_created_time_is_rejected(
     assert r.status_code == 400
     assert await stripe_env.stripe_events.count_documents({}) == 0
     assert (await _billing(stripe_env))["billingStatus"] == "active"
+
+
+def _invoice_event(event_id, event_type, created):
+    return {
+        "id": event_id,
+        "type": event_type,
+        "created": created,
+        "data": {"object": {"customer": "cus_1", "subscription": "sub_1"}},
+    }
+
+
+async def test_paid_invoice_blocks_an_older_failure_while_active(client, stripe_env):
+    """invoice.paid on an active account still records its time, so an older
+    payment failure delivered later cannot move it to past due."""
+    assert (
+        await _post(client, _invoice_event("evt_paid", "invoice.paid", 3000))
+    ).status_code == 200
+    doc = await _billing(stripe_env)
+    assert doc["billingStatus"] == "active" and doc["lastStripeEventCreated"] == 3000
+    late = _invoice_event("evt_fail_old", "invoice.payment_failed", 2500)
+    assert (await _post(client, late)).status_code == 200
+    assert (await _billing(stripe_env))["billingStatus"] == "active"
+
+
+async def test_unconfirmed_settlement_is_not_acknowledged_and_replay_is_a_noop(
+    client, stripe_env, monkeypatch
+):
+    """If the done write fails the webhook answers 500; when Stripe redelivers
+    after the lease, the already-applied billing write is not repeated, so a
+    same-second invoice payment applied in between is not overwritten."""
+    real_settle = billing_route._settle_stripe_event
+    fail_once = {"evt_fail": True}
+
+    async def flaky_settle(event_id, token, fields):
+        if fields.get("status") == "done" and fail_once.pop(event_id, False):
+            return False
+        return await real_settle(event_id, token, fields)
+
+    monkeypatch.setattr(billing_route, "_settle_stripe_event", flaky_settle)
+    failure = _invoice_event("evt_fail", "invoice.payment_failed", 1000)
+    first = await _post(client, failure)
+    assert first.status_code == 500
+    assert (await _billing(stripe_env))["billingStatus"] == "past_due"
+
+    paid = _invoice_event("evt_paid_same_second", "invoice.paid", 1000)
+    assert (await _post(client, paid)).status_code == 200
+    assert (await _billing(stripe_env))["billingStatus"] == "active"
+
+    # The failed settlement's claim expires; Stripe redelivers the failure.
+    await stripe_env.stripe_events.update_one(
+        {"eventId": "evt_fail"},
+        {
+            "$set": {
+                "claimedAt": (
+                    datetime.now(timezone.utc)
+                    - billing_route.STRIPE_EVENT_LEASE
+                    - timedelta(seconds=1)
+                ).isoformat()
+            }
+        },
+    )
+    replay = await _post(client, failure)
+    assert replay.status_code == 200
+    doc = await _billing(stripe_env)
+    assert doc["billingStatus"] == "active"
+    assert doc["appliedStripeEventIds"].count("evt_fail") == 1
+    ledger = await stripe_env.stripe_events.find_one({"eventId": "evt_fail"})
+    assert ledger["status"] == "done"
