@@ -728,14 +728,26 @@ async def process_intake(
     if not intake:
         raise HTTPException(status_code=404, detail="Intake not found")
 
+    org_id = current_user["organizationId"]
     update_data = {}
     if request.assign_to:
+        # The assignee and playbook must belong to this organization.
+        if not await db.users.find_one(
+            {"id": request.assign_to, "organizationId": org_id}, {"_id": 0, "id": 1}
+        ):
+            raise HTTPException(status_code=404, detail="Assignee not found")
         update_data["assigned_to"] = request.assign_to
     if request.playbook_id:
+        if not await db.legal_playbooks.find_one(
+            {"id": request.playbook_id, "organizationId": org_id}, {"_id": 0, "id": 1}
+        ):
+            raise HTTPException(status_code=404, detail="Playbook not found")
         update_data["playbook_id"] = request.playbook_id
     if update_data:
         update_data["updatedAt"] = datetime.now(timezone.utc).isoformat()
-        await db.contract_intakes.update_one({"id": intake_id}, {"$set": update_data})
+        await db.contract_intakes.update_one(
+            {"id": intake_id, "organizationId": org_id}, {"$set": update_data}
+        )
 
     return {"message": "Intake updated", "intake_id": intake_id}
 

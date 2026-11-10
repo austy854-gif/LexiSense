@@ -165,7 +165,9 @@ async def apply_status_transition(
     update = status_update_fields(
         current_status, new_status, current_user, action=action, comment=comment
     )
-    await db.contracts.update_one({"id": contract["id"]}, update)
+    await db.contracts.update_one(
+        {"id": contract["id"], "organizationId": current_user["organizationId"]}, update
+    )
     await record_transition_audit(
         contract,
         current_status,

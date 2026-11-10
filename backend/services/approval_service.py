@@ -425,7 +425,8 @@ async def request_approval(
 
     approval["expiresAt"] = (now + timedelta(hours=_ttl_hours())).isoformat()
     await db.approvals.update_one(
-        {"id": approval["id"]}, {"$set": {"expiresAt": approval["expiresAt"]}}
+        {"id": approval["id"], "organizationId": org_id},
+        {"$set": {"expiresAt": approval["expiresAt"]}},
     )
 
     notification = {

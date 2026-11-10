@@ -120,7 +120,9 @@ async def workflow_action(
         update["$set"]["approvedBy"] = current_user["sub"]
         update["$set"]["approvedAt"] = datetime.now(timezone.utc).isoformat()
 
-    await db.contracts.update_one({"id": contract_id}, update)
+    await db.contracts.update_one(
+        {"id": contract_id, "organizationId": current_user["organizationId"]}, update
+    )
 
     # Audit log
     await log_action(

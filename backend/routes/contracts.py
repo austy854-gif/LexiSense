@@ -1092,7 +1092,9 @@ async def update_contract(
         update["$set"].update(transition["$set"])
         update["$push"] = transition["$push"]
 
-    await db.contracts.update_one({"id": contract_id}, update)
+    await db.contracts.update_one(
+        {"id": contract_id, "organizationId": current_user["organizationId"]}, update
+    )
 
     if status_changed:
         await record_transition_audit(
@@ -1290,7 +1292,9 @@ async def restore_contract_version(
     else:
         update["$set"]["status"] = restored_status
 
-    await db.contracts.update_one({"id": contract_id}, update)
+    await db.contracts.update_one(
+        {"id": contract_id, "organizationId": current_user["organizationId"]}, update
+    )
 
     if restored_status != current_status:
         await record_transition_audit(
@@ -1345,7 +1349,10 @@ async def delete_contract(
                 detail="Failed to delete contract file. Please try again.",
             )
 
-    await db.contracts.delete_one({"id": contract_id})
+    await db.contracts.delete_one(
+        {"id": contract_id, "organizationId": current_user["organizationId"]}
+    )
+    # Chat rows carry no organizationId; contract_id was verified in this org.
     await db.chat_history.delete_many({"contractId": contract_id})
 
     await log_action(
