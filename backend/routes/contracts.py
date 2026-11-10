@@ -153,6 +153,10 @@ ANALYSIS_FAILED_MESSAGE = (
     "The analysis didn't finish. Re-upload the contract to try again."
 )
 BULK_FILE_FAILED_MESSAGE = "We couldn't add this file. Please try again."
+UPLOAD_UNCONFIRMED_MESSAGE = (
+    "We couldn't confirm whether this upload was saved. "
+    "Check your contracts list before uploading it again."
+)
 
 
 def _public_analysis_error(stored: Optional[str]) -> Optional[str]:
@@ -474,6 +478,126 @@ async def _rollback_failed_upload(
             logger.exception("Upload rollback: failed to release trial upload slot")
 
 
+def _insert_not_applied(exc: Exception) -> bool:
+    """True when an insert error proves the write was never applied.
+
+    The server rejected the write (an ``OperationFailure`` such as a validation
+    error), no server was ever selected, or the document could not be encoded.
+    A write-concern error and an execution timeout are excluded: the write may
+    have been applied. A network error or timeout after sending is ambiguous.
+    """
+    from pymongo.errors import (
+        DocumentTooLarge,
+        ExecutionTimeout,
+        InvalidDocument,
+        OperationFailure,
+        ServerSelectionTimeoutError,
+        WriteConcernError,
+    )
+
+    if isinstance(exc, (WriteConcernError, ExecutionTimeout)):
+        return False
+    return isinstance(
+        exc,
+        (
+            OperationFailure,
+            ServerSelectionTimeoutError,
+            InvalidDocument,
+            DocumentTooLarge,
+        ),
+    )
+
+
+def _log_unverified_upload(contract_doc: dict) -> None:
+    """Structured record of an upload whose outcome is unknown, to alert on and
+    reconcile from (the object and quota slot are kept)."""
+    logger.error(
+        "Could not confirm whether contract %s was saved; keeping storage object "
+        "%s and the quota slot for reconciliation",
+        contract_doc.get("id"),
+        contract_doc.get("storageKey"),
+        extra={
+            "event": "upload_unverified",
+            "contract_id": contract_doc.get("id"),
+            "organization_id": contract_doc.get("organizationId"),
+            "storage_key": contract_doc.get("storageKey"),
+        },
+    )
+
+
+async def _persist_contract(contract_doc: dict) -> Optional[bool]:
+    """Insert an uploaded contract and report whether the write committed.
+
+    Returns True when the record exists, False when it definitely does not, and
+    None when neither can be established. A server rejection proves nothing was
+    written. A duplicate-key error is looked up (a retried write may have
+    committed our record); if the record is absent the server rejected it, so
+    the result is False. Any other error (a timeout, a dropped connection) may
+    hide a write that committed or is still in flight, so the record is looked
+    up and finding nothing is still not proof.
+    With an unknown outcome the caller must keep the stored object and the
+    quota slot: deleting them could orphan a committed contract.
+    """
+    from asyncio import CancelledError
+
+    from pymongo.errors import DuplicateKeyError
+
+    try:
+        await db.contracts.insert_one(contract_doc)
+        return True
+    except CancelledError:
+        # The insert may still commit; record the unknown outcome first.
+        _log_unverified_upload(contract_doc)
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Contract insert raised for %s; verifying whether it committed",
+            contract_doc.get("id"),
+        )
+        error = exc
+    duplicate = isinstance(error, DuplicateKeyError)
+    if _insert_not_applied(error) and not duplicate:
+        return False
+    try:
+        found = await db.contracts.find_one(
+            {
+                "id": contract_doc["id"],
+                "organizationId": contract_doc["organizationId"],
+            },
+            {"_id": 0, "id": 1},
+        )
+    except CancelledError:
+        _log_unverified_upload(contract_doc)
+        raise
+    except Exception:
+        logger.exception("Lookup of contract %s failed", contract_doc.get("id"))
+        found = None
+        duplicate = False
+    if found is not None:
+        return True
+    if duplicate:
+        # Rejected by a unique index and our record is absent: not written.
+        return False
+    _log_unverified_upload(contract_doc)
+    return None
+
+
+async def _after_upload_committed(current_user: dict, contract) -> None:
+    """Best-effort follow-up for a committed upload; never fails the upload."""
+    try:
+        await log_action(
+            organization_id=current_user["organizationId"],
+            user_id=current_user["sub"],
+            user_email=current_user.get("email"),
+            action="contract_uploaded",
+            resource_type="contract",
+            resource_id=contract.id,
+            resource_title=contract.title,
+        )
+    except Exception:
+        logger.exception("Audit log for uploaded contract %s failed", contract.id)
+
+
 @router.post("", response_model=ContractResponse)
 async def upload_contract(
     file: UploadFile = File(...),
@@ -505,7 +629,8 @@ async def upload_contract(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=trial_message)
 
     storage_key = None
-    contract_inserted = False
+    contract_id: Optional[str] = None
+    committed: Optional[bool] = False
     try:
         storage_key = await upload_file_to_s3(
             file_content,
@@ -564,6 +689,7 @@ async def upload_contract(
         )
 
         contract_doc = contract.model_dump()
+        contract_id = contract.id
         # Attach AI error onto the stored document so the UI can render a
         # recoverable state instead of silently missing analysis.
         if ai_error:
@@ -571,42 +697,41 @@ async def upload_contract(
             contract_doc["aiAnalysisStatus"] = "failed"
         else:
             contract_doc["aiAnalysisStatus"] = "success"
-        await db.contracts.insert_one(contract_doc)
-        contract_inserted = True
-
-        await log_action(
-            organization_id=current_user["organizationId"],
-            user_id=current_user["sub"],
-            user_email=current_user.get("email"),
-            action="contract_uploaded",
-            resource_type="contract",
-            resource_id=contract.id,
-            resource_title=title,
-        )
+        committed = await _persist_contract(contract_doc)
     except HTTPException:
-        # Refund the reserved slot and remove every partial artifact.
-        await _rollback_failed_upload(
-            current_user["organizationId"],
-            storage_key,
-            contract.id if contract_inserted else None,
-        )
+        # Failed before the insert: purge the object, refund, keep the status.
+        await _rollback_failed_upload(current_user["organizationId"], storage_key, None)
         raise
-    except Exception as e:
-        # Unknown failure -- refund quota and remove every partial artifact.
-        await _rollback_failed_upload(
-            current_user["organizationId"],
-            storage_key,
-            contract.id if contract_inserted else None,
+    except Exception:
+        # Failed before the insert: nothing references the object.
+        logger.exception("Contract upload failed after quota reservation")
+        committed = False
+    if committed is None:
+        # The record may exist; keep its object and quota slot.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=UPLOAD_UNCONFIRMED_MESSAGE,
         )
-        logger.error(f"Contract upload failed after quota reservation: {e}")
+    if not committed:
+        # The insert never committed: purge the object and refund the slot once.
+        # The org-scoped delete also removes a write that commits late.
+        await _rollback_failed_upload(
+            current_user["organizationId"], storage_key, contract_id
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Upload failed. Nothing was saved. Please retry.",
         )
 
-    uploader = await db.users.find_one(
-        {"id": current_user["sub"]}, {"_id": 0, "email": 1}
-    )
+    # The contract is saved: nothing below may fail or roll back the upload.
+    await _after_upload_committed(current_user, contract)
+    try:
+        uploader = await db.users.find_one(
+            {"id": current_user["sub"]}, {"_id": 0, "email": 1}
+        )
+    except Exception:
+        logger.exception("Uploader lookup failed for contract %s", contract.id)
+        uploader = None
 
     return ContractResponse(
         id=contract.id,
@@ -689,8 +814,9 @@ async def bulk_upload_contracts(
                 )
                 continue
 
-            file_upload_ok = False
+            committed: Optional[bool] = False
             storage_key = None
+            contract_id: Optional[str] = None
             try:
                 storage_key = await upload_file_to_s3(
                     file_content,
@@ -756,29 +882,44 @@ async def bulk_upload_contracts(
                 )
 
                 contract_doc = contract.model_dump()
+                contract_id = contract.id
                 if ai_error:
                     contract_doc["aiAnalysisError"] = ai_error
                     contract_doc["aiAnalysisStatus"] = "failed"
                 else:
                     contract_doc["aiAnalysisStatus"] = "success"
-                await db.contracts.insert_one(contract_doc)
-                file_upload_ok = True
-
-                results["successful"].append(
-                    {
-                        "id": contract.id,
-                        "filename": file.filename,
-                        "title": title,
-                        "riskLevel": risk_level,
-                    }
-                )
+                # Unknown until the insert call returns: a cancellation here
+                # must not be handled as a confirmed failure.
+                committed = None
+                committed = await _persist_contract(contract_doc)
             finally:
-                # If the DB insert never succeeded, delete the verified S3
-                # object (no contract references it) and refund the slot.
-                if not file_upload_ok:
+                # If the insert definitely did not commit, delete the S3 object
+                # (no contract references it) and refund the slot. An unknown
+                # outcome keeps both so a committed contract is never orphaned.
+                if committed is False:
                     await _rollback_failed_upload(
-                        current_user["organizationId"], storage_key, None
+                        current_user["organizationId"], storage_key, contract_id
                     )
+            if committed is None:
+                results["failed"].append(
+                    {"filename": file.filename, "error": UPLOAD_UNCONFIRMED_MESSAGE}
+                )
+                continue
+            if not committed:
+                results["failed"].append(
+                    {"filename": file.filename, "error": BULK_FILE_FAILED_MESSAGE}
+                )
+                continue
+
+            results["successful"].append(
+                {
+                    "id": contract.id,
+                    "filename": file.filename,
+                    "title": title,
+                    "riskLevel": risk_level,
+                }
+            )
+            await _after_upload_committed(current_user, contract)
 
         except Exception:
             logger.exception("Bulk upload failed for %r", file.filename)
