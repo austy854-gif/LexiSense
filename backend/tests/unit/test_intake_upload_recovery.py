@@ -208,7 +208,11 @@ async def test_periodic_retry_reprocesses_stored_intake_only(
     task_db, storage, monkeypatch
 ):
     queued = []
-    monkeypatch.setattr(intake_tasks.reprocess_intake, "delay", queued.append)
+    monkeypatch.setattr(
+        intake_tasks.reprocess_intake,
+        "delay",
+        lambda intake_id, claim_token=None: queued.append(intake_id),
+    )
     now = datetime.now(timezone.utc).isoformat()
     base = {
         "organizationId": ORG,
@@ -336,7 +340,11 @@ async def test_stale_claims_are_recovered_or_handed_to_manual_review(
     """A worker died mid-flight: stored intakes are reprocessed, unstored ones
     are rolled back and left for manual review, live claims are untouched."""
     queued = []
-    monkeypatch.setattr(intake_tasks.reprocess_intake, "delay", queued.append)
+    monkeypatch.setattr(
+        intake_tasks.reprocess_intake,
+        "delay",
+        lambda intake_id, claim_token=None: queued.append(intake_id),
+    )
     storage["objects"].add(f"{ORG}/a.txt-1")
     stale = _iso(-60)
     base = {
@@ -487,3 +495,80 @@ async def test_concurrent_first_deliveries_create_one_intake(task_db, storage):
         task_db, {**doc, "id": "i-2"}, replace=False
     )
     assert await task_db.contract_intakes.count_documents({}) == 1
+
+
+async def test_failed_tracking_write_still_rolls_back_the_new_object(
+    task_db, storage, monkeypatch
+):
+    """The object is purged even if recording it on the intake fails."""
+    coll_type = type(task_db.contract_intakes)
+    real_update_one = coll_type.update_one
+
+    async def flaky_update_one(self, filter, update, *args, **kwargs):
+        if "pending_storage_keys" in (update.get("$push") or {}):
+            raise ConnectionError("mongo blip")
+        return await real_update_one(self, filter, update, *args, **kwargs)
+
+    monkeypatch.setattr(coll_type, "update_one", flaky_update_one)
+    with pytest.raises(intake_tasks.IntakeRetryableError):
+        await intake_tasks._process_resend_webhook_async(copy.deepcopy(PAYLOAD))
+    assert storage["uploads"] == 1
+    assert storage["objects"] == set()  # the untracked upload was purged
+    doc = await _only_intake(task_db)
+    assert doc["status"] == "failed" and "orphaned_storage_keys" not in doc
+
+
+async def test_worker_that_lost_its_claim_does_no_work(task_db, storage):
+    """A stale-claim recovery hands the intake to worker B; worker A, still
+    holding the old token, stops before classification or contract creation."""
+    from models.agentic import ContractIntake, IntakeChannel
+
+    intake = ContractIntake(
+        organizationId=ORG,
+        channel=IntakeChannel.EMAIL,
+        source_email="legal@acme.test",
+        attachments=[{"filename": "a.txt", "storage_key": "k"}],
+    )
+    await task_db.contract_intakes.insert_one(
+        {
+            **intake.model_dump(),
+            "status": "received",
+            "attachments_stored": True,
+            "claim_token": "token-b",
+        }
+    )
+    lost = await intake_tasks._process_stored_intake(intake, task_db, "token-a")
+    assert lost["status"] == "skipped" and lost["reason"] == "claim_lost"
+    assert storage["contracts"] == []
+    won = await intake_tasks._process_stored_intake(intake, task_db, "token-b")
+    assert won["status"] == "success" and storage["contracts"] == [intake.id]
+
+
+async def test_concurrent_contract_creation_yields_one_contract(
+    task_db, storage, monkeypatch
+):
+    """Two workers racing past the claim still create exactly one contract."""
+    from models.agentic import ContractIntake, IntakeChannel
+    from services import risk_tasks
+
+    queued = []
+    monkeypatch.setattr(
+        risk_tasks.assess_contract_risk, "delay", lambda cid, **k: queued.append(cid)
+    )
+    create = storage["real_create_contract"]
+    intake = ContractIntake(
+        organizationId=ORG,
+        channel=IntakeChannel.EMAIL,
+        source_email="legal@acme.test",
+        attachments=[{"filename": "a.txt", "storage_key": "k"}],
+    )
+    await task_db.contract_intakes.insert_one(intake.model_dump())
+    ids = await asyncio.gather(
+        create(intake.model_copy(), {"contract_type": "NDA"}, task_db),
+        create(intake.model_copy(), {"contract_type": "NDA"}, task_db),
+    )
+    assert ids[0] == ids[1]
+    assert await task_db.contracts.count_documents({}) == 1
+    doc = await task_db.contract_intakes.find_one({"id": intake.id})
+    assert doc["created_contract_id"] == ids[0]
+    assert len(queued) >= 1 and set(queued) == {ids[0]}

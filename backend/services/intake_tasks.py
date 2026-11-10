@@ -110,6 +110,13 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _new_claim() -> Dict[str, str]:
+    """Fields every claim writes: a lease timestamp and an ownership token."""
+    import uuid
+
+    return {"claimed_at": _now_iso(), "claim_token": uuid.uuid4().hex}
+
+
 class IntakeRetryableError(RuntimeError):
     """A transient intake failure; the Celery task retries the original payload."""
 
@@ -207,6 +214,9 @@ async def _process_resend_webhook_async(
     intake = None
     stored = None  # id of an intake whose attachments are stored and referenced
     processed_attachments: List[Dict[str, Any]] = []
+    # Every object stored for this email, recorded before any write that can
+    # fail, so a rollback always covers it.
+    uploaded_keys: List[str] = []
     try:
         # Duplicate protection depends on the unique index; never process
         # without it (a failure here is retried by the task).
@@ -247,20 +257,20 @@ async def _process_resend_webhook_async(
         if existing and existing.get("attachments_stored"):
             # Files are already stored; only the processing step failed.
             # Claim it so a concurrent retry pass cannot process it twice.
+            claim = _new_claim()
             claimed = await db.contract_intakes.update_one(
                 {"id": existing["id"], "status": IntakeStatus.FAILED.value},
                 {
-                    "$set": {
-                        "status": IntakeStatus.RECEIVED.value,
-                        "claimed_at": _now_iso(),
-                    },
+                    "$set": {"status": IntakeStatus.RECEIVED.value, **claim},
                     "$inc": {"processing_attempts": 1},
                 },
             )
             if not claimed.modified_count:
                 return {"status": "duplicate", "intake_id": existing["id"]}
             stored = existing["id"]
-            return await _process_stored_intake(ContractIntake(**existing), db)
+            return await _process_stored_intake(
+                ContractIntake(**existing), db, claim["claim_token"]
+            )
 
         # Create intake record
         intake = ContractIntake(
@@ -322,7 +332,7 @@ async def _process_resend_webhook_async(
                 "idempotency_key": idempotency_key,
                 "attachments_stored": False,
                 "pending_storage_keys": [],
-                "claimed_at": _now_iso(),
+                **_new_claim(),
             }
         )
         if not await _save_intake(db, intake_doc, replace=bool(existing)):
@@ -369,10 +379,11 @@ async def _process_resend_webhook_async(
                 return await _fail_attachment_upload(
                     db,
                     intake,
-                    [a["storage_key"] for a in processed_attachments],
+                    list(uploaded_keys),
                     exc,
                     final_attempt,
                 )
+            uploaded_keys.append(storage_key)
 
             # Track the object on the intake straight away so a worker crash
             # mid-batch leaves it recoverable rather than orphaned.
@@ -427,7 +438,7 @@ async def _process_resend_webhook_async(
             },
         )
         stored = intake.id
-        return await _process_stored_intake(intake, db)
+        return await _process_stored_intake(intake, db, intake_doc["claim_token"])
 
     except IntakeRetryableError:
         raise
@@ -449,7 +460,7 @@ async def _process_resend_webhook_async(
         return await _fail_attachment_upload(
             db,
             intake,
-            [a["storage_key"] for a in processed_attachments],
+            list(uploaded_keys),
             e,
             final_attempt,
             stage="Intake processing",
@@ -556,9 +567,14 @@ async def _fail_attachment_upload(
     ) from exc
 
 
-async def _process_stored_intake(intake, db):
+async def _process_stored_intake(intake, db, claim_token: Optional[str] = None):
     """Classify, route and create the contract for an intake whose
-    attachments are already stored. Safe to rerun after a failure."""
+    attachments are already stored. Safe to rerun after a failure.
+
+    ``claim_token`` is the token written by the claim that handed this intake
+    to the caller; if another claim has replaced it, the caller no longer owns
+    the intake and stops without doing any work.
+    """
     from models.agentic import IntakeStatus
     from services.ai_service import classify_intake_contract
 
@@ -568,9 +584,14 @@ async def _process_stored_intake(intake, db):
         subject = intake.source_metadata.get("subject", "")
         processed_attachments = intake.attachments
 
-        # Update status to processing
-        await db.contract_intakes.update_one(
-            {"id": intake.id},
+        # Update status to processing, only while this caller owns the claim.
+        owner = {"id": intake.id}
+        if claim_token is not None:
+            owner.update(
+                {"status": IntakeStatus.RECEIVED.value, "claim_token": claim_token}
+            )
+        moved = await db.contract_intakes.update_one(
+            owner,
             {
                 "$set": {
                     "status": IntakeStatus.PROCESSING,
@@ -579,6 +600,8 @@ async def _process_stored_intake(intake, db):
                 }
             },
         )
+        if claim_token is not None and not moved.modified_count:
+            return {"status": "skipped", "intake_id": intake.id, "reason": "claim_lost"}
 
         # Classify the contract using AI
         # Use first attachment text for classification
@@ -751,7 +774,7 @@ async def _create_contract_from_intake(
 ) -> Optional[str]:
     """Create a contract record from processed intake."""
     from models.contract import Contract
-    import uuid
+    from pymongo.errors import DuplicateKeyError
 
     # Use first attachment for contract creation
     if not intake.attachments:
@@ -805,12 +828,24 @@ async def _create_contract_from_intake(
             updatedAt=datetime.now(timezone.utc).isoformat(),
         )
 
-        # Reserve the id on the intake before inserting, so a failure anywhere
-        # after this point is retried against the same contract.
-        await db.contract_intakes.update_one(
-            {"id": intake.id}, {"$set": {"created_contract_id": contract.id}}
-        )
-        await db.contracts.insert_one(contract.model_dump())
+        if not reserved_id:
+            # Reserve the id atomically before inserting: only the winner
+            # inserts, and any failure after this point is retried against
+            # the same contract.
+            won = await db.contract_intakes.update_one(
+                {"id": intake.id, "created_contract_id": None},
+                {"$set": {"created_contract_id": contract.id}},
+            )
+            if not won.modified_count:
+                # Another worker reserved first; it inserts and queues work.
+                current = await db.contract_intakes.find_one(
+                    {"id": intake.id}, {"_id": 0, "created_contract_id": 1}
+                )
+                return (current or {}).get("created_contract_id")
+        try:
+            await db.contracts.insert_one(contract.model_dump())
+        except DuplicateKeyError:
+            pass  # the reserved contract was inserted concurrently
         contract_id = contract.id
 
     # Trigger risk assessment
@@ -886,7 +921,7 @@ def retry_failed_intakes(self):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def reprocess_intake(self, intake_id: str):
+def reprocess_intake(self, intake_id: str, claim_token: Optional[str] = None):
     """Reprocess a failed intake from its stored attachments."""
     if get_db() is None:
         logger.error("Database not initialized for intake reprocessing")
@@ -896,7 +931,9 @@ def reprocess_intake(self, intake_id: str):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(_reprocess_intake_async(intake_id))
+            return loop.run_until_complete(
+                _reprocess_intake_async(intake_id, claim_token)
+            )
         finally:
             loop.close()
     except Exception as e:
@@ -904,7 +941,7 @@ def reprocess_intake(self, intake_id: str):
         raise self.retry(exc=e)
 
 
-async def _reprocess_intake_async(intake_id: str):
+async def _reprocess_intake_async(intake_id: str, claim_token: Optional[str] = None):
     """Run classification/routing again for an intake claimed by the retry pass."""
     from models.agentic import ContractIntake
 
@@ -917,7 +954,9 @@ async def _reprocess_intake_async(intake_id: str):
     )
     if not doc or not doc.get("attachments"):
         return {"status": "skipped", "intake_id": intake_id}
-    return await _process_stored_intake(ContractIntake(**doc), db)
+    return await _process_stored_intake(
+        ContractIntake(**doc), db, claim_token or doc.get("claim_token")
+    )
 
 
 async def _retry_failed_intakes_async():
@@ -969,12 +1008,13 @@ async def _retry_failed_intakes_async():
             )
             attempts = intake.get("processing_attempts", 0)
             if stored and attempts < MAX_INTAKE_PROCESSING_ATTEMPTS:
+                claim = _new_claim()
                 claimed = await db.contract_intakes.update_one(
                     observed,
                     {
                         "$set": {
                             "status": "received",
-                            "claimed_at": _now_iso(),
+                            **claim,
                             "error_message": None,
                             "processing_started_at": None,
                             "processing_completed_at": None,
@@ -985,7 +1025,7 @@ async def _retry_failed_intakes_async():
                 if not claimed.modified_count:
                     continue
                 try:
-                    reprocess_intake.delay(intake["id"])
+                    reprocess_intake.delay(intake["id"], claim["claim_token"])
                 except Exception as exc:
                     await _mark_intake_failed(
                         db,
