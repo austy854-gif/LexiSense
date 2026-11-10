@@ -207,7 +207,7 @@ async def test_bad_signature_is_rejected_without_processing(client, stripe_env):
 async def test_missing_webhook_secret_fails_closed(client, stripe_env, monkeypatch):
     monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
     r = await _post(client, _sub_event("evt_nosecret", "canceled", 1000))
-    assert r.status_code in (500, 503)
+    assert r.status_code == 500
     assert await stripe_env.stripe_events.count_documents({}) == 0
     assert (await _billing(stripe_env))["billingStatus"] == "active"
 
@@ -231,3 +231,19 @@ async def test_concurrent_first_deliveries_claim_once(stripe_env):
     )
     claimed = [o for o, _ in outcomes if o == billing_route.EVENT_CLAIMED]
     assert len(claimed) == 1
+
+
+@pytest.mark.parametrize("created", [None, "1000", 1.5, True])
+async def test_event_without_valid_created_time_is_rejected(
+    client, stripe_env, created
+):
+    """Ordering needs an authoritative event time: reject before claiming."""
+    event = _sub_event("evt_no_time", "canceled", 1000)
+    if created is None:
+        event.pop("created")
+    else:
+        event["created"] = created
+    r = await _post(client, event)
+    assert r.status_code == 400
+    assert await stripe_env.stripe_events.count_documents({}) == 0
+    assert (await _billing(stripe_env))["billingStatus"] == "active"

@@ -676,7 +676,13 @@ def _event_order_filter(org_filter: dict, event_created: Optional[int]) -> dict:
 
     ``lastStripeEventCreated`` holds the ``created`` time of the newest event
     applied to the org, so an older event delivered late cannot overwrite newer
-    subscription state. Without an event time the write is unconditional.
+    subscription state. Without an event time the write is unconditional (the
+    webhook rejects events without one; only direct calls omit it).
+
+    Residual window: Stripe's ``created`` has one-second resolution and events
+    carry no finer monotonic sequence, so two distinct events created in the
+    same second are applied in arrival order. A strict ``<`` would instead drop
+    legitimate same-second events, so ``<=`` is the accepted trade-off.
     """
     if event_created is None:
         return org_filter
@@ -769,6 +775,10 @@ async def stripe_webhook(request: Request):
     if not event_id:
         raise HTTPException(status_code=400, detail="Invalid payload")
     event_created = event.get("created")
+    if isinstance(event_created, bool) or not isinstance(event_created, int):
+        # Ordering depends on an authoritative event time; never apply without it.
+        logger.error("Stripe event %s has no valid created time", event_id)
+        raise HTTPException(status_code=400, detail="Invalid payload")
 
     logger.info(f"Received Stripe webhook: {event_type} ({event_id})")
 
