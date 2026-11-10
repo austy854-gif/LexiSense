@@ -572,3 +572,91 @@ async def test_concurrent_contract_creation_yields_one_contract(
     doc = await task_db.contract_intakes.find_one({"id": intake.id})
     assert doc["created_contract_id"] == ids[0]
     assert len(queued) >= 1 and set(queued) == {ids[0]}
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_worker_whose_lease_was_reclaimed_mid_flight_stops_writing(
+    task_db, storage, monkeypatch, fail
+):
+    """Worker A outlives its lease during classification and the retry pass
+    hands the intake to B. A must not overwrite B's state, mark it failed, or
+    create the contract."""
+    from models.agentic import ContractIntake, IntakeChannel
+
+    intake = ContractIntake(
+        organizationId=ORG,
+        channel=IntakeChannel.EMAIL,
+        source_email="legal@acme.test",
+        attachments=[{"filename": "a.txt", "storage_key": "k"}],
+    )
+    await task_db.contract_intakes.insert_one(
+        {
+            **intake.model_dump(),
+            "status": "received",
+            "attachments_stored": True,
+            "claim_token": "token-a",
+        }
+    )
+
+    async def slow_classify(**kwargs):
+        await task_db.contract_intakes.update_one(
+            {"id": intake.id},
+            {"$set": {"status": "routed", "claim_token": "token-b"}},
+        )
+        if fail:
+            raise RuntimeError("classifier timed out")
+        return {"contract_type": "NDA", "counterparty": "Acme", "confidence": 0.9}
+
+    monkeypatch.setattr(ai_service, "classify_intake_contract", slow_classify)
+    result = await intake_tasks._process_stored_intake(intake, task_db, "token-a")
+    if not fail:
+        assert result["reason"] == "claim_lost"
+    doc = await _only_intake(task_db)
+    assert doc["status"] == "routed" and doc["claim_token"] == "token-b"
+    assert storage["contracts"] == []
+
+
+async def test_retry_batch_is_not_starved_by_ineligible_or_old_records(
+    task_db, storage, monkeypatch
+):
+    """Failed upload-only intakes do not fill the batch, and a stale claim is
+    recovered even when the intake is older than the 24h failed-retry window."""
+    queued = []
+    monkeypatch.setattr(
+        intake_tasks.reprocess_intake,
+        "delay",
+        lambda intake_id, claim_token=None: queued.append(intake_id),
+    )
+    base = {
+        "organizationId": ORG,
+        "channel": "email",
+        "source_email": "legal@acme.test",
+        "source_metadata": {"subject": "x"},
+    }
+    await task_db.contract_intakes.insert_many(
+        [
+            {
+                **base,
+                "id": f"upload-failed-{i}",
+                "status": "failed",
+                "createdAt": _iso(-10),
+                "attachments_stored": False,
+                "attachments": [],
+            }
+            for i in range(60)
+        ]
+        + [
+            {
+                **base,
+                "id": "old-stale",
+                "status": "processing",
+                "createdAt": _iso(-60 * 72),
+                "claimed_at": _iso(-60 * 48),
+                "attachments_stored": True,
+                "attachments": [{"filename": "a.txt", "storage_key": "k"}],
+            }
+        ]
+    )
+    result = await intake_tasks._retry_failed_intakes_async()
+    assert result == {"status": "success", "retried": 1, "manual_review": 0}
+    assert queued == ["old-stale"]

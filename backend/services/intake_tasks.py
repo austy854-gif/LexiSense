@@ -447,7 +447,7 @@ async def _process_resend_webhook_async(
         if stored:
             # Files are referenced by the intake; the periodic retry (or the
             # stale-claim recovery, if this write fails too) reprocesses them.
-            await _mark_intake_failed(db, stored, str(e))
+            await _mark_intake_failed(db, stored, str(e), intake_doc["claim_token"])
             return {"status": "error", "message": str(e)}
         if intake is None:
             # Nothing persisted yet (e.g. a transient database error).
@@ -490,14 +490,33 @@ async def _save_intake(db, intake_doc: dict, replace: bool) -> bool:
     return True
 
 
-async def _mark_intake_failed(db, intake_id: str, message: str) -> None:
-    """Record a processing failure on a persisted intake."""
+def _owned(intake_id: str, claim_token: Optional[str]) -> Dict[str, Any]:
+    """Filter matching the intake only while ``claim_token`` still owns it."""
+    flt: Dict[str, Any] = {"id": intake_id}
+    if claim_token is not None:
+        flt["claim_token"] = claim_token
+    return flt
+
+
+async def _owned_update(db, intake_id, claim_token, fields: Dict[str, Any]) -> bool:
+    """Apply ``fields`` while the claim is held; False once it has been lost."""
+    result = await db.contract_intakes.update_one(
+        _owned(intake_id, claim_token), {"$set": fields}
+    )
+    return claim_token is None or result.matched_count > 0
+
+
+async def _mark_intake_failed(
+    db, intake_id: str, message: str, claim_token: Optional[str] = None
+) -> None:
+    """Record a processing failure on a persisted intake (only while the
+    caller still owns the claim, when ``claim_token`` is given)."""
     from models.agentic import IntakeStatus
 
     if not intake_id:
         return
     await db.contract_intakes.update_one(
-        {"id": intake_id},
+        _owned(intake_id, claim_token),
         {
             "$set": {
                 "status": IntakeStatus.FAILED,
@@ -618,20 +637,24 @@ async def _process_stored_intake(intake, db, claim_token: Optional[str] = None):
             extracted_text=extracted_text,
         )
 
-        # Update with classification
-        await db.contract_intakes.update_one(
-            {"id": intake.id},
+        lost = {"status": "skipped", "intake_id": intake.id, "reason": "claim_lost"}
+
+        # Update with classification (and renew the lease), only while owned.
+        if not await _owned_update(
+            db,
+            intake.id,
+            claim_token,
             {
-                "$set": {
-                    "status": IntakeStatus.CLASSIFIED,
-                    "classified_type": classification.get("contract_type"),
-                    "classified_counterparty": classification.get("counterparty"),
-                    "confidence": classification.get("confidence", 0.0),
-                    "classification_reasoning": classification.get("reasoning"),
-                    "risk_indicators": classification.get("risk_indicators", []),
-                }
+                "status": IntakeStatus.CLASSIFIED,
+                "claimed_at": _now_iso(),
+                "classified_type": classification.get("contract_type"),
+                "classified_counterparty": classification.get("counterparty"),
+                "confidence": classification.get("confidence", 0.0),
+                "classification_reasoning": classification.get("reasoning"),
+                "risk_indicators": classification.get("risk_indicators", []),
             },
-        )
+        ):
+            return lost
 
         # Auto-route to playbook if applicable
         playbook_id = await _find_applicable_playbook(
@@ -645,16 +668,19 @@ async def _process_stored_intake(intake, db, claim_token: Optional[str] = None):
             # Keep the in-memory record in sync: _create_contract_from_intake
             # reads intake.playbook_id to decide whether to run the playbook.
             intake.playbook_id = playbook_id
-            await db.contract_intakes.update_one(
-                {"id": intake.id}, {"$set": {"playbook_id": playbook_id}}
-            )
+            if not await _owned_update(
+                db, intake.id, claim_token, {"playbook_id": playbook_id}
+            ):
+                return lost
 
         # Auto-assign to team/user based on rules
         assigned_to = await _auto_assign_intake(organization_id, classification, db)
+        fields = {"claimed_at": _now_iso()}
         if assigned_to:
-            await db.contract_intakes.update_one(
-                {"id": intake.id}, {"$set": {"assigned_to": assigned_to}}
-            )
+            fields["assigned_to"] = assigned_to
+        # Ownership check right before the contract (and its follow-up tasks).
+        if not await _owned_update(db, intake.id, claim_token, fields):
+            return lost
 
         # Create contract record from intake (optional - could wait for human review)
         # Idempotent: a rerun after a late failure reuses the reserved contract.
@@ -667,7 +693,8 @@ async def _process_stored_intake(intake, db, claim_token: Optional[str] = None):
         }
         if contract_id:
             routed["created_contract_id"] = contract_id
-        await db.contract_intakes.update_one({"id": intake.id}, {"$set": routed})
+        if not await _owned_update(db, intake.id, claim_token, routed):
+            return lost
 
         logger.info(f"Intake processed successfully: {intake.id}")
         return {
@@ -679,7 +706,7 @@ async def _process_stored_intake(intake, db, claim_token: Optional[str] = None):
         }
     except Exception as e:
         logger.error(f"Intake processing error: {e}")
-        await _mark_intake_failed(db, intake.id, str(e))
+        await _mark_intake_failed(db, intake.id, str(e), claim_token)
         return {"status": "error", "message": str(e), "intake_id": intake.id}
 
 
@@ -977,15 +1004,23 @@ async def _retry_failed_intakes_async():
 
     try:
         now = datetime.now(timezone.utc)
-        # Find failed intakes from last 24 hours
+        # Failed intakes from the last 24 hours that have stored attachments
+        # (upload failures are retried by their own task), plus stale claims of
+        # any age. Filtering happens in the query, before the batch limit.
         cutoff = (now - timedelta(hours=24)).isoformat()
         stale_before = (now - INTAKE_CLAIM_LEASE).isoformat()
 
         candidates = await db.contract_intakes.find(
             {
-                "createdAt": {"$gte": cutoff},
                 "$or": [
-                    {"status": "failed"},
+                    {
+                        "status": "failed",
+                        "createdAt": {"$gte": cutoff},
+                        "attachments_stored": {"$ne": False},
+                        "attachments": {
+                            "$elemMatch": {"storage_key": {"$nin": [None, ""]}}
+                        },
+                    },
                     {
                         "status": {"$in": ["received", "processing", "classified"]},
                         "claimed_at": {"$lte": stale_before},
@@ -1031,6 +1066,7 @@ async def _retry_failed_intakes_async():
                         db,
                         intake["id"],
                         f"Retry could not be queued ({type(exc).__name__})",
+                        claim["claim_token"],
                     )
                     raise
                 retried += 1
