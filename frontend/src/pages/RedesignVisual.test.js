@@ -2,7 +2,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import LoginPage from './LoginPage';
 import RegisterPage from './RegisterPage';
 import ApprovalRespondPage from './ApprovalRespondPage';

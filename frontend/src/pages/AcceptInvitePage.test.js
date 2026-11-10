@@ -1,7 +1,7 @@
 jest.mock('../contexts/ThemeContext', () => ({ useTheme: () => ({ theme: 'light', toggleTheme: jest.fn() }) }));
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router';
 import AcceptInvitePage from './AcceptInvitePage';
 import { AuthProvider } from '../contexts/AuthContext';
 import { teamAPI, authAPI } from '../api';

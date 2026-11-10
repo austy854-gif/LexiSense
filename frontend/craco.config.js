@@ -38,7 +38,7 @@ let webpackConfig = {
   },
   // Jest (react-scripts 5 ships Jest 27):
   // - jest/exportsResolver.js adds package.json "exports" support, which Jest 27
-  //   lacks (react-router v7 and Radix import subpaths through it).
+  //   lacks (react-router and Radix import subpaths through it).
   // - map the webpack `@` -> src alias used by the shadcn ui components.
   jest: {
     configure: (jestConfig) => ({
@@ -48,6 +48,18 @@ let webpackConfig = {
         ...(jestConfig.moduleNameMapper || {}),
         '^@/(.*)$': '<rootDir>/src/$1',
       },
+      // react-router v8 (and its deps) ship ESM-only, which Jest 27 cannot
+      // load untransformed. Transform those packages (see jest/esmTransform.js)
+      // while still skipping the rest of node_modules.
+      transform: {
+        '[/\\\\]node_modules[/\\\\](react-router|@remix-run[/\\\\]route-pattern|cookie-es)[/\\\\].+\\.(js|mjs)$':
+          path.resolve(__dirname, 'jest/esmTransform.js'),
+        ...(jestConfig.transform || {}),
+      },
+      transformIgnorePatterns: [
+        '[/\\\\]node_modules[/\\\\](?!(react-router|@remix-run[/\\\\]route-pattern|cookie-es)[/\\\\]).+\\.(js|jsx|mjs|cjs|ts|tsx)$',
+        '^.+\\.module\\.(css|sass|scss)$',
+      ],
     }),
   },
   webpack: {

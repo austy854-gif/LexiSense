@@ -5,7 +5,7 @@ import path from 'path';
 import axe from 'axe-core';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { Layout } from './Layout';
 import ContractsPage from '../pages/ContractsPage';
 import { notificationsAPI, contractsAPI } from '../api';

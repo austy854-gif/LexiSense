@@ -3,7 +3,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 import axe from 'axe-core';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import LoginPage from '../pages/LoginPage';
 import RegisterPage from '../pages/RegisterPage';
 import ContractDetailPage from '../pages/ContractDetailPage';

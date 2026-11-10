@@ -2,7 +2,7 @@
 // (backend/routes/workflow.py: approve, reject, activate = admin + manager).
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router';
 import ContractDetailPage from './ContractDetailPage';
 import { contractsAPI } from '../api';
 
