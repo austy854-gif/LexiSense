@@ -133,16 +133,14 @@ async def _create_indexes():
             except Exception as e:
                 logger.warning(f"Index creation warning for {collection_name}: {e}")
     # One intake per inbound email: task retries and webhook redeliveries
-    # reuse the record instead of creating duplicates.
+    # reuse the record. If this fails, the intake webhook answers 503 and
+    # intake tasks retry until the index is confirmed.
+    from services.intake_tasks import ensure_intake_idempotency_index
+
     try:
-        await db.contract_intakes.create_index(
-            "idempotency_key",
-            unique=True,
-            partialFilterExpression={"idempotency_key": {"$type": "string"}},
-            name="uq_contract_intakes_idempotency",
-        )
+        await ensure_intake_idempotency_index(db)
     except Exception as e:
-        logger.warning(f"Index creation warning for contract_intakes: {e}")
+        logger.warning(f"Intake idempotency index not ready yet: {e}")
 
 
 # =============================================================================
@@ -665,6 +663,19 @@ async def resend_webhook(request: Request):
         payload = json.loads(body)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # Do not accept intakes until duplicate protection is in place; a 503
+    # makes Resend redeliver later.
+    from services.intake_tasks import ensure_intake_idempotency_index
+
+    try:
+        await ensure_intake_idempotency_index(db)
+    except Exception as exc:
+        logger.error(
+            "Intake idempotency index unavailable (%s); rejecting intake webhook",
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=503, detail="Intake temporarily unavailable")
 
     # Queue processing
     task = await _enqueue(process_resend_webhook, payload)

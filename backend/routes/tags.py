@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 
 from utils.auth import get_current_user
-from utils.policy import require_org_capability
+from utils.policy import require_contract_write
 from routes.billing import assert_org_writable
 
 logger = logging.getLogger(__name__)
@@ -41,11 +41,11 @@ async def add_tags(
     await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
-        {"_id": 0, "id": 1, "organizationId": 1},
+        {"_id": 0, "id": 1, "organizationId": 1, "uploadedBy": 1},
     )
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
-    require_org_capability(current_user, contract, "tag_manage")
+    require_contract_write(current_user, contract, "contract_edit")
 
     cleaned = list(set(t.strip().lower() for t in tags if t.strip()))
     await db.contracts.update_one(
@@ -69,11 +69,11 @@ async def remove_tag(
     await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
-        {"_id": 0, "id": 1, "organizationId": 1},
+        {"_id": 0, "id": 1, "organizationId": 1, "uploadedBy": 1},
     )
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
-    require_org_capability(current_user, contract, "tag_manage")
+    require_contract_write(current_user, contract, "contract_edit")
 
     await db.contracts.update_one(
         {"id": contract_id},
@@ -96,11 +96,11 @@ async def update_category(
     await assert_org_writable(current_user["organizationId"])
     contract = await db.contracts.find_one(
         {"id": contract_id, "organizationId": current_user["organizationId"]},
-        {"_id": 0, "id": 1, "organizationId": 1},
+        {"_id": 0, "id": 1, "organizationId": 1, "uploadedBy": 1},
     )
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
-    require_org_capability(current_user, contract, "tag_manage")
+    require_contract_write(current_user, contract, "contract_edit")
 
     await db.contracts.update_one(
         {"id": contract_id},

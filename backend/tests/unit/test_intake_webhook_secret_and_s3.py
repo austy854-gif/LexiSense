@@ -51,7 +51,9 @@ def queued(monkeypatch):
 
 
 @pytest.fixture
-async def http():
+async def http(db, monkeypatch):
+    # The webhook confirms the intake idempotency index before queueing.
+    monkeypatch.setattr(agentic_route, "db", db)
     app = FastAPI()
     api = APIRouter(prefix=API_PREFIX)
     api.include_router(agentic_route.build_router({"intake"}))
@@ -242,3 +244,16 @@ def test_health_probe_reports_unconfigured_bucket():
         "details": "S3 bucket not configured",
     }
     assert out["bucket"] is None
+
+
+async def test_webhook_rejects_until_intake_index_is_ready(http, queued, monkeypatch):
+    """No intake is accepted without the unique per-email index."""
+    from services import intake_tasks
+
+    async def index_down(database):
+        raise RuntimeError("createIndexes failed")
+
+    monkeypatch.setenv("RESEND_INTAKE_WEBHOOK_SECRET", INTAKE_SECRET)
+    monkeypatch.setattr(intake_tasks, "ensure_intake_idempotency_index", index_down)
+    r = await http.post(URL, content=BODY, headers=_headers(INTAKE_SECRET))
+    assert r.status_code == 503 and queued == []

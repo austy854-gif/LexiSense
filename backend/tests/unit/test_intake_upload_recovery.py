@@ -6,7 +6,7 @@ the periodic retry reprocesses only intakes whose files are stored."""
 import asyncio
 import base64
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -36,6 +36,14 @@ PAYLOAD = {
         ],
     },
 }
+
+
+@pytest.fixture(autouse=True)
+def fresh_index_cache():
+    """The readiness cache is per process; start each test without it."""
+    intake_tasks._intake_index_ready.clear()
+    yield
+    intake_tasks._intake_index_ready.clear()
 
 
 @pytest.fixture
@@ -235,7 +243,7 @@ async def test_periodic_retry_reprocesses_stored_intake_only(
     )
 
     result = await intake_tasks._retry_failed_intakes_async()
-    assert result == {"status": "success", "retried": 2}
+    assert result == {"status": "success", "retried": 2, "manual_review": 0}
     assert sorted(queued) == ["legacy", "stored"]
     skipped = await task_db.contract_intakes.find_one({"id": "upload-failed"})
     assert skipped["status"] == "failed"
@@ -316,3 +324,166 @@ async def test_concurrent_retry_cannot_claim_an_already_claimed_intake(
     # The record is no longer "failed", so a second concurrent claim loses
     # and must not upload or overwrite the winner's attachments.
     assert not await intake_tasks._save_intake(task_db, dict(reset), replace=True)
+
+
+def _iso(delta_minutes=0):
+    return (datetime.now(timezone.utc) + timedelta(minutes=delta_minutes)).isoformat()
+
+
+async def test_stale_claims_are_recovered_or_handed_to_manual_review(
+    task_db, storage, monkeypatch
+):
+    """A worker died mid-flight: stored intakes are reprocessed, unstored ones
+    are rolled back and left for manual review, live claims are untouched."""
+    queued = []
+    monkeypatch.setattr(intake_tasks.reprocess_intake, "delay", queued.append)
+    storage["objects"].add(f"{ORG}/a.txt-1")
+    stale = _iso(-60)
+    base = {
+        "organizationId": ORG,
+        "channel": "email",
+        "source_email": "legal@acme.test",
+        "source_metadata": {"subject": "x"},
+        "createdAt": _iso(-90),
+    }
+    attachment = {"filename": "a.txt", "storage_key": f"{ORG}/b.txt-9"}
+    await task_db.contract_intakes.insert_many(
+        [
+            {
+                **base,
+                "id": "stale-stored",
+                "status": "processing",
+                "claimed_at": stale,
+                "attachments_stored": True,
+                "attachments": [attachment],
+            },
+            {
+                **base,
+                "id": "stale-uploading",
+                "status": "received",
+                "claimed_at": stale,
+                "attachments_stored": False,
+                "attachments": [],
+                "pending_storage_keys": [f"{ORG}/a.txt-1"],
+            },
+            {
+                **base,
+                "id": "live",
+                "status": "processing",
+                "claimed_at": _iso(-1),
+                "attachments_stored": True,
+                "attachments": [attachment],
+            },
+            {
+                **base,
+                "id": "exhausted",
+                "status": "failed",
+                "claimed_at": stale,
+                "attachments_stored": True,
+                "attachments": [attachment],
+                "processing_attempts": intake_tasks.MAX_INTAKE_PROCESSING_ATTEMPTS,
+            },
+        ]
+    )
+
+    result = await intake_tasks._retry_failed_intakes_async()
+    assert result == {"status": "success", "retried": 1, "manual_review": 2}
+    assert queued == ["stale-stored"]
+
+    docs = {
+        d["id"]: d
+        for d in await task_db.contract_intakes.find({}, {"_id": 0}).to_list(10)
+    }
+    assert docs["stale-stored"]["status"] == "received"
+    assert docs["stale-stored"]["processing_attempts"] == 1
+    assert docs["stale-stored"]["claimed_at"] > stale
+    assert docs["live"]["status"] == "processing"
+    assert docs["stale-uploading"]["status"] == "manual_review"
+    assert "resent" in docs["stale-uploading"]["error_message"]
+    assert storage["objects"] == set()  # the interrupted upload was purged
+    assert docs["exhausted"]["status"] == "manual_review"
+
+    # The fresh claim is live again, so an overlapping pass does nothing.
+    again = await intake_tasks._retry_failed_intakes_async()
+    assert again == {"status": "success", "retried": 0, "manual_review": 0}
+
+
+async def test_uploads_are_tracked_on_the_intake_while_in_flight(task_db, storage):
+    """Every stored object is recorded before the batch completes."""
+    seen = []
+    real_upload = storage_service.upload_file_to_s3
+
+    async def upload(**kwargs):
+        doc = await task_db.contract_intakes.find_one({})
+        seen.append(list(doc["pending_storage_keys"]))
+        return await real_upload(**kwargs)
+
+    storage_service.upload_file_to_s3 = upload
+    try:
+        result = await intake_tasks._process_resend_webhook_async(
+            copy.deepcopy(PAYLOAD)
+        )
+    finally:
+        storage_service.upload_file_to_s3 = real_upload
+    assert result["status"] == "success"
+    assert seen[0] == [] and len(seen[1]) == 1  # a.txt tracked before b.txt
+    doc = await _only_intake(task_db)
+    assert doc["pending_storage_keys"] == [] and doc["attachments_stored"] is True
+
+
+async def test_transient_error_before_persistence_is_retried(
+    task_db, storage, monkeypatch
+):
+    async def flaky(sender, db):
+        raise ConnectionError("mongo blip")
+
+    monkeypatch.setattr(intake_tasks, "_resolve_organization_from_sender", flaky)
+    with pytest.raises(intake_tasks.IntakeRetryableError):
+        await intake_tasks._process_resend_webhook_async(copy.deepcopy(PAYLOAD))
+    assert await task_db.contract_intakes.count_documents({}) == 0
+    # The final attempt reports the error instead of retrying forever.
+    final = await intake_tasks._process_resend_webhook_async(
+        copy.deepcopy(PAYLOAD), final_attempt=True
+    )
+    assert final["status"] == "error"
+
+
+async def test_entitlement_lookup_failure_is_retried(task_db, storage, monkeypatch):
+    import routes.billing as billing
+
+    async def down(*args, **kwargs):
+        raise ConnectionError("mongo blip")
+
+    monkeypatch.setattr(billing, "background_ai_entitlement", down)
+    with pytest.raises(intake_tasks.IntakeRetryableError):
+        await intake_tasks._process_resend_webhook_async(copy.deepcopy(PAYLOAD))
+    assert storage["uploads"] == 0
+
+
+async def test_task_does_not_process_without_the_unique_index(
+    task_db, storage, monkeypatch
+):
+    async def index_down(database):
+        raise RuntimeError("createIndexes failed")
+
+    monkeypatch.setattr(intake_tasks, "ensure_intake_idempotency_index", index_down)
+    with pytest.raises(intake_tasks.IntakeRetryableError):
+        await intake_tasks._process_resend_webhook_async(copy.deepcopy(PAYLOAD))
+    assert await task_db.contract_intakes.count_documents({}) == 0
+    assert storage["uploads"] == 0
+
+
+async def test_concurrent_first_deliveries_create_one_intake(task_db, storage):
+    """The unique index turns a racing second insert into a duplicate."""
+    await intake_tasks.ensure_intake_idempotency_index(task_db)
+    doc = {
+        "id": "i-1",
+        "organizationId": ORG,
+        "idempotency_key": "k",
+        "status": "received",
+    }
+    assert await intake_tasks._save_intake(task_db, dict(doc), replace=False)
+    assert not await intake_tasks._save_intake(
+        task_db, {**doc, "id": "i-2"}, replace=False
+    )
+    assert await task_db.contract_intakes.count_documents({}) == 1
