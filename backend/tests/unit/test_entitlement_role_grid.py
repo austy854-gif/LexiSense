@@ -340,6 +340,8 @@ async def grid(db, db_authoritative_auth, monkeypatch, prices):
         audit_service,
     ):  # fmt: skip
         module.init_db(db)
+    # The auth handlers read their module-level db directly.
+    monkeypatch.setattr(auth_route, "db", db)
 
     async def _no_email(*args, **kwargs):
         return {"id": "test-email", "status": "sent"}
@@ -662,6 +664,11 @@ def _role_expected(key, role):
 # ---------------------------------------------------------------------------
 # 4. Role grid
 # ---------------------------------------------------------------------------
+# The grid sends placeholder bodies, so most allowed calls only prove the
+# policy let them through. These routes need nothing more and must succeed.
+MUST_SUCCEED = {"routes.auth.get_current_user_info", "routes.auth.logout"}
+
+
 @pytest.mark.parametrize("role", ROLES)
 @pytest.mark.parametrize("key", AUTHENTICATED)
 async def test_role_grid(grid, key, role):
@@ -672,6 +679,8 @@ async def test_role_grid(grid, key, role):
             403,
             422,
         ), f"{role} should reach {key}: {response.status_code} {response.text[:200]}"
+        if key in MUST_SUCCEED:
+            assert response.status_code == 200, f"{key}: {response.text[:200]}"
     else:
         assert (
             response.status_code == 403
