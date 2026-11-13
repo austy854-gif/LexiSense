@@ -131,6 +131,10 @@ async def lifespan(app: FastAPI):
     instead of being skipped).
     """
     logger.info("LexiSense API starting up...")
+    # One clear line about where rate limits are counted (Redis is optional).
+    from utils.rbac import log_rate_limit_backend
+
+    log_rate_limit_backend()
 
     # Database/storage bootstrap runs in the background so the server starts
     # accepting requests (and passing liveness checks) immediately. It retries

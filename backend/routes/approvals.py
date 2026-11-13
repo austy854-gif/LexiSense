@@ -26,7 +26,7 @@ from services import approval_service
 from services.approval_service import ApprovalTokenError
 from services.approval_tasks import dispatch_notification
 from utils import svix
-from utils.rbac import SlidingWindowRateLimiter, client_key, rate_limit
+from utils.rbac import SlidingWindowRateLimiter, client_key, shared_ip_rate_limit
 from utils.env import get_env
 
 logger = logging.getLogger(__name__)
@@ -44,10 +44,14 @@ db = None
 #: Per-IP budget for the public token endpoints (token guessing is infeasible,
 #: this just caps abuse).
 APPROVAL_LINK_LIMITER = SlidingWindowRateLimiter(max_requests=30, window_seconds=60.0)
-_link_rate_limit = rate_limit(APPROVAL_LINK_LIMITER, "approval_link")
+_link_rate_limit = shared_ip_rate_limit(
+    APPROVAL_LINK_LIMITER, "approval_link", "approval-ip"
+)
 #: Basic per-source cap on the webhook (Resend bursts are well below this).
 RESEND_WEBHOOK_LIMITER = SlidingWindowRateLimiter(max_requests=300, window_seconds=60.0)
-_webhook_rate_limit = rate_limit(RESEND_WEBHOOK_LIMITER, "resend_webhook")
+_webhook_rate_limit = shared_ip_rate_limit(
+    RESEND_WEBHOOK_LIMITER, "resend_webhook", "webhook-ip"
+)
 
 #: Resend event type -> notification status
 RESEND_EVENT_STATUS = {

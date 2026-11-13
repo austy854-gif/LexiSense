@@ -41,7 +41,12 @@ from models.agentic import (
 from routes.billing import assert_org_writable, ensure_ai_access
 from utils.auth import get_current_user, require_role
 from utils.policy import require_capability
-from utils.rbac import make_org_limiter, org_rate_limit
+from utils.rbac import (
+    SlidingWindowRateLimiter,
+    make_org_limiter,
+    org_rate_limit,
+    shared_ip_rate_limit,
+)
 from fastapi.concurrency import run_in_threadpool
 
 # Importing the Celery app makes it the current app, so @shared_task .delay()
@@ -653,7 +658,19 @@ async def get_contract_redline_sessions(
 # =============================================================================
 
 
-@router.post("/intake/webhook")
+#: Per-source cap on the public, signed intake webhook (Resend bursts are far
+#: below this); stops unsigned floods from burning CPU on signature checks.
+INTAKE_WEBHOOK_LIMITER = SlidingWindowRateLimiter(max_requests=300, window_seconds=60.0)
+
+
+@router.post(
+    "/intake/webhook",
+    dependencies=[
+        Depends(
+            shared_ip_rate_limit(INTAKE_WEBHOOK_LIMITER, "intake_webhook", "webhook-ip")
+        )
+    ],
+)
 async def resend_webhook(request: Request):
     """Resend webhook endpoint for email-based contract intake.
 

@@ -201,55 +201,73 @@ def rate_limit(limiter: SlidingWindowRateLimiter, scope: str):
     return _dependency
 
 
-def auth_rate_limit(scope: str):
-    """Per-IP limit for login, register, and password reset.
+def _too_many(retry_after: float) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many requests. Please slow down and try again later.",
+        headers={"Retry-After": str(int(retry_after) + 1)},
+    )
 
-    Always enforces the in-process window (what the unit suite resets). When
-    ``RATE_LIMIT_REDIS_URL`` or ``REDIS_URL`` is set, the same key is also
-    counted in Redis so the limit holds across workers.
+
+def shared_ip_rate_limit(local: SlidingWindowRateLimiter, scope: str, prefix: str):
+    """Per-IP limit that holds across workers when Redis is configured.
+
+    Always enforces ``local`` (the in-process window, which the unit suite
+    resets). When ``RATE_LIMIT_REDIS_URL`` or ``REDIS_URL`` points at Redis,
+    the same key is also counted in Redis with the same budget, so the limit
+    holds across replicas. If Redis is configured but unreachable, the
+    in-process limit still applies (fail open to the local budget): these are
+    public endpoints and an outage must not lock every user out.
     """
 
     async def _dependency(request: Request):
         key = f"{scope}:{client_key(request)}"
-        allowed, retry_after = AUTH_RATE_LIMITER.check(key)
+        allowed, retry_after = local.check(key)
         if not allowed:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many requests. Please slow down and try again later.",
-                headers={"Retry-After": str(int(retry_after) + 1)},
-            )
-        shared = _shared_auth_limiter()
+            raise _too_many(retry_after)
+        shared = _shared_ip_limiter(local.max_requests, local.window_seconds, prefix)
         if shared is None:
             return
         try:
             allowed, retry_after = await shared.acheck(key)
         except RateLimiterUnavailable:
             logger.warning(
-                "Shared auth rate limiter unavailable; using the in-process limit only"
+                "Shared rate limiter unavailable; using the in-process limit only"
             )
             return
         if not allowed:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many requests. Please slow down and try again later.",
-                headers={"Retry-After": str(int(retry_after) + 1)},
-            )
+            raise _too_many(retry_after)
 
     return _dependency
 
 
-_shared_auth_limiter_cache = None
+def auth_rate_limit(scope: str):
+    """Per-IP limit for login, register, and password reset."""
+    return shared_ip_rate_limit(AUTH_RATE_LIMITER, scope, "auth-ip")
 
 
-def _shared_auth_limiter():
-    """Redis limiter, or ``None`` when Redis is not configured. Cached."""
-    global _shared_auth_limiter_cache
-    if _shared_auth_limiter_cache is None:
-        candidate = make_org_limiter(10, 60.0, "auth-ip")
-        _shared_auth_limiter_cache = (
+def invite_rate_limit(scope: str):
+    """Per-IP limit for the public invitation preview/accept endpoints."""
+    return shared_ip_rate_limit(INVITE_RATE_LIMITER, scope, "invite-ip")
+
+
+_shared_ip_limiters: Dict[Tuple[int, float, str], object] = {}
+
+
+def _shared_ip_limiter(max_requests: int, window_seconds: float, prefix: str):
+    """Redis limiter for ``prefix``, or ``None`` when Redis is not configured. Cached."""
+    cache_key = (max_requests, float(window_seconds), prefix)
+    if cache_key not in _shared_ip_limiters:
+        candidate = make_org_limiter(max_requests, window_seconds, prefix)
+        _shared_ip_limiters[cache_key] = (
             candidate if isinstance(candidate, RedisRateLimiter) else False
         )
-    return _shared_auth_limiter_cache or None
+    return _shared_ip_limiters[cache_key] or None
+
+
+def reset_shared_ip_limiters() -> None:
+    """Forget cached shared limiters (tests that change the Redis env)."""
+    _shared_ip_limiters.clear()
 
 
 #: Auth endpoints: 10 attempts / minute / client IP.
@@ -374,21 +392,88 @@ class _InMemoryAsyncLimiter:
         self._inner.reset()
 
 
+class _UnavailableLimiter:
+    """Fail-closed stand-in when Redis is configured but the client can't be built."""
+
+    async def acheck(self, key: str) -> Tuple[bool, float]:
+        raise RateLimiterUnavailable("rate limiter store misconfigured")
+
+    def reset(self) -> None:
+        return None
+
+
+REDIS_SCHEMES = ("redis://", "rediss://")
+
+
+def rate_limit_redis_url() -> Optional[str]:
+    """``RATE_LIMIT_REDIS_URL``, else ``REDIS_URL``, else ``None``."""
+    from utils.env import get_env
+
+    return get_env("RATE_LIMIT_REDIS_URL") or get_env("REDIS_URL") or None
+
+
+def rate_limit_backend() -> str:
+    """``"redis"``, ``"invalid"`` (set but not a redis URL) or ``"memory"``."""
+    url = rate_limit_redis_url()
+    if not url:
+        return "memory"
+    return "redis" if url.startswith(REDIS_SCHEMES) else "invalid"
+
+
+_backend_logged = False
+
+
+def log_rate_limit_backend() -> str:
+    """Log once per process which rate-limit store is in use. Returns the backend."""
+    global _backend_logged
+    backend = rate_limit_backend()
+    if _backend_logged:
+        return backend
+    _backend_logged = True
+    if backend == "redis":
+        logger.info("Rate limits are shared across workers through Redis")
+    elif backend == "invalid":
+        logger.warning(
+            "RATE_LIMIT_REDIS_URL/REDIS_URL is not a redis:// or rediss:// URL; "
+            "rate limits are per process (in-memory) only"
+        )
+    else:
+        logger.warning(
+            "Redis is not configured (set REDIS_URL or RATE_LIMIT_REDIS_URL); "
+            "rate limits are per process (in-memory) only, so with N workers "
+            "the effective limit is N times higher"
+        )
+    return backend
+
+
 def make_org_limiter(
     max_requests: int, window_seconds: float, prefix: str, *, fail_closed: bool = False
 ):
     """Redis-backed when RATE_LIMIT_REDIS_URL/REDIS_URL points at Redis, else in-memory.
 
     ``fail_closed`` only applies when Redis is configured: with no Redis URL
-    the limiter is per-process by design and never fails closed.
+    the limiter is per-process by design and never fails closed. Building the
+    limiter never raises, so a bad URL cannot stop the app from starting.
     """
-    from utils.env import get_env
-
-    url = get_env("RATE_LIMIT_REDIS_URL") or get_env("REDIS_URL")
-    if url and url.startswith(("redis://", "rediss://")):
-        return RedisRateLimiter(
-            url, max_requests, window_seconds, prefix=prefix, fail_closed=fail_closed
-        )
+    url = rate_limit_redis_url()
+    if url and url.startswith(REDIS_SCHEMES):
+        try:
+            return RedisRateLimiter(
+                url,
+                max_requests,
+                window_seconds,
+                prefix=prefix,
+                fail_closed=fail_closed,
+            )
+        except Exception as exc:
+            logger.error(
+                "Could not create the Redis rate limiter for %s (%s); %s",
+                prefix,
+                type(exc).__name__,
+                "failing closed" if fail_closed else "using in-process limits",
+            )
+            if fail_closed:
+                return _UnavailableLimiter()
     return _InMemoryAsyncLimiter(max_requests, window_seconds)
 
 
