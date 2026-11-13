@@ -16,10 +16,9 @@ from utils.auth import get_current_user, hash_password, require_role, verify_pas
 from utils.rbac import (
     ADMIN_ROLES,
     DEFAULT_MEMBER_ROLE,
-    INVITE_RATE_LIMITER,
     ROLES,
+    invite_rate_limit,
     is_valid_role,
-    rate_limit,
 )
 from services.email_service import send_invitation_email
 from services.audit_service import log_action
@@ -401,9 +400,7 @@ async def _join_existing_account(invitation: dict, user: dict, password: str) ->
 
 @router.post(
     "/accept-invite/preview",
-    dependencies=[
-        Depends(rate_limit(INVITE_RATE_LIMITER, "team:accept-invite-preview"))
-    ],
+    dependencies=[Depends(invite_rate_limit("team:accept-invite-preview"))],
 )
 async def preview_invitation(payload: InvitationPreviewRequest):
     """Look up an invitation by token so the accept page can show who invited
@@ -479,7 +476,7 @@ async def preview_invitation(payload: InvitationPreviewRequest):
 
 @router.post(
     "/accept-invite",
-    dependencies=[Depends(rate_limit(INVITE_RATE_LIMITER, "team:accept-invite"))],
+    dependencies=[Depends(invite_rate_limit("team:accept-invite"))],
 )
 async def accept_invitation(payload: AcceptInvitationRequest):
     """Accept an invitation and create user account.

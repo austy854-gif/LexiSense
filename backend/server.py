@@ -131,6 +131,10 @@ async def lifespan(app: FastAPI):
     instead of being skipped).
     """
     logger.info("LexiSense API starting up...")
+    # One clear line about where rate limits are counted (Redis is optional).
+    from utils.rbac import log_rate_limit_backend
+
+    log_rate_limit_backend()
 
     # Database/storage bootstrap runs in the background so the server starts
     # accepting requests (and passing liveness checks) immediately. It retries
@@ -256,6 +260,11 @@ app.add_middleware(RequestLoggingMiddleware)
 from utils.proxy import ForwardedProtoMiddleware  # noqa: E402
 
 app.add_middleware(ForwardedProtoMiddleware)
+# Upload size cap (413 before the body is buffered). Added before CORS so the
+# 413 still carries CORS headers for the browser.
+from utils.upload_limits import UploadSizeLimitMiddleware  # noqa: E402
+
+app.add_middleware(UploadSizeLimitMiddleware)
 
 # Create a router with the /api/v1 prefix
 api_router = APIRouter(prefix="/api/v1")
