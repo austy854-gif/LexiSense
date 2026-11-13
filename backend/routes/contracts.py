@@ -48,6 +48,7 @@ from utils.contract_fields import fields_from_analysis
 from utils.uploads import UploadRejected, attachment_filename, validate_upload
 from utils.upload_limits import (
     BULK_MAX_FILES,
+    ensure_text_fits,
     ensure_within_upload_limit,
     max_upload_bytes,
     too_large,
@@ -146,6 +147,8 @@ async def _read_contract_file(filename: str, file_content: bytes):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Could not extract text from file. The file may be empty or corrupted.",
         )
+    # Before any quota or storage: the text must fit in one Mongo document.
+    ensure_text_fits(extracted)
     return content_type, extension, extracted
 
 

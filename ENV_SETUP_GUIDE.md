@@ -351,6 +351,11 @@ overhead for `POST /contracts`, ten files plus 1 MB for `POST /contracts/bulk`).
 A bulk upload with any file over the limit is refused as a whole. No trial
 quota is reserved and nothing is stored for a refused upload.
 
+Extracted text is stored on the contract document, which MongoDB caps at
+16 MiB, so a file whose text is over 12 MB is also refused with 413 (in a bulk
+upload, that file is listed in `results.failed`), again before quota or
+storage. This matters only if you raise `MAX_UPLOAD_MB` above about 12.
+
 ```bash
 MAX_UPLOAD_MB=10
 ```
