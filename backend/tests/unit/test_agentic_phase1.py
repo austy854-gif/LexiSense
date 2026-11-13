@@ -17,6 +17,7 @@ from fastapi import APIRouter, FastAPI  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 from routes import agentic as agentic_route  # noqa: E402
+from routes import billing as billing_route  # noqa: E402
 from services import celery_app as celery_module  # noqa: E402
 from tests.unit.conftest import (
     API_PREFIX,
@@ -63,6 +64,8 @@ def _reset_agentic_limiters():
 @pytest.fixture
 async def phase1(db):
     agentic_route.init_db(db)
+    # Agentic writes check the org's billing entitlement (trial by default).
+    billing_route.init_db(db)
     transport = ASGITransport(app=_app(PHASE1))
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client

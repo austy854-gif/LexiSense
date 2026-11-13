@@ -34,7 +34,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 from jwt import PyJWTError as JWTError
@@ -42,6 +42,7 @@ from passlib.context import CryptContext
 
 from utils.env import get_env
 from utils.rbac import normalize_role
+from utils.policy import authorize_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -161,13 +162,27 @@ def stored_version_mismatch(user: dict, payload: dict) -> bool:
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request = None,
 ) -> dict:
-    """Return the authenticated principal.
+    """Return the authenticated principal, authorised for the matched route.
 
     The returned mapping is token-shaped (``sub``/``email``/``role``/
     ``organizationId``) so existing routers keep working, but ``role`` and
     ``organizationId`` are refreshed from the database when it is available.
+
+    When FastAPI resolves this as a dependency it also passes the request, and
+    the role matrix in ``utils.policy.ROUTE_POLICIES`` is enforced for the
+    matched endpoint (403, deny by default for an endpoint with no policy).
+    Every authenticated route depends on this function, so none can skip it.
     """
+    user = await _authenticate(credentials)
+    if request is not None:
+        authorize_endpoint(request.scope.get("endpoint"), user)
+    return user
+
+
+async def _authenticate(credentials: HTTPAuthorizationCredentials) -> dict:
+    """Verify the bearer token and load the principal (no route authorisation)."""
     payload = decode_token(credentials.credentials)
 
     user_id = payload.get("sub")

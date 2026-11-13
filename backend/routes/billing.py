@@ -23,12 +23,15 @@ from utils.billing_access import (
     ACCESS_CANCELLED,
     ACCESS_GRACE,
     ACCESS_PAID,
-    ACCESS_PAST_DUE,
     ACCESS_TRIAL_EXPIRED,
     ACCESS_UNVERIFIED_PLAN,
-    READ_ONLY_STATES,
+    FEATURE_AI,
+    FEATURE_INVITE,
+    FEATURE_UPLOAD,
+    FEATURE_WRITE,
     Entitlement,
     compute_entitlement,
+    entitlement_allows,
     grace_ends_at,
     upload_gate,
 )
@@ -225,7 +228,7 @@ async def check_trial_access(org_id: str) -> tuple[bool, str]:
     entitlement = compute_entitlement(raw)
     if entitlement.state in (ACCESS_PAID, ACCESS_GRACE):
         return True, ""
-    if entitlement.blocked:
+    if not entitlement_allows(entitlement.state, FEATURE_UPLOAD):
         return False, entitlement.message
 
     # Check contract upload limit
@@ -257,7 +260,7 @@ async def reserve_trial_upload_atomic(org_id: str) -> tuple[bool, str]:
     entitlement = compute_entitlement(billing_doc)
     if entitlement.state in (ACCESS_PAID, ACCESS_GRACE):
         return True, ""
-    if entitlement.blocked:
+    if not entitlement_allows(entitlement.state, FEATURE_UPLOAD):
         return False, entitlement.message
 
     # Atomic conditional increment: only succeeds if we're strictly below the limit.
@@ -286,7 +289,7 @@ async def assert_org_writable(org_id: str) -> None:
     await get_or_create_billing(org_id)
     raw = await db.organization_billing.find_one({"organizationId": org_id}) or {}
     entitlement = compute_entitlement(raw)
-    if entitlement.state in READ_ONLY_STATES:
+    if not entitlement_allows(entitlement.state, FEATURE_WRITE):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message
         )
@@ -311,7 +314,7 @@ async def get_entitlement(org_id: str, database=None) -> Entitlement:
 async def ensure_ai_access(org_id: str) -> Entitlement:
     """403 unless the org may spend AI credits (trial, paid, or past-due grace)."""
     entitlement = await get_entitlement(org_id)
-    if entitlement.blocked:
+    if not entitlement_allows(entitlement.state, FEATURE_AI):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message
         )
@@ -341,7 +344,7 @@ async def ensure_invite_access(org_id: str) -> Entitlement:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=cancelled_invite_message()
         )
-    if entitlement.read_only or entitlement.state == ACCESS_UNVERIFIED_PLAN:
+    if not entitlement_allows(entitlement.state, FEATURE_INVITE):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=entitlement.message
         )
@@ -448,7 +451,7 @@ async def get_subscription(current_user: dict = Depends(get_current_user)):
 async def get_capabilities(current_user: dict = Depends(get_current_user)):
     """Authoritative organization access and role capability state for the SPA."""
     entitlement = await get_entitlement(current_user["organizationId"])
-    read_only = entitlement.state in READ_ONLY_STATES
+    read_only = not entitlement_allows(entitlement.state, FEATURE_WRITE)
     can_upload, upload_message = await check_trial_access(
         current_user["organizationId"]
     )
@@ -456,6 +459,11 @@ async def get_capabilities(current_user: dict = Depends(get_current_user)):
         "state": entitlement.state,
         "readOnly": read_only,
         "message": entitlement.message or upload_message,
+        # The entitlement grid row for this org (utils.billing_access).
+        "features": {
+            feature: entitlement_allows(entitlement.state, feature)
+            for feature in (FEATURE_UPLOAD, FEATURE_AI, FEATURE_WRITE, FEATURE_INVITE)
+        },
         "capabilities": capability_map(
             current_user.get("role"),
             read_only=read_only,
