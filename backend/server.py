@@ -260,6 +260,11 @@ app.add_middleware(RequestLoggingMiddleware)
 from utils.proxy import ForwardedProtoMiddleware  # noqa: E402
 
 app.add_middleware(ForwardedProtoMiddleware)
+# Upload size cap (413 before the body is buffered). Added before CORS so the
+# 413 still carries CORS headers for the browser.
+from utils.upload_limits import UploadSizeLimitMiddleware  # noqa: E402
+
+app.add_middleware(UploadSizeLimitMiddleware)
 
 # Create a router with the /api/v1 prefix
 api_router = APIRouter(prefix="/api/v1")

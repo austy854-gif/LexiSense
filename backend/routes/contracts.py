@@ -46,6 +46,13 @@ from services.pdf_service import FileRejected, extract_text_from_file
 from services.audit_service import log_action
 from utils.contract_fields import fields_from_analysis
 from utils.uploads import UploadRejected, attachment_filename, validate_upload
+from utils.upload_limits import (
+    BULK_MAX_FILES,
+    ensure_within_upload_limit,
+    max_upload_bytes,
+    too_large,
+    too_large_message,
+)
 from services.workflow_service import (
     PRIVILEGED_TRANSITION_ROLES,
     TRANSITION_ROLES,
@@ -109,7 +116,6 @@ async def _chat_rate_limited_user(
 
 
 db = None
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 DOWNLOAD_URL_TTL_SECONDS = 300
 
 
@@ -608,13 +614,12 @@ async def upload_contract(
 ):
     """Upload and analyze a new contract."""
     require_capability(current_user, "upload")
+    # Size first: nothing is read, reserved or stored for an oversized file.
+    ensure_within_upload_limit(file)
     file_content = await file.read()
 
-    if len(file_content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File size exceeds maximum allowed (10MB)",
-        )
+    if len(file_content) > max_upload_bytes():
+        raise too_large()
 
     content_type, extension, extracted_text = await _read_contract_file(
         file.filename, file_content
@@ -765,11 +770,15 @@ async def bulk_upload_contracts(
 ):
     """Bulk upload multiple contracts at once."""
     require_capability(current_user, "upload")
-    if len(files) > 10:
+    if len(files) > BULK_MAX_FILES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Maximum 10 files allowed per bulk upload",
+            detail=f"Maximum {BULK_MAX_FILES} files allowed per bulk upload",
         )
+    # Refuse the whole request up front if any file is over the limit, before
+    # any quota is reserved or object stored.
+    for file in files:
+        ensure_within_upload_limit(file)
 
     results = {"successful": [], "failed": []}
 
@@ -777,12 +786,9 @@ async def bulk_upload_contracts(
         try:
             file_content = await file.read()
 
-            if len(file_content) > MAX_FILE_SIZE:
+            if len(file_content) > max_upload_bytes():
                 results["failed"].append(
-                    {
-                        "filename": file.filename,
-                        "error": "File size exceeds maximum allowed (10MB)",
-                    }
+                    {"filename": file.filename, "error": too_large_message()}
                 )
                 continue
 
