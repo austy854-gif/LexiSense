@@ -296,6 +296,7 @@ async def assess_risk(
     """Trigger risk assessment for a contract."""
     require_capability(current_user, "ai_task")
     await assert_org_writable(current_user["organizationId"])
+    await ensure_ai_access(current_user["organizationId"])
     from services.risk_tasks import assess_contract_risk
 
     # Verify contract belongs to organization
@@ -404,6 +405,7 @@ async def get_organization_risk_summary(current_user: dict = Depends(get_current
 async def bulk_assess_organization(current_user: dict = Depends(_bulk_risk_user)):
     """Trigger risk assessment for all active contracts in organization."""
     await assert_org_writable(current_user["organizationId"])
+    await ensure_ai_access(current_user["organizationId"])
     from services.risk_tasks import bulk_assess_organization_contracts
 
     task = await _enqueue(
@@ -585,7 +587,8 @@ async def analyze_with_playbook(
         analyze_contract_with_playbook,
         request.contractId,
         request.playbookId,
-        request.auto_apply,
+        # A playbook that requires approval never auto-applies.
+        request.auto_apply and not playbook.get("require_approval", True),
     )
 
     return {"task_id": task.id, "status": "queued"}
@@ -780,6 +783,7 @@ async def extract_obligations(
     """Extract obligations from a signed contract."""
     require_capability(current_user, "ai_task")
     await assert_org_writable(current_user["organizationId"])
+    await ensure_ai_access(current_user["organizationId"])
     from services.obligation_tasks import extract_obligations_from_contract
 
     # Verify contract belongs to organization
@@ -956,6 +960,7 @@ async def bulk_extract_obligations(
 ):
     """Extract obligations for all signed contracts in organization."""
     await assert_org_writable(current_user["organizationId"])
+    await ensure_ai_access(current_user["organizationId"])
     from services.obligation_tasks import bulk_extract_obligations
 
     task = await _enqueue(bulk_extract_obligations, current_user["organizationId"])

@@ -723,15 +723,10 @@ def test_entitlement_grid_table():
 
 
 @pytest.mark.parametrize("state", sorted(BILLING_STATES))
-def test_grid_agrees_with_the_entitlement_record(state):
+def test_grid_agrees_with_the_entitlement_record(state, prices):
     """``Entitlement.can_use_ai`` and READ_ONLY_STATES say the same as the grid."""
     raw = {"organizationId": ORG, **BILLING_STATES[state]}
-    os.environ.update(PRICES)
-    try:
-        ent = ba.compute_entitlement(raw)
-    finally:
-        for name in PRICES:
-            os.environ.pop(name, None)
+    ent = ba.compute_entitlement(raw)
     assert ent.state == state
     assert ent.can_use_ai == ba.entitlement_allows(state, ba.FEATURE_AI)
     assert (state in ba.READ_ONLY_STATES) == (
@@ -847,3 +842,35 @@ async def test_seat_cap_per_plan(grid, state, price, cap):
     )
     assert full.status_code == 403
     assert f"up to {cap} team members" in full.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Playbook analysis honours the playbook's approval setting
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "require_approval,requested,expected",
+    [(True, True, False), (False, True, True), (False, False, False)],
+)
+async def test_auto_apply_needs_a_playbook_without_approval(
+    grid, monkeypatch, require_approval, requested, expected
+):
+    from services import celery_app as celery_module
+
+    calls = []
+
+    async def fake_threadpool(fn, *args, **kwargs):
+        calls.append(kwargs["args"])
+        return type("Task", (), {"id": "task-1"})()
+
+    monkeypatch.setattr(celery_module, "CELERY_BROKER_URL", "redis://broker:6379/0")
+    monkeypatch.setattr(agentic_route, "run_in_threadpool", fake_threadpool)
+    await grid["db"].legal_playbooks.update_one(
+        {"id": "pb-1"}, {"$set": {"require_approval": require_approval}}
+    )
+    response = await grid["client"].post(
+        f"{API_PREFIX}/agentic/redline/analyze",
+        headers=auth_headers(grid["users"]["admin"]),
+        json={"contractId": "c-1", "playbookId": "pb-1", "auto_apply": requested},
+    )
+    assert response.status_code == 200, response.text
+    assert calls == [("c-1", "pb-1", expected)]
