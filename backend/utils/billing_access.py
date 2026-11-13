@@ -220,3 +220,35 @@ def compute_entitlement(
             blocked_message(ACCESS_TRIAL_EXPIRED),
         )
     return Entitlement(ACCESS_TRIAL, None, True, trial_cap)
+
+
+# ---------------------------------------------------------------------------
+# Entitlement grid: billing state -> features the organisation may use.
+# ---------------------------------------------------------------------------
+#: Feature names match ``utils.policy.FEATURE_*`` (each route's policy row
+#: records which one its handler enforces).
+FEATURE_UPLOAD = "upload"  # add contracts (trial uploads also hit the counter)
+FEATURE_AI = "ai"  # AI analysis, chat and other model calls
+FEATURE_WRITE = "write"  # edit/delete/restore/workflow/templates/tags/alerts
+FEATURE_INVITE = "invite"  # invite teammates (the plan's seat cap still applies)
+FEATURES = frozenset({FEATURE_UPLOAD, FEATURE_AI, FEATURE_WRITE, FEATURE_INVITE})
+
+#: The whole decision in one table. Every paid plan (Starter, Team, Business)
+#: gets the same features; plans differ only in their seat cap
+#: (``utils.plans``). An expired trial keeps existing contracts editable and
+#: can still invite, but can't add contracts or use AI until it upgrades.
+#: Anything not listed here (an unknown state) gets nothing.
+ENTITLEMENT_GRID = {
+    ACCESS_PAID: FEATURES,
+    ACCESS_GRACE: FEATURES,
+    ACCESS_TRIAL: FEATURES,
+    ACCESS_TRIAL_EXPIRED: frozenset({FEATURE_WRITE, FEATURE_INVITE}),
+    ACCESS_PAST_DUE: frozenset(),
+    ACCESS_CANCELLED: frozenset(),
+    ACCESS_UNVERIFIED_PLAN: frozenset(),
+}
+
+
+def entitlement_allows(state: str, feature: str) -> bool:
+    """Whether an organisation in billing ``state`` may use ``feature`` (deny by default)."""
+    return feature in ENTITLEMENT_GRID.get(state, frozenset())

@@ -341,11 +341,8 @@ async def _analyze_contract_with_playbook_async(
         session.pending_count = len(suggestions)
         session.status = "ready_for_review"
 
-        if auto_apply:
-            session.status = "completed"
-            # In auto-apply mode, accept all suggestions
-            # Would generate redlined document here
-            pass
+        # Auto-apply does not apply suggestions yet, so the session stays
+        # ready_for_review rather than claiming to be completed.
 
         await db.redline_sessions.update_one(
             {"id": session.id}, {"$set": session.model_dump()}

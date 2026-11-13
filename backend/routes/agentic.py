@@ -38,7 +38,9 @@ from models.agentic import (
     COLLECTIONS,
     RECOMMENDED_INDEXES,
 )
+from routes.billing import assert_org_writable, ensure_ai_access
 from utils.auth import get_current_user, require_role
+from utils.policy import require_capability
 from utils.rbac import make_org_limiter, org_rate_limit
 from fastapi.concurrency import run_in_threadpool
 
@@ -156,6 +158,7 @@ async def create_agent(
     current_user: dict = Depends(require_role("admin", "manager")),
 ):
     """Create a new contract agent."""
+    await assert_org_writable(current_user["organizationId"])
     agent = ContractAgent(
         organizationId=current_user["organizationId"],
         createdBy=current_user["sub"],
@@ -214,6 +217,7 @@ async def update_agent(
     current_user: dict = Depends(require_role("admin", "manager")),
 ):
     """Update a contract agent."""
+    await assert_org_writable(current_user["organizationId"])
     update_data = agent_data.model_dump(exclude_unset=True)
     update_data["updatedAt"] = datetime.now(timezone.utc).isoformat()
 
@@ -244,6 +248,7 @@ async def trigger_agent(
     agent_id: str, current_user: dict = Depends(require_role("admin", "manager"))
 ):
     """Manually trigger an agent execution."""
+    await ensure_ai_access(current_user["organizationId"])
     from services.agent_tasks import execute_contract_agent
 
     agent = await db.contract_agents.find_one(
@@ -270,6 +275,7 @@ async def delete_agent(
     agent_id: str, current_user: dict = Depends(require_role("admin"))
 ):
     """Delete a contract agent."""
+    await assert_org_writable(current_user["organizationId"])
     result = await db.contract_agents.delete_one(
         {"id": agent_id, "organizationId": current_user["organizationId"]}
     )
@@ -288,6 +294,9 @@ async def assess_risk(
     request: TriggerRiskAssessmentRequest, current_user: dict = Depends(_task_user)
 ):
     """Trigger risk assessment for a contract."""
+    require_capability(current_user, "ai_task")
+    await assert_org_writable(current_user["organizationId"])
+    await ensure_ai_access(current_user["organizationId"])
     from services.risk_tasks import assess_contract_risk
 
     # Verify contract belongs to organization
@@ -395,6 +404,8 @@ async def get_organization_risk_summary(current_user: dict = Depends(get_current
 @router.post("/risk/bulk-assess")
 async def bulk_assess_organization(current_user: dict = Depends(_bulk_risk_user)):
     """Trigger risk assessment for all active contracts in organization."""
+    await assert_org_writable(current_user["organizationId"])
+    await ensure_ai_access(current_user["organizationId"])
     from services.risk_tasks import bulk_assess_organization_contracts
 
     task = await _enqueue(
@@ -418,6 +429,7 @@ async def create_playbook(
     current_user: dict = Depends(require_role("admin", "manager")),
 ):
     """Create a new legal playbook."""
+    await assert_org_writable(current_user["organizationId"])
     # If this is set as default, unset other defaults
     if playbook_data.is_default:
         await db.legal_playbooks.update_many(
@@ -491,6 +503,7 @@ async def update_playbook(
     current_user: dict = Depends(require_role("admin", "manager")),
 ):
     """Update a legal playbook."""
+    await assert_org_writable(current_user["organizationId"])
     update_data = playbook_data.model_dump(exclude_unset=True)
     update_data["updatedAt"] = datetime.now(timezone.utc).isoformat()
 
@@ -530,6 +543,7 @@ async def delete_playbook(
     playbook_id: str, current_user: dict = Depends(require_role("admin"))
 ):
     """Delete a legal playbook."""
+    await assert_org_writable(current_user["organizationId"])
     result = await db.legal_playbooks.delete_one(
         {"id": playbook_id, "organizationId": current_user["organizationId"]}
     )
@@ -549,6 +563,8 @@ async def analyze_with_playbook(
     current_user: dict = Depends(get_current_user),
 ):
     """Analyze a contract against a playbook."""
+    require_capability(current_user, "redline_run")
+    await ensure_ai_access(current_user["organizationId"])
     from services.playbook_tasks import analyze_contract_with_playbook
 
     # Verify contract and playbook belong to organization
@@ -571,7 +587,8 @@ async def analyze_with_playbook(
         analyze_contract_with_playbook,
         request.contractId,
         request.playbookId,
-        request.auto_apply,
+        # A playbook that requires approval never auto-applies.
+        request.auto_apply and not playbook.get("require_approval", True),
     )
 
     return {"task_id": task.id, "status": "queued"}
@@ -597,6 +614,7 @@ async def apply_redlines(
     current_user: dict = Depends(require_role("admin", "manager")),
 ):
     """Apply accepted redlines."""
+    await assert_org_writable(current_user["organizationId"])
     from services.playbook_tasks import apply_redlines
 
     session = await db.redline_sessions.find_one(
@@ -722,6 +740,7 @@ async def process_intake(
     current_user: dict = Depends(require_role("admin", "manager")),
 ):
     """Manually process an intake (assign, route to playbook)."""
+    await assert_org_writable(current_user["organizationId"])
     intake = await db.contract_intakes.find_one(
         {"id": intake_id, "organizationId": current_user["organizationId"]}, {"_id": 0}
     )
@@ -762,6 +781,9 @@ async def extract_obligations(
     request: ExtractObligationsRequest, current_user: dict = Depends(_task_user)
 ):
     """Extract obligations from a signed contract."""
+    require_capability(current_user, "ai_task")
+    await assert_org_writable(current_user["organizationId"])
+    await ensure_ai_access(current_user["organizationId"])
     from services.obligation_tasks import extract_obligations_from_contract
 
     # Verify contract belongs to organization
@@ -849,6 +871,8 @@ async def update_obligation_status(
     current_user: dict = Depends(get_current_user),
 ):
     """Update obligation status and evidence."""
+    require_capability(current_user, "obligation_update")
+    await assert_org_writable(current_user["organizationId"])
     obligation = await db.extracted_obligations.find_one(
         {"id": obligation_id, "organizationId": current_user["organizationId"]},
         {"_id": 0},
@@ -908,6 +932,8 @@ async def acknowledge_alert(
     alert_id: str, current_user: dict = Depends(get_current_user)
 ):
     """Acknowledge an obligation alert."""
+    require_capability(current_user, "obligation_update")
+    await assert_org_writable(current_user["organizationId"])
     alert = await db.obligation_alerts.find_one(
         {"id": alert_id, "organizationId": current_user["organizationId"]}, {"_id": 0}
     )
@@ -933,6 +959,8 @@ async def bulk_extract_obligations(
     current_user: dict = Depends(_bulk_obligations_user),
 ):
     """Extract obligations for all signed contracts in organization."""
+    await assert_org_writable(current_user["organizationId"])
+    await ensure_ai_access(current_user["organizationId"])
     from services.obligation_tasks import bulk_extract_obligations
 
     task = await _enqueue(bulk_extract_obligations, current_user["organizationId"])

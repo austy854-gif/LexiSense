@@ -19,10 +19,11 @@ The restore path now applies the same two-stage gate as ``PATCH /contracts/{id}`
    otherwise 403 ``"Only admins, managers, or the uploader can restore this
    contract"``.
 
-Ordering matters and is asserted: the contract/version lookups (404) run
-*before* the role checks, so existence is never leaked to an unauthorised
-caller, and the viewer gate runs *before* the ownership gate, so a viewer who
-happens to be the uploader is still refused.
+Ordering matters and is asserted: the viewer gate (the route policy, enforced
+while authenticating) runs before any lookup, so a viewer gets the same 403 for
+every contract id; for writers the contract/version lookups (404) run *before*
+the ownership gate, so existence is never leaked to an unauthorised caller; and
+a viewer who happens to be the uploader is still refused.
 
 The matrix
 ----------
@@ -248,18 +249,23 @@ class TestRestoreExistenceHandling:
         assert response.status_code == 404
         assert response.json()["detail"] == "Version not found"
 
-    async def test_contract_in_another_org_is_not_found_for_a_viewer_too(
+    async def test_viewer_gets_the_same_403_for_any_contract_id(
         self, client, db, other_org_id, users
     ):
-        """Existence is checked before the role gate, so 404 (not 403) is returned."""
+        """The route's role gate (utils.policy.ROUTE_POLICIES) runs before any
+        lookup, so a viewer gets an identical 403 for a foreign contract and an
+        unknown id: existence is still not leaked."""
         foreign = make_contract(
             other_org_id, uploaded_by="someone", contract_id="foreign-restore"
         )
         await _seed(db, foreign, make_version(foreign["id"], 1, "someone"))
 
-        response = await _restore(client, foreign["id"], 1, users["viewer"])
+        foreign_resp = await _restore(client, foreign["id"], 1, users["viewer"])
+        unknown_resp = await _restore(client, "does-not-exist", 1, users["viewer"])
 
-        assert response.status_code == 404
+        assert foreign_resp.status_code == unknown_resp.status_code == 403
+        assert foreign_resp.json() == unknown_resp.json()
+        assert foreign_resp.json()["detail"] == "Viewers cannot modify contracts"
 
     async def test_admin_of_another_org_is_not_found(
         self, client, db, contract, owner, other_org_id
