@@ -131,13 +131,27 @@ def test_every_route_has_exactly_one_policy_row():
     assert not missing, f"routes without a policy row (they would 403): {missing}"
 
 
-def test_no_policy_row_points_at_a_missing_route():
-    import server
+def _server_functions():
+    """Function names defined in server.py, read without importing it (an
+    import wires module-level database handles that would leak into other
+    tests)."""
+    import ast
+    from pathlib import Path
 
+    tree = ast.parse((Path(__file__).resolve().parents[2] / "server.py").read_text())
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
+def test_no_policy_row_points_at_a_missing_route():
+    server_functions = _server_functions()
     stale = sorted(
         k
         for k in set(policy.ROUTE_POLICIES) - set(ROUTES)
-        if not (k in SERVER_ENDPOINTS and hasattr(server, k.split(".", 1)[1]))
+        if not (k in SERVER_ENDPOINTS and k.split(".", 1)[1] in server_functions)
     )
     assert not stale, f"policy rows for routes that do not exist: {stale}"
 
