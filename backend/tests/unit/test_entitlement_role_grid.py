@@ -346,6 +346,30 @@ async def grid(db, db_authoritative_auth, monkeypatch, prices):
 
     monkeypatch.setattr(email_service, "send_invitation_email", _no_email)
     monkeypatch.setattr(team_route, "send_invitation_email", _no_email)
+
+    # Never reach real S3, the AI provider or Stripe, whatever the env holds.
+    async def _s3_upload(content, filename, org_id, mime, extension=None):
+        return f"{org_id}/{filename}"
+
+    async def _true(*args, **kwargs):
+        return True
+
+    async def _url(*args, **kwargs):
+        return "https://storage.invalid/file"
+
+    async def _analyze(text):
+        return {"summary": "ok"}
+
+    async def _chat(*args, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr(contracts_route, "upload_file_to_s3", _s3_upload)
+    monkeypatch.setattr(contracts_route, "delete_file_from_s3", _true)
+    monkeypatch.setattr(contracts_route, "purge_uploaded_object", _true)
+    monkeypatch.setattr(contracts_route, "generate_presigned_url", _url)
+    monkeypatch.setattr(contracts_route, "analyze_contract", _analyze)
+    monkeypatch.setattr(contracts_route, "get_chat_response", _chat)
+    monkeypatch.setattr(billing_route, "stripe_api_key", None)
     agentic_route.AGENTIC_TASK_LIMITER.reset()
     agentic_route.AGENTIC_BULK_LIMITER.reset()
 

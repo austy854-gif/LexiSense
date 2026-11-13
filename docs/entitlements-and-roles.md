@@ -14,7 +14,8 @@ so no authenticated route can skip it. A route with no row is refused with
 | Capability | viewer | user | manager | admin |
 |---|:-:|:-:|:-:|:-:|
 | Read org data, own session and notifications, AI chat on a readable contract | ✓ | ✓ | ✓ | ✓ |
-| Upload contracts, submit for review | | ✓ | ✓ | ✓ |
+| Upload contracts | | ✓ | ✓ | ✓ |
+| Submit a contract for review | | own uploads | ✓ | ✓ |
 | Edit, tag or restore a contract | | own uploads | ✓ | ✓ |
 | Delete, approve, reject, activate contracts | | | ✓ | ✓ |
 | View the audit log, trigger alert scans | | | ✓ | ✓ |
@@ -54,8 +55,23 @@ still pay, export its data or remove members.
 Both role and billing denials return **403** with a message, matching the
 existing billing gates and the SPA's error handling. No route returns 402.
 
+One exception: `POST /contracts/bulk` reports per-file results, so when billing
+blocks uploads it returns **200** with every file in `results.failed` (each
+`error` is the billing message) and `successful: 0`. Clients must check
+`successful`/`results.failed`, not only the status code.
+
 ## Tests
 
 `backend/tests/unit/test_entitlement_role_grid.py` checks that every mountable
-route has exactly one row, pins the role matrix, and runs every authenticated
-route against every role and every billing state in an in-process app.
+route has exactly one row and pins the role matrix. It then runs three
+separate grids in an in-process app:
+
+- **Role grid:** every authenticated route × every role, with the organization
+  on a paid (Business) plan.
+- **Entitlement grid:** every feature-gated route × every billing state, as an
+  admin.
+- **Read-only check:** every route without a feature, as an admin, in the
+  `cancelled` and `past_due` states.
+
+It does not run every role against every billing state; the two checks are
+independent (role first, then billing), so each grid covers one axis.
