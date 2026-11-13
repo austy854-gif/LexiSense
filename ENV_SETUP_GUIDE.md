@@ -23,6 +23,9 @@ This guide walks you through obtaining and configuring all required API keys and
 | `AWS_REGION` | AWS | ❌ No | AWS region |
 | `SENTRY_DSN` | Sentry.io | ❌ No | Error tracking |
 | `OPENROUTER_API_KEY` | OpenRouter.ai | ❌ No | Alternative LLM (OpenCode) |
+| `REDIS_URL` | Redis (e.g. Railway Redis) | ❌ No | Shares rate limits across workers; also the Celery broker fallback |
+| `RATE_LIMIT_REDIS_URL` | Redis | ❌ No | Separate Redis for rate limits only; overrides `REDIS_URL` for them |
+| `MAX_UPLOAD_MB` | Local config | ❌ No | Per-file upload limit in MB (default 10, allowed 1–100) |
 
 ---
 
@@ -289,6 +292,67 @@ Only needed if using OpenCode with alternative LLM models.
 ### Set in `.env`
 ```bash
 OPENROUTER_API_KEY=sk-or-your-openrouter-key
+```
+
+---
+
+## 9. Redis — OPTIONAL (Recommended for Production)
+
+Redis makes rate limits hold across every worker and replica. The app runs
+without it.
+
+### What happens without Redis
+
+- The app starts and serves normally. At startup it logs one warning:
+  `Redis is not configured (set REDIS_URL or RATE_LIMIT_REDIS_URL); rate
+  limits are per process (in-memory) only ...`
+- Every rate limit (login, register, password reset, invitation preview and
+  accept, approval links, webhooks, chat, agentic tasks and bulk jobs) is
+  counted per process. With N workers or replicas the effective limit is N
+  times the configured one.
+- `/api/v1/ready` reports `"redis": "skipped"` and stays ready.
+- Background (Celery) work is unavailable: agentic routes that queue a task
+  return 503 "Background processing is not configured".
+
+### What happens with Redis
+
+- Rate limits are counted in Redis (`INCR` + `EXPIRE`, fixed windows) and
+  shared by every worker. Per-IP limits still apply an in-process window too.
+- If Redis is configured but unreachable, a circuit breaker skips it for 30s
+  at a time. Normal limits fall back to the in-process window; the bulk
+  agentic limits fail closed with 503 + `Retry-After: 30`, because they
+  protect expensive work.
+- A value that is not a `redis://` or `rediss://` URL is ignored with a
+  startup warning and the app uses in-process limits.
+- `/api/v1/ready` pings the Celery broker (`CELERY_BROKER_URL`, else
+  `REDIS_URL`) and returns 503 with `"redis": "unhealthy"` while it is
+  unreachable. `/api/v1/health` (liveness) is unaffected.
+
+### Set in `.env`
+```bash
+# One Redis for everything (rate limits + Celery broker fallback)
+REDIS_URL=redis://default:password@host:6379/0
+# Optional: a separate Redis just for rate limits (overrides REDIS_URL for them)
+# RATE_LIMIT_REDIS_URL=rediss://default:password@host:6380/0
+```
+
+On Railway, add a Redis service and set `REDIS_URL=${{Redis.REDIS_URL}}` as a
+reference variable on the backend service.
+
+---
+
+## 10. Upload Size Limit — OPTIONAL
+
+`MAX_UPLOAD_MB` caps each uploaded contract file (default **10**, clamped to
+1–100). Oversized uploads get **413** before the body is buffered: a
+`Content-Length` over the request budget is refused unread, and a streamed
+body is cut off once it passes the budget (one file plus 1 MB of multipart
+overhead for `POST /contracts`, ten files plus 1 MB for `POST /contracts/bulk`).
+A bulk upload with any file over the limit is refused as a whole. No trial
+quota is reserved and nothing is stored for a refused upload.
+
+```bash
+MAX_UPLOAD_MB=10
 ```
 
 ---
