@@ -354,7 +354,9 @@ quota is reserved and nothing is stored for a refused upload.
 Extracted text is stored on the contract document, which MongoDB caps at
 16 MiB, so a file whose text is over 12 MB is also refused with 413 (in a bulk
 upload, that file is listed in `results.failed`), again before quota or
-storage. This matters only if you raise `MAX_UPLOAD_MB` above about 12.
+storage. A `.txt` file only reaches this check if `MAX_UPLOAD_MB` is above
+12, but a PDF can reach it at the default limit, because PDFs compress text
+and can extract to more than 12 MB.
 
 ```bash
 MAX_UPLOAD_MB=10
