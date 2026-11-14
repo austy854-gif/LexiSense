@@ -16,7 +16,7 @@ test('a user submits a contract for review and a manager approves it', async ({ 
   const actions = userPage.getByTestId('workflow-actions');
   await expect(actions.getByTestId('workflow-approve')).toHaveCount(0);
   await actions.getByTestId('workflow-submit').click();
-  await expect(userPage.getByTestId('contract-detail-page').getByText('In Review').first()).toBeVisible();
+  await expect(userPage.getByTestId('contract-status')).toHaveText('In Review');
   await expect(actions.getByTestId('workflow-submit')).toHaveCount(0);
   // A user cannot approve their own submission.
   await expect(actions.getByTestId('workflow-approve')).toHaveCount(0);
@@ -28,9 +28,12 @@ test('a user submits a contract for review and a manager approves it', async ({ 
   await signInAs(managerPage, USERS.manager);
   await managerPage.goto(`/contracts/${contract.id}`);
   const managerActions = managerPage.getByTestId('workflow-actions');
+  await expect(managerPage.getByTestId('contract-status')).toHaveText('In Review');
   await managerActions.getByTestId('workflow-approve').click();
+  await expect(managerPage.getByTestId('contract-status')).toHaveText('Approved');
   await expect(managerActions.getByTestId('workflow-activate')).toBeVisible();
   await managerActions.getByTestId('workflow-activate').click();
+  await expect(managerPage.getByTestId('contract-status')).toHaveText('Active');
   await expect(managerActions.getByTestId('workflow-activate')).toHaveCount(0);
   await managerContext.close();
 
@@ -56,7 +59,12 @@ test('a manager can send a contract back by rejecting it', async ({ page, reques
 
   await signInAs(page, USERS.manager);
   await page.goto(`/contracts/${contract.id}`);
+  await expect(page.getByTestId('contract-status')).toHaveText('In Review');
   await page.getByTestId('workflow-reject').click();
+  await expect(page.getByTestId('contract-status')).toHaveText('Draft');
   await expect(page.getByTestId('workflow-approve')).toHaveCount(0);
-  await expect(page.getByTestId('contract-detail-page').getByText('Draft').first()).toBeVisible();
+  const after = await request.get(`/api/v1/contracts/${contract.id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect((await after.json()).status).toBe('draft');
 });

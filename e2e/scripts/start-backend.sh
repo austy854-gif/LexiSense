@@ -15,10 +15,17 @@ export FRONTEND_BUILD_DIR="${FRONTEND_BUILD_DIR:-$(pwd)/../frontend/build}"
 export BILLING_UI_ENABLED=true
 export STRIPE_PRICE_TEAM_MONTHLY=price_e2e_team_monthly
 export TRUSTED_PROXY_COUNT=0
-# Never let a developer's real keys leak into the run.
-unset DATABASE_URL EMERGENT_LLM_KEY RESEND_API_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
-  AWS_S3_BUCKET S3_BUCKET_NAME STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET REDIS_URL \
-  RATE_LIMIT_REDIS_URL CELERY_BROKER_URL SENTRY_DSN
+# Never let a developer's real keys leak into the run. These are exported
+# empty rather than unset: server.py calls load_dotenv(override=False), which
+# would otherwise refill them from a local backend/.env (real S3 bucket
+# bootstrap, a Redis URL that keeps /ready at 503, ...). Empty counts as unset
+# everywhere the backend reads them.
+for var in DATABASE_URL EMERGENT_LLM_KEY RESEND_API_KEY AWS_ACCESS_KEY_ID \
+  AWS_SECRET_ACCESS_KEY AWS_S3_BUCKET S3_BUCKET_NAME STRIPE_SECRET_KEY \
+  STRIPE_WEBHOOK_SECRET REDIS_URL RATE_LIMIT_REDIS_URL CELERY_BROKER_URL \
+  CELERY_RESULT_BACKEND SENTRY_DSN; do
+  export "$var="
+done
 
 PYTHON="${E2E_PYTHON:-python}"
 exec "$PYTHON" -m uvicorn e2e.stub_app:app --host 127.0.0.1 --port 8000

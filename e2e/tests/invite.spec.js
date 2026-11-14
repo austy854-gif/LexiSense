@@ -36,6 +36,9 @@ test('an admin invites a teammate who accepts and joins the team', async ({ page
   // The link is single-use.
   const reuse = await inviteeContext.newPage();
   await reuse.goto(mail.acceptUrl);
+  // Wait for the preview to settle on its terminal state before asserting
+  // the form is absent (the form only renders after the preview loads).
+  await expect(reuse.getByTestId('accept-invite-used')).toBeVisible();
   await expect(reuse.getByTestId('accept-invite-email')).toHaveCount(0);
   await inviteeContext.close();
 

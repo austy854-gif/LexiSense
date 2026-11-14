@@ -19,7 +19,7 @@ module.exports = defineConfig({
   expect: { timeout: 7_500 },
   reporter: process.env.CI
     ? [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }], ['github']]
-    : [['list']],
+    : [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
   outputDir: 'test-results',
   use: {
     baseURL: BASE_URL,

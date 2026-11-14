@@ -19,9 +19,11 @@ wait for it.
 ## How it runs
 
 - `e2e/scripts/start-backend.sh` starts `uvicorn e2e.stub_app:app` on
-  `127.0.0.1:8000` with fixture-only settings and unsets every real key
-  (`EMERGENT_LLM_KEY`, `RESEND_API_KEY`, AWS, Stripe, Redis, Celery, Sentry).
-  The CI job also blanks the workflow-level secrets.
+  `127.0.0.1:8000` with fixture-only settings and exports every real key
+  (`EMERGENT_LLM_KEY`, `RESEND_API_KEY`, AWS, Stripe, Redis, Celery, Sentry)
+  as empty. Empty rather than unset, so a local `backend/.env` cannot refill
+  them through `load_dotenv`. The CI job also blanks the workflow-level
+  secrets.
 - The backend serves the built SPA from `FRONTEND_BUILD_DIR`. The build uses
   `REACT_APP_BACKEND_URL=http://localhost:8000`, so the browser and the API are
   on the same origin and no CORS or proxy setup is needed. CI reuses the
@@ -29,6 +31,8 @@ wait for it.
 - `backend/e2e/stub_app.py` imports the normal `server.app` and only patches
   third-party calls. It refuses to load unless `E2E_STUB_SERVICES=1` and
   `ENVIRONMENT` is not `production`, and it is never imported by `server.py`.
+  It also refuses any database whose name does not contain `e2e`, because the
+  reset helper empties the whole database.
 - Each test starts with `POST /__e2e/reset`, which empties the e2e database and
   seeds two organizations:
   - **Acme Legal**: Team plan, active, with an admin, manager, user and viewer.

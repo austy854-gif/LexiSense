@@ -78,7 +78,7 @@ const StatusBadge = ({ status }) => {
     pending: 'Pending',
   };
   return (
-    <Badge variant="secondary" className={colors[status] || colors.draft}>
+    <Badge variant="secondary" className={colors[status] || colors.draft} data-testid="contract-status">
       {labels[status] || status || 'draft'}
     </Badge>
   );

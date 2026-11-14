@@ -23,6 +23,7 @@ never be served by accident.
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
@@ -38,6 +39,15 @@ from fastapi import APIRouter, HTTPException  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import server  # noqa: E402
+
+# /__e2e/reset empties every collection and has no auth. Refuse to start
+# unless the resolved database is clearly a throwaway e2e one, so a direct
+# run with DB_NAME unset can never wipe `lexisense` or a URL's default DB.
+if "e2e" not in server.DB_NAME.lower():
+    raise RuntimeError(
+        f"e2e.stub_app refuses database {server.DB_NAME!r}: set DB_NAME to a "
+        "name containing 'e2e' (the launcher default is lexisense_e2e)."
+    )
 from routes import contracts as contracts_route  # noqa: E402
 from routes import team as team_route  # noqa: E402
 from services import email_service  # noqa: E402
@@ -90,7 +100,9 @@ async def _chat(*args, **kwargs):
 
 
 async def _upload(content, filename, org_id, content_type="", extension=None):
-    key = f"{org_id}/e2e-{len(STORAGE)}.{extension or 'bin'}"
+    # A UUID, not len(STORAGE): deleting an object must not let the next
+    # upload reuse (and overwrite) another object's key.
+    key = f"{org_id}/e2e-{uuid.uuid4().hex}.{extension or 'bin'}"
     STORAGE[key] = content
     return key
 
