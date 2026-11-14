@@ -10,7 +10,7 @@ wait for it.
 | Spec | Flow |
 | --- | --- |
 | `auth.spec.js` | Sign up through `/register`; log in (a wrong password is refused, then the right one works); log out, and protected pages send you back to `/login`. |
-| `upload.spec.js` | A user uploads a contract through the dialog, opens it from the toast and sees the analysis (summary, parties, key terms, risks). An upload over `MAX_UPLOAD_MB` shows the 413 message. |
+| `upload.spec.js` | A user uploads a contract through the dialog, opens it from the toast, sees the analysis (summary, parties, key terms, risks) and downloads the original. An upload over `MAX_UPLOAD_MB` shows the 413 message. |
 | `workflow.spec.js` | The uploader submits for review (and cannot approve it); a manager approves and activates. A manager can also reject back to draft. |
 | `roles.spec.js` | A viewer can read contracts and the team list, but sees no upload, bulk upload, workflow or invite controls. The API returns 403 to a viewer upload even when the UI is bypassed. |
 | `billing.spec.js` | A past-due org is read-only on `/contracts` and `/billing`. The billing portal button hands off to Stripe (stubbed). Writes return 403 with the billing reason, the UI shows that reason in a toast, and the user stays signed in. |
@@ -52,7 +52,7 @@ wait for it.
 | Service | Stub | Why |
 | --- | --- | --- |
 | AI analysis and chat (Emergent / LiteLLM) | In-process: `analyze_contract` returns a fixed analysis; chat returns a fixed answer. | Real calls are slow, cost money, need a key and are not deterministic. |
-| S3 storage | In-process: upload, delete, purge and presigned URLs use an in-memory dict. | Needs AWS credentials; nothing here tests S3 itself. |
+| S3 storage | In-process: upload, delete, purge and presigned URLs use an in-memory dict; presigned URLs point at `GET /__e2e/files/{key}`. | Needs AWS credentials; nothing here tests S3 itself. |
 | Invitation email (Resend) | In-process: emails are captured and exposed at `GET /__e2e/outbox`. | The invite test needs the accept link without a real mailbox. |
 | Stripe portal and checkout | **Network layer** with `page.route` in `billing.spec.js`: `POST /api/v1/billing/portal` returns a fake portal URL, and `billing.stripe.com` returns a stub page. | Creating a portal session needs a Stripe secret key and a real customer, and the page itself is Stripe's. Billing *state* is still real: it comes from `organization_billing` through the normal entitlement code. |
 

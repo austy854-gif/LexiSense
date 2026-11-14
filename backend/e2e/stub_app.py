@@ -35,7 +35,7 @@ if os.environ.get("E2E_STUB_SERVICES") != "1" or os.environ.get(
         "and a non-production ENVIRONMENT"
     )
 
-from fastapi import APIRouter, HTTPException  # noqa: E402
+from fastapi import APIRouter, HTTPException, Response  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 import server  # noqa: E402
@@ -290,6 +290,24 @@ async def session(body: SessionRequest):
 @e2e_router.get("/outbox")
 async def outbox():
     return OUTBOX
+
+
+@e2e_router.get("/files/{key:path}")
+async def stored_file(key: str):
+    """Serve an object from the in-memory store, standing in for a presigned
+    S3 URL. Inline (like S3's default), so the browser can show it."""
+    content = STORAGE.get(key)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    media_type = {"pdf": "application/pdf", "txt": "text/plain; charset=utf-8"}.get(
+        key.rsplit(".", 1)[-1], "application/octet-stream"
+    )
+    filename = key.rsplit("/", 1)[-1]
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 app.include_router(e2e_router)

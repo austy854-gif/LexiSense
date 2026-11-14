@@ -38,6 +38,12 @@ test('a user uploads a contract and reads its analysis', async ({ page }) => {
   await expect(detail.getByTestId('key-term').first()).toContainText('Payment terms');
   await detail.getByRole('tab', { name: 'Risks' }).click();
   await expect(detail.getByText('Uncapped liability for data breaches')).toBeVisible();
+
+  // Download opens the stored original (S3 presigned URL, stubbed).
+  const popup = page.waitForEvent('popup');
+  await detail.getByTestId('download-original').click();
+  const original = await popup;
+  await expect(original.locator('body')).toContainText('MASTER SERVICES AGREEMENT');
 });
 
 test('an upload over the size limit is refused with a clear message', async ({ page }) => {

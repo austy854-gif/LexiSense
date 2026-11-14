@@ -297,6 +297,10 @@ jobs:
     needs: [frontend-lint]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Read-only token, and it is not left in .git/config (see checkout below):
+    # this job runs the app and a browser, and needs no write access.
+    permissions:
+      contents: read
     # Blank the workflow-level secrets for this job: the run must not depend on
     # (or be able to reach) real AI, email or storage. start-backend.sh unsets
     # them too.
@@ -318,6 +322,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
