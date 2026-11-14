@@ -12,6 +12,9 @@ Two layers enforce it:
 * The handlers check each part's size (:func:`ensure_within_upload_limit`)
   before reading it into memory, reserving trial quota or touching storage,
   so an oversized file never leaves quota or an object behind.
+* After extraction, :func:`ensure_text_fits` refuses text over
+  ``MAX_EXTRACTED_TEXT_BYTES`` (it is stored inline on the contract document,
+  which MongoDB caps at 16 MiB), again before quota or storage.
 """
 
 from __future__ import annotations
@@ -32,6 +35,12 @@ MAX_UPLOAD_MB_CEILING = 100
 BULK_MAX_FILES = 10
 #: Room for multipart boundaries, headers and the small form fields.
 MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+#: Extracted text is stored inline on the contract document, and MongoDB caps a
+#: document at 16 MiB. Leave room for the AI analysis and the other fields.
+MAX_EXTRACTED_TEXT_BYTES = 12 * 1024 * 1024
+TEXT_TOO_LARGE_MESSAGE = (
+    "This file has too much text to store as one contract (12 MB of text at most)."
+)
 
 API_PREFIX = "/api/v1"
 SINGLE_UPLOAD_PATHS = frozenset({f"{API_PREFIX}/contracts", f"{API_PREFIX}/contracts/"})
@@ -80,6 +89,15 @@ def ensure_within_upload_limit(upload) -> None:
     size = getattr(upload, "size", None)
     if size is not None and size > max_upload_bytes():
         raise too_large()
+
+
+def ensure_text_fits(text: str) -> None:
+    """Raise 413 when extracted ``text`` would not fit in a contract document."""
+    if len(text.encode("utf-8", errors="surrogatepass")) > MAX_EXTRACTED_TEXT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=TEXT_TOO_LARGE_MESSAGE,
+        )
 
 
 def request_body_limit(path: str):

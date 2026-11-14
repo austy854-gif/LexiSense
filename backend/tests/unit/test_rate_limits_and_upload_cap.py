@@ -396,3 +396,54 @@ class TestUploadCap:
             json={"token": "t" * 100},
         )
         assert response.status_code != 413
+
+
+class TestExtractedTextCap:
+    """Text is stored inline on the contract; Mongo caps documents at 16 MiB."""
+
+    @pytest.fixture
+    def big_text(self, monkeypatch, side_effects):
+        monkeypatch.setenv("MAX_UPLOAD_MB", "20")
+        monkeypatch.setattr(upload_limits, "MAX_EXTRACTED_TEXT_BYTES", 1000)
+
+        async def _extract(content, mime):
+            side_effects["read"] += 1
+            return content.decode()
+
+        monkeypatch.setattr(contracts_route, "extract_text_from_file", _extract)
+        return side_effects
+
+    async def test_single_upload_with_too_much_text_is_413(
+        self, client, uploader, big_text, db
+    ):
+        response = await client.post(
+            f"{API_PREFIX}/contracts",
+            headers=auth_headers(uploader),
+            files={"file": ("big.txt", b"a" * 2000, "text/plain")},
+            data={"title": "Big"},
+        )
+        assert response.status_code == 413
+        assert "too much text" in response.json()["detail"]
+        assert big_text["reserved"] == big_text["uploaded"] == 0
+        assert await db.contracts.count_documents({}) == 0
+
+    async def test_bulk_lists_the_file_and_keeps_the_rest(
+        self, client, uploader, big_text, db
+    ):
+        response = await client.post(
+            f"{API_PREFIX}/contracts/bulk",
+            headers=auth_headers(uploader),
+            files=[
+                ("files", ("big.txt", b"a" * 2000, "text/plain")),
+                ("files", ("ok.txt", b"a" * 10, "text/plain")),
+            ],
+        )
+        body = response.json()
+        assert response.status_code == 200
+        assert body["successful"] == 1
+        assert "too much text" in body["results"]["failed"][0]["error"]
+        assert big_text["reserved"] == big_text["uploaded"] == 1
+        assert await db.contracts.count_documents({}) == 1
+
+    def test_default_limit_leaves_headroom_under_16_mib(self):
+        assert upload_limits.MAX_EXTRACTED_TEXT_BYTES <= 12 * MB
