@@ -434,8 +434,8 @@ class TestExtractedTextCap:
             f"{API_PREFIX}/contracts/bulk",
             headers=auth_headers(uploader),
             files=[
-                ("files", ("ok.txt", b"a" * 10, "text/plain")),
                 ("files", ("big.txt", b"a" * 2000, "text/plain")),
+                ("files", ("ok.txt", b"a" * 10, "text/plain")),
             ],
         )
         body = response.json()
