@@ -452,7 +452,7 @@ export default function ContractDetailPage() {
             <Card>
               <Tabs defaultValue="summary" className="w-full" onValueChange={(value) => { if (value === 'document') loadDocumentText(); }}>
                 <CardHeader className="pb-0">
-                  <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6">
+                  <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
                     <TabsTrigger value="summary">Summary</TabsTrigger>
                     <TabsTrigger value="document">Document</TabsTrigger>
                     <TabsTrigger value="risks">Risks</TabsTrigger>

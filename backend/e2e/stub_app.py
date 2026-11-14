@@ -164,10 +164,16 @@ async def _seed() -> None:
     await db.organization_billing.insert_many(
         [
             {
+                # A paying Team org: the trial's 3-seat cap would already be
+                # full with the four fixture users, and invites are under test.
                 "organizationId": ACME,
-                "subscriptionTier": "trial",
-                "billingStatus": "trialing",
-                "trialEndDate": _iso(days=10),
+                "subscriptionTier": "team",
+                "billingStatus": "active",
+                "stripePriceId": os.environ.get(
+                    "STRIPE_PRICE_TEAM_MONTHLY", "price_e2e_team_monthly"
+                ),
+                "stripeCustomerId": "cus_e2e_acme",
+                "stripeSubscriptionId": "sub_e2e_acme",
                 "trialContractsUsed": 0,
                 "trialContractsLimit": 25,
                 "createdAt": now,
