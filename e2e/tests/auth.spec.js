@@ -35,7 +35,8 @@ test('an existing user logs in, and a wrong password is refused', async ({ page 
 
   await page.getByTestId('user-menu').click();
   await page.getByTestId('logout-btn').click();
-  await expect(page).toHaveURL(/\/login|\/$/);
+  // Layout navigates to /login only after logout() has cleared the session.
+  await expect(page).toHaveURL(/\/login$/);
   await page.goto('/contracts');
   await expect(page).toHaveURL(/\/login/);
 });

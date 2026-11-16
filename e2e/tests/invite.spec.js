@@ -9,11 +9,13 @@ test('an admin invites a teammate who accepts and joins the team', async ({ page
   const invitee = 'new.colleague@acme.example.com';
   await signInAs(page, USERS.admin);
   await page.goto('/team');
-  await page.getByTestId('invite-member-btn').click();
-  await page.getByTestId('invite-email').fill(invitee);
-  await page.getByTestId('invite-role').click();
+  // Accessible names and labels, so a broken label association fails here.
+  await page.getByRole('button', { name: 'Invite member' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Invite a teammate' });
+  await dialog.getByLabel('Email address').fill(invitee);
+  await dialog.getByRole('combobox', { name: 'Role' }).click();
   await page.getByRole('option', { name: /Manager/ }).click();
-  await page.getByTestId('invite-submit').click();
+  await dialog.getByRole('button', { name: 'Send invite' }).click();
   await expect(page.getByText(`Invitation sent to ${invitee}`)).toBeVisible();
 
   // The invitation email is captured by the stub instead of going to Resend.
