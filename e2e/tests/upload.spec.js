@@ -1,3 +1,4 @@
+const fs = require('fs');
 const { test, expect } = require('@playwright/test');
 const { USERS, CONTRACT_TEXT, resetData, signInAs } = require('../fixtures/helpers');
 
@@ -39,11 +40,15 @@ test('a user uploads a contract and reads its analysis', async ({ page }) => {
   await detail.getByRole('tab', { name: 'Risks' }).click();
   await expect(detail.getByText('Uncapped liability for data breaches')).toBeVisible();
 
-  // Download opens the stored original (S3 presigned URL, stubbed).
-  const popup = page.waitForEvent('popup');
+  // Download fetches the stored original as an attachment (S3 presigned URL,
+  // stubbed). The link targets a new tab; Chromium reports the download on
+  // the opening page.
+  const download = page.waitForEvent('download');
   await detail.getByTestId('download-original').click();
-  const original = await popup;
-  await expect(original.locator('body')).toContainText('MASTER SERVICES AGREEMENT');
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/\.txt$/);
+  const bytes = fs.readFileSync(await file.path(), 'utf8');
+  expect(bytes).toBe(CONTRACT_TEXT);
 });
 
 test('an upload over the size limit is refused with a clear message', async ({ page }) => {

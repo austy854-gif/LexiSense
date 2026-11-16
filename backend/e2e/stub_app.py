@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import os
 import uuid
+from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 if os.environ.get("E2E_STUB_SERVICES") != "1" or os.environ.get(
     "ENVIRONMENT", ""
@@ -112,8 +113,16 @@ async def _delete(key, *args, **kwargs):
     return True
 
 
-async def _presign(key, *args, **kwargs):
-    return f"/__e2e/files/{key}"
+async def _presign(key, expiration=300, download_name=None, content_type=None):
+    """Mirror generate_presigned_url: the response overrides it would put on
+    the S3 URL (attachment name, content type) travel as query parameters."""
+    params = {}
+    if download_name:
+        params["download_name"] = download_name
+    if content_type:
+        params["content_type"] = content_type
+    query = f"?{urlencode(params)}" if params else ""
+    return f"/__e2e/files/{key}{query}"
 
 
 async def _send_invitation_email(to_email, inviter_name, organization_name, role, token):
@@ -293,20 +302,27 @@ async def outbox():
 
 
 @e2e_router.get("/files/{key:path}")
-async def stored_file(key: str):
+async def stored_file(
+    key: str, download_name: Optional[str] = None, content_type: Optional[str] = None
+):
     """Serve an object from the in-memory store, standing in for a presigned
-    S3 URL. Inline (like S3's default), so the browser can show it."""
+    S3 URL. Like S3 with ResponseContentDisposition, a download_name forces an
+    attachment; without one the object is served inline."""
     content = STORAGE.get(key)
     if content is None:
         raise HTTPException(status_code=404, detail="Not found")
-    media_type = {"pdf": "application/pdf", "txt": "text/plain; charset=utf-8"}.get(
+    media_type = content_type or {"pdf": "application/pdf", "txt": "text/plain"}.get(
         key.rsplit(".", 1)[-1], "application/octet-stream"
     )
-    filename = key.rsplit("/", 1)[-1]
+    disposition = (
+        f'attachment; filename="{download_name}"'
+        if download_name
+        else f'inline; filename="{key.rsplit("/", 1)[-1]}"'
+    )
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        headers={"Content-Disposition": disposition},
     )
 
 
