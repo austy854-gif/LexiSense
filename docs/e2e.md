@@ -52,7 +52,7 @@ wait for it.
 | Service | Stub | Why |
 | --- | --- | --- |
 | AI analysis and chat (Emergent / LiteLLM) | In-process: `analyze_contract` returns a fixed analysis; chat returns a fixed answer. | Real calls are slow, cost money, need a key and are not deterministic. |
-| S3 storage | In-process: upload, delete, purge and presigned URLs use an in-memory dict; presigned URLs point at `GET /__e2e/files/{key}`. | Needs AWS credentials; nothing here tests S3 itself. |
+| S3 storage | In-process: upload, delete, purge and presigned URLs use an in-memory dict; presigned URLs point at `GET /__e2e/files/{key}`, which keeps the attachment name and content type the real URL would force. | Needs AWS credentials; nothing here tests S3 itself. |
 | Invitation email (Resend) | In-process: emails are captured and exposed at `GET /__e2e/outbox`. | The invite test needs the accept link without a real mailbox. |
 | Stripe portal and checkout | **Network layer** with `page.route` in `billing.spec.js`: `POST /api/v1/billing/portal` returns a fake portal URL, and `billing.stripe.com` returns a stub page. | Creating a portal session needs a Stripe secret key and a real customer, and the page itself is Stripe's. Billing *state* is still real: it comes from `organization_billing` through the normal entitlement code. |
 
@@ -61,9 +61,26 @@ OpenAPI schema.
 
 ## Running locally
 
-Requirements: Python 3.13 with `backend/requirements.txt` installed, Node
+Requirements: Python 3.13 with the backend dependencies installed, Node
 22.18+, and MongoDB on `localhost:27017` (for example
 `docker run -d -p 27017:27017 mongo:7`).
+
+Install the backend dependencies the same way CI does. `emergentintegrations`
+is not on PyPI and pins conflicting versions, so it is installed separately
+without its dependencies; the backend imports it at startup, even though the
+e2e app stubs the AI calls.
+
+```bash
+cd backend
+# Same steps as the CI jobs (see the comments in .github/workflows/ci-cd.yml):
+grep -v '^litellm==' requirements.txt > /tmp/requirements-without-litellm.txt
+pip install -r /tmp/requirements-without-litellm.txt
+pip install --no-deps "$(grep '^litellm==' requirements.txt)"
+pip install --no-deps --require-hashes \
+  --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
+  -r requirements-emergent.txt
+cd ..
+```
 
 ```bash
 # 1. Build the frontend against the local API (once, or after UI changes)
