@@ -61,7 +61,11 @@ test('an upload over the size limit is refused with a clear message', async ({ p
     mimeType: 'text/plain',
     buffer: Buffer.alloc(11 * 1024 * 1024, 'a'),
   });
+  const refused = page.waitForResponse(
+    (r) => r.url().endsWith('/api/v1/contracts') && r.request().method() === 'POST',
+  );
   await page.getByTestId('upload-submit').click();
+  expect((await refused).status()).toBe(413);
   await expect(page.getByTestId('upload-failed')).toBeVisible();
   await expect(page.getByTestId('upload-failed-detail')).toContainText('maximum upload size is 10 MB');
 });

@@ -15,6 +15,8 @@ export FRONTEND_BUILD_DIR="${FRONTEND_BUILD_DIR:-$(pwd)/../frontend/build}"
 export BILLING_UI_ENABLED=true
 export STRIPE_PRICE_TEAM_MONTHLY=price_e2e_team_monthly
 export TRUSTED_PROXY_COUNT=0
+# upload.spec.js expects the default 10 MB cap; don't inherit a local override.
+export MAX_UPLOAD_MB=10
 # Never let a developer's real keys leak into the run. These are exported
 # empty rather than unset: server.py calls load_dotenv(override=False), which
 # would otherwise refill them from a local backend/.env (real S3 bucket
