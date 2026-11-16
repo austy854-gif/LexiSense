@@ -10,4 +10,4 @@
 # You may list several recipients (one per line), e.g. a second offline
 # "break-glass" key. Any one of the matching private keys can decrypt.
 #
-# REPLACE_WITH_AGE_PUBLIC_KEY
+# age156wqupxafshp7x8cgp2yn5l9e3d608d4xrluj4y2z9j0fh0h3yzscqq3fa
