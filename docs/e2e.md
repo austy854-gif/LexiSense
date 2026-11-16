@@ -91,8 +91,9 @@ cd frontend && yarn install --frozen-lockfile \
 cd e2e && npm ci && npx playwright install chromium
 
 # 3. Run. Playwright starts the backend for you; E2E_PYTHON picks the
-#    interpreter (for example backend/venv/bin/python).
-E2E_PYTHON=../backend/venv/bin/python npx playwright test
+#    interpreter (default: python on your PATH, i.e. the environment you
+#    installed the backend dependencies into; set it to use another one).
+npx playwright test
 npx playwright show-report      # after a failure, open the HTML report
 ```
 

@@ -41,6 +41,14 @@ from pydantic import BaseModel  # noqa: E402
 
 import server  # noqa: E402
 
+# server.py's load_dotenv can apply ENVIRONMENT=production from backend/.env
+# after the pre-import check above, so check the resolved value again.
+if os.environ.get("ENVIRONMENT", "").lower() in ("production", "prod"):
+    raise RuntimeError(
+        "e2e.stub_app refuses to run: ENVIRONMENT resolved to production "
+        "after loading backend/.env, so the /__e2e/* helpers are not registered"
+    )
+
 # /__e2e/reset empties every collection and has no auth. Refuse to start
 # unless the resolved database is clearly a throwaway e2e one, so a direct
 # run with DB_NAME unset can never wipe `lexisense` or a URL's default DB.

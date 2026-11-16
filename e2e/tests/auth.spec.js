@@ -19,6 +19,8 @@ test('a new customer signs up and lands on their dashboard', async ({ page }) =>
   await expect(page).toHaveURL(/\/$/);
   // The owner of a new organization is its admin and can manage the team.
   await expect(page.getByTestId('nav-team')).toBeVisible();
+  await page.getByTestId('nav-team').click();
+  await expect(page.getByTestId('invite-member-btn')).toBeVisible();
 });
 
 test('an existing user logs in, and a wrong password is refused', async ({ page }) => {
