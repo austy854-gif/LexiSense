@@ -61,7 +61,7 @@ const RoleBadge = ({ role }) => {
     viewer: 'bg-gray-500/10 text-gray-500 border-gray-500/20',
   };
   return (
-    <Badge variant="outline" className={colors[role] || colors.user}>
+    <Badge variant="outline" className={colors[role] || colors.user} data-testid="member-role">
       {role}
     </Badge>
   );
@@ -312,7 +312,7 @@ export default function TeamPage() {
               </TableHeader>
               <TableBody>
                 {members.map((member) => (
-                  <TableRow key={member.id}>
+                  <TableRow key={member.id} data-testid="team-member-row">
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="h-9 w-9">
