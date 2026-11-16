@@ -30,7 +30,7 @@ from typing import Dict, List, Optional
 
 if os.environ.get("E2E_STUB_SERVICES") != "1" or os.environ.get(
     "ENVIRONMENT", ""
-).lower() in ("production", "prod"):
+).strip().lower() in ("production", "prod"):
     raise RuntimeError(
         "e2e.stub_app is for end-to-end tests only: set E2E_STUB_SERVICES=1 "
         "and a non-production ENVIRONMENT"
@@ -43,7 +43,7 @@ import server  # noqa: E402
 
 # server.py's load_dotenv can apply ENVIRONMENT=production from backend/.env
 # after the pre-import check above, so check the resolved value again.
-if os.environ.get("ENVIRONMENT", "").lower() in ("production", "prod"):
+if os.environ.get("ENVIRONMENT", "").strip().lower() in ("production", "prod"):
     raise RuntimeError(
         "e2e.stub_app refuses to run: ENVIRONMENT resolved to production "
         "after loading backend/.env, so the /__e2e/* helpers are not registered"
