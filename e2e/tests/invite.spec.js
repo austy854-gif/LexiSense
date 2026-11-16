@@ -42,9 +42,12 @@ test('an admin invites a teammate who accepts and joins the team', async ({ page
   await expect(reuse.getByTestId('accept-invite-email')).toHaveCount(0);
   await inviteeContext.close();
 
-  // The admin now sees the new member.
+  // The admin now sees the new member in the member table (not just the
+  // accepted invitation row) with the invited role.
   await page.reload();
-  await expect(page.getByText(invitee).first()).toBeVisible();
+  const memberRow = page.getByTestId('team-member-row').filter({ hasText: invitee });
+  await expect(memberRow).toHaveCount(1);
+  await expect(memberRow.getByTestId('member-role')).toHaveText('manager');
 });
 
 test('only admins can invite', async ({ page, request }) => {
