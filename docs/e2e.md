@@ -84,7 +84,8 @@ cd ..
 
 ```bash
 # 1. Build the frontend against the local API (once, or after UI changes)
-cd frontend && REACT_APP_BACKEND_URL=http://localhost:8000 yarn build && cd ..
+cd frontend && yarn install --frozen-lockfile \
+  && REACT_APP_BACKEND_URL=http://localhost:8000 yarn build && cd ..
 
 # 2. Install Playwright
 cd e2e && npm ci && npx playwright install chromium

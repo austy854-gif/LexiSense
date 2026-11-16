@@ -53,6 +53,8 @@ test('an admin invites a teammate who accepts and joins the team', async ({ page
 test('only admins can invite', async ({ page, request }) => {
   await signInAs(page, USERS.manager);
   await page.goto('/team');
+  // Wait for the loaded member table (not the loading skeleton) first.
+  await expect(page.getByTestId('team-member-row').first()).toBeVisible();
   await expect(page.getByTestId('invite-member-btn')).toHaveCount(0);
   const { access_token: token } = await (
     await request.post('/__e2e/session', { data: { email: USERS.manager } })
