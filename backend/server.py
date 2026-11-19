@@ -16,6 +16,12 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+# Production refuses to start without the Stripe secret key and webhook
+# secret. Dev and test still boot; checkout and the webhook fail closed.
+from stripe_guard import require_stripe_config  # noqa: E402
+
+require_stripe_config()
+
 # Configure structured logging FIRST (before other imports that may log)
 from utils.env import get_database_url, get_env  # noqa: E402
 from utils.logging_config import (
