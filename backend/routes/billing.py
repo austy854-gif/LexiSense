@@ -40,6 +40,7 @@ from utils.policy import capability_map
 from utils.env import get_env
 from utils import plans as plan_config
 from services.stripe_prices import display_price
+from stripe_guard import REDIRECT_REJECTED, redirect_allowed, resolve_webhook_org
 from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,17 @@ def init_db(database):
 TRIAL_DAYS = 7
 TRIAL_CONTRACT_LIMIT = 25
 CHECKOUT_PRICE_REJECTED = "This plan is not available for checkout."
+BILLING_UNAVAILABLE = "Billing is temporarily unavailable. Please try again."
+
+
+def _require_redirect(url: str) -> None:
+    """Refuse a checkout or portal URL that leaves the application origin."""
+    if redirect_allowed(url, get_env("APP_URL")):
+        return
+    logger.warning("Rejected a billing redirect off the application origin")
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST, detail=REDIRECT_REJECTED
+    )
 
 
 def resolve_checkout_price(request: CheckoutSessionRequest) -> str:
@@ -489,6 +501,8 @@ async def create_checkout_session(
             detail="Billing not configured. Please contact support.",
         )
 
+    _require_redirect(request.successUrl)
+    _require_redirect(request.cancelUrl)
     price_id = resolve_checkout_price(request)
 
     org_id = current_user["organizationId"]
@@ -549,9 +563,11 @@ async def create_checkout_session(
             metadata={"organizationId": org_id},
         )
         return CheckoutSessionResponse(sessionId=session.id, url=session.url)
-    except stripe.StripeError as e:
-        logger.error(f"Stripe checkout error: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except stripe.StripeError as exc:
+        logger.error("Stripe checkout error: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=BILLING_UNAVAILABLE
+        ) from exc
 
 
 @router.post("/portal", response_model=BillingPortalResponse)
@@ -565,6 +581,7 @@ async def create_billing_portal(
             detail="Billing not configured. Please contact support.",
         )
 
+    _require_redirect(request.returnUrl)
     org_id = current_user["organizationId"]
     billing = await get_or_create_billing(org_id)
 
@@ -580,9 +597,11 @@ async def create_billing_portal(
             return_url=request.returnUrl,
         )
         return BillingPortalResponse(url=session.url)
-    except stripe.StripeError as e:
-        logger.error(f"Stripe portal error: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except stripe.StripeError as exc:
+        logger.error("Stripe portal error: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=BILLING_UNAVAILABLE
+        ) from exc
 
 
 #: Unique index that makes each Stripe event id claimable exactly once.
@@ -864,15 +883,42 @@ async def stripe_webhook(request: Request):
     return {"received": True}
 
 
+def _stripe_customer_id(value) -> Optional[str]:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+async def _bound_org(
+    metadata_org: Optional[str], customer_id: Optional[str]
+) -> Optional[str]:
+    """Organization this Stripe object may update.
+
+    A customer already stored on one organization is not applied to another.
+    """
+    owner = None
+    if customer_id:
+        billing = await db.organization_billing.find_one(
+            {"stripeCustomerId": customer_id}
+        )
+        if billing:
+            owner = billing.get("organizationId")
+    org_id = resolve_webhook_org(metadata_org, owner)
+    if owner and (metadata_org or "").strip() and org_id is None:
+        logger.error("Stripe event customer is bound to a different organization")
+    return org_id
+
+
 async def handle_checkout_completed(session, ref: Optional["StripeEventRef"] = None):
     """Handle successful checkout session"""
-    org_id = session.get("metadata", {}).get("organizationId")
+    customer_id = _stripe_customer_id(session.get("customer"))
+    org_id = await _bound_org(
+        (session.get("metadata") or {}).get("organizationId"), customer_id
+    )
     if not org_id:
         return
 
     subscription_id = session.get("subscription")
-    customer_id = session.get("customer")
-
     if subscription_id:
         subscription = stripe.Subscription.retrieve(subscription_id)
         await update_billing_from_subscription(org_id, subscription, customer_id, ref)
@@ -882,10 +928,12 @@ async def handle_subscription_created(
     subscription, ref: Optional["StripeEventRef"] = None
 ):
     """Handle subscription creation"""
-    org_id = subscription.get("metadata", {}).get("organizationId")
+    customer_id = _stripe_customer_id(subscription.get("customer"))
+    org_id = await _bound_org(
+        (subscription.get("metadata") or {}).get("organizationId"), customer_id
+    )
     if not org_id:
         return
-    customer_id = subscription.get("customer")
     await update_billing_from_subscription(org_id, subscription, customer_id, ref)
 
 
@@ -893,19 +941,12 @@ async def handle_subscription_updated(
     subscription, ref: Optional["StripeEventRef"] = None
 ):
     """Handle subscription updates"""
-    org_id = subscription.get("metadata", {}).get("organizationId")
-    if not org_id:
-        # Try to find by customer
-        customer_id = subscription.get("customer")
-        if customer_id:
-            billing = await db.organization_billing.find_one(
-                {"stripeCustomerId": customer_id}
-            )
-            if billing:
-                org_id = billing["organizationId"]
+    customer_id = _stripe_customer_id(subscription.get("customer"))
+    org_id = await _bound_org(
+        (subscription.get("metadata") or {}).get("organizationId"), customer_id
+    )
     if not org_id:
         return
-    customer_id = subscription.get("customer")
     await update_billing_from_subscription(org_id, subscription, customer_id, ref)
 
 
@@ -913,15 +954,10 @@ async def handle_subscription_deleted(
     subscription, ref: Optional["StripeEventRef"] = None
 ):
     """Handle subscription cancellation"""
-    org_id = subscription.get("metadata", {}).get("organizationId")
-    if not org_id:
-        customer_id = subscription.get("customer")
-        if customer_id:
-            billing = await db.organization_billing.find_one(
-                {"stripeCustomerId": customer_id}
-            )
-            if billing:
-                org_id = billing["organizationId"]
+    customer_id = _stripe_customer_id(subscription.get("customer"))
+    org_id = await _bound_org(
+        (subscription.get("metadata") or {}).get("organizationId"), customer_id
+    )
     if not org_id:
         return
     current = (

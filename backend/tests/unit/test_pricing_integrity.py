@@ -7,6 +7,7 @@
 5. Parity: /plans price + priceId == what checkout charges, per tier and interval.
 """
 
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -91,13 +92,17 @@ def fake_stripe(monkeypatch):
     return SimpleNamespace(sessions=sessions, lookups=lookups, by_id=by_id)
 
 
+APP_ORIGIN = "https://app.example"
+
+
 def _req(**kw):
     return CheckoutSessionRequest(
-        successUrl="https://a/s", cancelUrl="https://a/c", **kw
+        successUrl=f"{APP_ORIGIN}/s", cancelUrl=f"{APP_ORIGIN}/c", **kw
     )
 
 
 async def _checkout(org_id, **kw):
+    os.environ["APP_URL"] = APP_ORIGIN
     admin = make_user(org_id, role="admin")
     return await billing_route.create_checkout_session(
         _req(**kw),
