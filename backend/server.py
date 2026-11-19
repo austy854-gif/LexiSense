@@ -16,6 +16,12 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+# Production refuses to start when object storage is not configured. Dev and
+# test still boot; each upload fails closed until the bucket and keys are set.
+from storage_config import require_durable_storage  # noqa: E402
+
+require_durable_storage()
+
 # Configure structured logging FIRST (before other imports that may log)
 from utils.env import get_database_url, get_env  # noqa: E402
 from utils.logging_config import (
