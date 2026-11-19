@@ -8,8 +8,8 @@ services:
     image: mongo:7
     container_name: lexisense-mongodb-prod
     restart: unless-stopped
-    ports:
-      - "27017:27017"
+    # Not published on the host. Other services reach it on the compose
+    # network as mongodb:27017. A published host port would expose the database.
     volumes:
       - mongodb_data:/data/db
     environment:
