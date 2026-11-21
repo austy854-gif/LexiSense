@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, status, Depends
 from datetime import datetime, timedelta, timezone
 import logging
 
+from demo_contracts import seed_demo_contracts
 from models.user import (
     User,
     UserCreate,
@@ -89,6 +90,10 @@ async def register(user_data: UserCreate):
     )
     user_doc = user.model_dump()
     await db.users.insert_one(user_doc)
+
+    # Samples are readable on the Document tab. A failure must not block signup,
+    # and it must not consume a trial upload.
+    await seed_demo_contracts(db, org.id, user.id, org.name)
 
     access_token = create_access_token(
         data={
