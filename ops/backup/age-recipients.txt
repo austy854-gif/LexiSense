@@ -1,8 +1,6 @@
 # age recipients for the LexiSense daily MongoDB backup.
 #
-# PLACEHOLDER: replace the line below with Austin's age PUBLIC key (one line
-# that starts with "age1", produced by `age-keygen`). The workflow refuses to
-# run until a real age1... line is present.
+# Austin's age PUBLIC key (added Nov 13, 2026).
 #
 # The public key is not secret; committing it is safe. NEVER put the private
 # key (the "AGE-SECRET-KEY-1..." line) in this file or anywhere in the repo.
