@@ -30,7 +30,7 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 const UrgencyBadge = ({ days }) => {
   if (days <= 7) {

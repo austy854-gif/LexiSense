@@ -29,7 +29,7 @@ import {
   LineChart, Line, CartesianGrid,
 } from 'recharts';
 import { toast } from 'sonner';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { EmptyState } from '../components/EmptyState';
 import { NothingExpiringIllustration } from '../components/illustrations/Illustrations';
 

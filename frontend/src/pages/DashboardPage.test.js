@@ -6,7 +6,7 @@ import { dashboardAPI } from '../api';
 jest.mock('../api', () => ({ dashboardAPI: { getStats: jest.fn() } }));
 // CRA's Jest cannot resolve react-router v7's package `exports`, and the page
 // only needs <Link> to render, so stub it with a plain anchor.
-jest.mock('react-router-dom', () => ({
+jest.mock('react-router', () => ({
   Link: ({ to, children, ...props }) => require('react').createElement('a', { href: to, ...props }, children),
 }));
 jest.mock('../components/Layout', () => ({ Layout: ({ children }) => children }));

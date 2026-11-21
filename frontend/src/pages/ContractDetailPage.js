@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router';
 import { Layout } from '../components/Layout';
 import { contractsAPI, versionsAPI, workflowAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Button } from '../components/ui/button';
 import { Layout } from '../components/Layout';
 import { dashboardAPI } from '../api';

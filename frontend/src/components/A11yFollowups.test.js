@@ -5,7 +5,7 @@ import path from 'path';
 import axe from 'axe-core';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import ContractsPage from '../pages/ContractsPage';
 import { PaginationBar } from './PaginationBar';
 import { contractsAPI } from '../api';

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { teamAPI } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { getErrorInfo } from '../lib/apiHelpers.mjs';
