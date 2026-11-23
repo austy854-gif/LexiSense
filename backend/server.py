@@ -1,20 +1,17 @@
-from fastapi import FastAPI, APIRouter, Request, Response
-from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from contextlib import asynccontextmanager
-import asyncio
 import os
-import logging
-import re
-import time
-import uuid
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
+
+# Reject a wildcard allow-list before the framework, the database client or
+# the routes are imported. Credentialed CORS with '*' would trust every site.
+# cors_origins is not under utils: utils/__init__.py imports the auth stack.
+from cors_origins import load_cors_origins  # noqa: E402
+
+cors_origins = load_cors_origins()
 
 # Production refuses to start when object storage is not configured. Dev and
 # test still boot; each upload fails closed until the bucket and keys are set.
@@ -22,9 +19,22 @@ from storage_config import require_durable_storage  # noqa: E402
 
 require_durable_storage()
 
-# Configure structured logging FIRST (before other imports that may log)
 from utils.env import get_database_url, get_env  # noqa: E402
-from utils.logging_config import (
+
+from fastapi import FastAPI, APIRouter, Request, Response  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+from starlette.middleware.cors import CORSMiddleware  # noqa: E402
+from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
+from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+import re  # noqa: E402
+import time  # noqa: E402
+import uuid  # noqa: E402
+
+# Configure structured logging FIRST (before other imports that may log)
+from utils.logging_config import (  # noqa: E402
     RequestLoggingMiddleware,
     get_logger,
     request_id_var,
@@ -592,11 +602,8 @@ async def _probe_redis() -> str:
 # Include the router in the main app
 app.include_router(api_router)
 
-# Parse CORS origins defensively: an unset/empty CORS_ORIGINS previously
-# produced [''] (a bogus origin) instead of an empty allow-list.
-cors_origins = [
-    o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()
-]
+# cors_origins was parsed at import, before this app was built. An empty
+# list is not a wildcard: browsers simply block cross-origin calls.
 if not cors_origins:
     logger.warning("CORS_ORIGINS is empty - no cross-origin requests will be allowed")
 
