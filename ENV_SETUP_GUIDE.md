@@ -181,7 +181,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES=1440  # 24 hours
 
 ## 5. CORS Origins — REQUIRED
 
-Comma-separated list of allowed frontend origins. No wildcards in production.
+Comma-separated list of exact frontend origins. The server refuses to start if any entry is `*` or contains `*`.
 
 ### Development
 ```bash
