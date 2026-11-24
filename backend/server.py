@@ -13,6 +13,12 @@ from cors_origins import load_cors_origins  # noqa: E402
 
 cors_origins = load_cors_origins()
 
+# Production refuses to start without the Stripe secret key and webhook
+# secret. Dev and test still boot; checkout and the webhook fail closed.
+from stripe_guard import require_stripe_config  # noqa: E402
+
+require_stripe_config()
+
 from utils.env import get_database_url, get_env  # noqa: E402
 
 from fastapi import FastAPI, APIRouter, Request, Response  # noqa: E402
