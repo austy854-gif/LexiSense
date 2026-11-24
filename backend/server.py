@@ -6,8 +6,9 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-# Reject a wildcard allow-list before the framework, the database client or
-# the routes are imported. Credentialed CORS with '*' would trust every site.
+# Reject a wildcard or malformed CORS allow-list (and an empty list in
+# production) before the framework, the database client or the routes are
+# imported. Credentialed CORS with '*' would trust every site.
 # cors_origins is not under utils: utils/__init__.py imports the auth stack.
 from cors_origins import load_cors_origins  # noqa: E402
 
@@ -596,10 +597,8 @@ async def _probe_redis() -> str:
 # Include the router in the main app
 app.include_router(api_router)
 
-# cors_origins was parsed at import, before this app was built. An empty
-# list is not a wildcard: browsers simply block cross-origin calls.
-if not cors_origins:
-    logger.warning("CORS_ORIGINS is empty - no cross-origin requests will be allowed")
+# cors_origins was parsed and checked at import (see cors_origins). An empty
+# list is allowed only outside production; browsers then block cross-origin calls.
 
 app.add_middleware(
     CORSMiddleware,
