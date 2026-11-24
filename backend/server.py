@@ -13,6 +13,12 @@ from cors_origins import load_cors_origins  # noqa: E402
 
 cors_origins = load_cors_origins()
 
+# Production refuses to start when object storage is not configured. Dev and
+# test still boot; each upload fails closed until the bucket and keys are set.
+from storage_config import require_durable_storage  # noqa: E402
+
+require_durable_storage()
+
 from utils.env import get_database_url, get_env  # noqa: E402
 
 from fastapi import FastAPI, APIRouter, Request, Response  # noqa: E402

@@ -32,8 +32,13 @@ def get_s3_client():
     """Get the configured durable object-store client, or ``None``.
 
     There is deliberately no mock/ephemeral storage path. Upload callers must
-    fail closed when this returns ``None``.
+    fail closed when this returns ``None``. Production, prod, and staging
+    raise instead of returning ``None`` when the bucket or keys are missing,
+    so a misconfigured process does not stay up.
     """
+    from storage_config import require_durable_storage
+
+    require_durable_storage()
     if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY or not get_bucket_name():
         logger.error("Durable storage is not configured; refusing file operations")
         return None
